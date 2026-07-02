@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Dawn horizon line — the signature visual element */
+.dawn-line {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    #FF9F43 35%,
+    #3ECFCE 65%,
+    transparent 100%
+  );
+  opacity: 0.6;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1E3357; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #3ECFCE44; }
+
+/* Selection */
+::selection { background: #3ECFCE33; color: #E2EAF4; }
+
+/* Base */
+html, body { height: 100%; }
+body {
+  background-color: #060811;
+  color: #E2EAF4;
+  font-family: var(--font-outfit), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Prose in DAWN responses */
+.dawn-prose h1, .dawn-prose h2, .dawn-prose h3 {
+  color: #E2EAF4;
+  font-weight: 600;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+}
+.dawn-prose p { margin-bottom: 0.75rem; color: #CBD5E8; }
+.dawn-prose code {
+  font-family: var(--font-jetbrains), monospace;
+  background: #112038;
+  border: 1px solid #1E3357;
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+  font-size: 0.85em;
+  color: #3ECFCE;
+}
+.dawn-prose pre {
+  background: #0C1222;
+  border: 1px solid #1E3357;
+  border-radius: 8px;
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 0.75rem 0;
+}
+.dawn-prose pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #E2EAF4;
+}
+.dawn-prose ul, .dawn-prose ol {
+  padding-left: 1.5rem;
+  margin-bottom: 0.75rem;
+  color: #CBD5E8;
+}
+.dawn-prose li { margin-bottom: 0.25rem; }
+.dawn-prose strong { color: #E2EAF4; font-weight: 600; }
+.dawn-prose a { color: #3ECFCE; text-decoration: underline; text-underline-offset: 3px; }
+.dawn-prose blockquote {
+  border-left: 2px solid #3ECFCE44;
+  padding-left: 1rem;
+  color: #7B90B2;
+  margin: 0.75rem 0;
+}

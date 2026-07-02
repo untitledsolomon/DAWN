@@ -1,0 +1,30 @@
+version: "3.9"
+
+services:
+  dawn-api:
+    build: .
+    container_name: dawn-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # Mount your models directory so the container can access the .gguf file
+      - /home/solomon/models:/models:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dawn-api.rule=Host(`dawn-api.regentplatform.com`)"
+      - "traefik.http.routers.dawn-api.entrypoints=websecure"
+      - "traefik.http.routers.dawn-api.tls.certresolver=letsencrypt"
+
+networks:
+  default:
+    name: coolify
+    external: true
