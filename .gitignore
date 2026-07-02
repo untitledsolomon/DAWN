@@ -1,0 +1,11 @@
+dawn-api/.env
+dawn-ui/.env.local
+dawn-ui/node_modules/
+dawn-api/tools/__pycache__/
+dawn-api/__pycache__/
+dawn-api/llm/__pycache__/
+dawn-api/llm/local_model/__pycache__/
+dawn-ui/.next/
+dawn-api/db/__pycache__/
+dawn-api/routers/__pycache__/
+dawn-api/ingestion/__pycache__/

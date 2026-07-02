@@ -5,17 +5,17 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // DAWN palette — deep navy-black base with cyan-teal accent
-        abyss: "#060811",       // main background
-        surface: "#0C1222",     // cards, sidebar
-        elevated: "#112038",    // inputs, hover states
-        rim: "#1E3357",         // borders
-        dawn: "#3ECFCE",        // primary accent — cyan-teal
-        ember: "#FF9F43",       // warm accent — amber
+        // DAWN palette — warm neutral grey base, Claude-UI inspired
+        abyss: "#F4F3F1",       // main background — warm light grey
+        surface: "#FFFFFF",     // cards, sidebar
+        elevated: "#EDEBE8",    // inputs, hover states
+        rim: "#DDDAD5",         // borders
+        dawn: "#0FA8A6",        // primary accent — cyan-teal
+        ember: "#C96442",       // warm accent — terracotta (Claude-ish warm tone)
         text: {
-          primary: "#E2EAF4",
-          secondary: "#7B90B2",
-          muted: "#3D5280",
+          primary: "#2B2A27",   // near-black warm grey
+          secondary: "#6B6862",
+          muted: "#9C988F",
         },
       },
       fontFamily: {
@@ -43,8 +43,9 @@ const config: Config = {
         },
       },
       boxShadow: {
-        dawn: "0 0 20px rgba(62, 207, 206, 0.15)",
-        ember: "0 0 20px rgba(255, 159, 67, 0.15)",
+        dawn: "0 0 20px rgba(15, 168, 166, 0.10)",
+        ember: "0 0 20px rgba(201, 100, 66, 0.10)",
+        soft: "0 1px 3px rgba(43, 42, 39, 0.06), 0 1px 2px rgba(43, 42, 39, 0.04)",
       },
     },
   },

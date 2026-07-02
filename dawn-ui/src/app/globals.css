@@ -8,51 +8,51 @@
   background: linear-gradient(
     90deg,
     transparent 0%,
-    #FF9F43 35%,
-    #3ECFCE 65%,
+    #C96442 35%,
+    #0FA8A6 65%,
     transparent 100%
   );
-  opacity: 0.6;
+  opacity: 0.5;
 }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #1E3357; border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: #3ECFCE44; }
+::-webkit-scrollbar-thumb { background: #DDDAD5; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #0FA8A644; }
 
 /* Selection */
-::selection { background: #3ECFCE33; color: #E2EAF4; }
+::selection { background: #0FA8A633; color: #2B2A27; }
 
 /* Base */
 html, body { height: 100%; }
 body {
-  background-color: #060811;
-  color: #E2EAF4;
+  background-color: #F4F3F1;
+  color: #2B2A27;
   font-family: var(--font-outfit), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
 /* Prose in DAWN responses */
 .dawn-prose h1, .dawn-prose h2, .dawn-prose h3 {
-  color: #E2EAF4;
+  color: #2B2A27;
   font-weight: 600;
   margin-top: 1rem;
   margin-bottom: 0.5rem;
 }
-.dawn-prose p { margin-bottom: 0.75rem; color: #CBD5E8; }
+.dawn-prose p { margin-bottom: 0.75rem; color: #45433E; }
 .dawn-prose code {
   font-family: var(--font-jetbrains), monospace;
-  background: #112038;
-  border: 1px solid #1E3357;
+  background: #EDEBE8;
+  border: 1px solid #DDDAD5;
   border-radius: 4px;
   padding: 0.1em 0.4em;
   font-size: 0.85em;
-  color: #3ECFCE;
+  color: #0B837F;
 }
 .dawn-prose pre {
-  background: #0C1222;
-  border: 1px solid #1E3357;
+  background: #F9F8F6;
+  border: 1px solid #DDDAD5;
   border-radius: 8px;
   padding: 1rem;
   overflow-x: auto;
@@ -62,19 +62,19 @@ body {
   background: none;
   border: none;
   padding: 0;
-  color: #E2EAF4;
+  color: #2B2A27;
 }
 .dawn-prose ul, .dawn-prose ol {
   padding-left: 1.5rem;
   margin-bottom: 0.75rem;
-  color: #CBD5E8;
+  color: #45433E;
 }
 .dawn-prose li { margin-bottom: 0.25rem; }
-.dawn-prose strong { color: #E2EAF4; font-weight: 600; }
-.dawn-prose a { color: #3ECFCE; text-decoration: underline; text-underline-offset: 3px; }
+.dawn-prose strong { color: #2B2A27; font-weight: 600; }
+.dawn-prose a { color: #0FA8A6; text-decoration: underline; text-underline-offset: 3px; }
 .dawn-prose blockquote {
-  border-left: 2px solid #3ECFCE44;
+  border-left: 2px solid #0FA8A644;
   padding-left: 1rem;
-  color: #7B90B2;
+  color: #6B6862;
   margin: 0.75rem 0;
 }
