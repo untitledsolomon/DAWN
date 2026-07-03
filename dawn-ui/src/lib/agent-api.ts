@@ -1,13 +1,5 @@
-// ── Additions to src/lib/api.ts ─────────────────────────────────────────────
-// Add this import at the top of api.ts:
-//   import type { AgentSSEEvent } from "./agent-types";
-// Then add the function below anywhere in the file (e.g. right after streamChat).
-
 import type { AgentSSEEvent } from "./agent-types";
 
-// Self-contained on purpose — mirrors api.ts's BASE/headers rather than
-// importing them, since api.ts doesn't export them (they're module-private
-// consts there). Keeping this file standalone avoids editing api.ts at all.
 const BASE = process.env.NEXT_PUBLIC_DAWN_API_URL || "http://localhost:8000";
 const KEY = process.env.NEXT_PUBLIC_DAWN_API_KEY || "";
 
@@ -54,7 +46,7 @@ export async function* streamAgent(
           const event = JSON.parse(line.slice(6)) as AgentSSEEvent;
           yield event;
         } catch {
-          // Malformed SSE line — skip, same handling as streamChat
+          // Malformed SSE line — skip
         }
       }
     }

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Plus, Search, RefreshCw } from "lucide-react";
-import Sidebar from "@/components/layout/Sidebar";
+import AppShell from "@/components/layout/AppShell";
 import NodeCard from "@/components/nodes/NodeCard";
 import NodeForm from "@/components/nodes/NodeForm";
 import { listNodes, searchNodes, listTags, createNode, updateNode, deleteNode } from "@/lib/api";
@@ -44,7 +44,6 @@ export default function NodesPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Debounce search
   useEffect(() => {
     const t = setTimeout(load, 300);
     return () => clearTimeout(t);
@@ -73,15 +72,13 @@ export default function NodesPage() {
   };
 
   return (
-    <div className="flex h-screen">
-      <Sidebar />
-
-      <main className="flex-1 ml-14 flex flex-col min-h-0">
+    <AppShell>
+      <div className="flex flex-col h-full">
         {/* Header */}
-        <header className="flex items-center justify-between px-6 py-4 border-b border-rim flex-shrink-0">
+        <header className="flex items-center justify-between px-6 py-3 border-b border-rim flex-shrink-0">
           <div>
-            <h1 className="text-text-primary font-semibold text-sm">Knowledge Base</h1>
-            <p className="text-text-muted text-xs">{nodes.length} nodes</p>
+            <h1 className="text-text-primary font-semibold text-sm tracking-tight">Knowledge Base</h1>
+            <p className="text-text-muted text-2xs">{nodes.length} nodes</p>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -92,18 +89,15 @@ export default function NodesPage() {
             </button>
             <button
               onClick={() => { setEditingNode(null); setShowForm(true); }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-dawn/90 hover:bg-dawn text-abyss text-xs font-medium transition-all"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-dawn/90 hover:bg-dawn text-white text-xs font-medium transition-all"
             >
               <Plus size={13} /> New Node
             </button>
           </div>
         </header>
 
-        <div className="dawn-line flex-shrink-0" />
-
         {/* Filters */}
-        <div className="px-6 py-3 border-b border-rim flex items-center gap-3 flex-shrink-0 flex-wrap">
-          {/* Search */}
+        <div className="px-6 py-2.5 border-b border-rim flex items-center gap-3 flex-shrink-0 flex-wrap">
           <div className="flex items-center gap-2 bg-surface border border-rim rounded-lg px-3 py-1.5 flex-1 min-w-48 max-w-sm focus-within:border-dawn/50 transition-colors">
             <Search size={13} className="text-text-muted flex-shrink-0" />
             <input
@@ -114,13 +108,12 @@ export default function NodesPage() {
             />
           </div>
 
-          {/* Type filter */}
           <div className="flex gap-1 flex-wrap">
             {NODE_TYPES.map((t) => (
               <button
                 key={t}
                 onClick={() => setTypeFilter(t)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-mono border transition-all ${
+                className={`px-2.5 py-1 rounded-lg text-2xs font-mono border transition-all ${
                   typeFilter === t
                     ? "bg-dawn/15 border-dawn/40 text-dawn"
                     : "bg-surface border-rim text-text-muted hover:text-text-secondary"
@@ -131,7 +124,6 @@ export default function NodesPage() {
             ))}
           </div>
 
-          {/* Tag filter */}
           <select
             value={tagFilter}
             onChange={(e) => setTagFilter(e.target.value)}
@@ -173,9 +165,8 @@ export default function NodesPage() {
             </div>
           )}
         </div>
-      </main>
+      </div>
 
-      {/* Form modal */}
       {showForm && (
         <NodeForm
           node={editingNode}
@@ -184,6 +175,6 @@ export default function NodesPage() {
           onClose={() => { setShowForm(false); setEditingNode(null); }}
         />
       )}
-    </div>
+    </AppShell>
   );
 }

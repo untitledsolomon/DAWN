@@ -208,7 +208,6 @@ export async function ingestFile(
   form.append("title", title);
   form.append("tags", tags.join(","));
 
-  // No Content-Type header — browser sets multipart boundary automatically
   const res = await fetch(`${BASE}/ingest/file`, {
     method: "POST",
     headers: { "X-API-Key": KEY },
@@ -222,7 +221,6 @@ export async function ingestFile(
   return res.json();
 }
 
-// Keep ingestPdf as an alias for backward compatibility
 export const ingestPdf = ingestFile;
 
 export async function getIngestionLog(): Promise<IngestionLog[]> {

@@ -51,14 +51,14 @@ export default function NodeCard({
           <div className="flex items-center gap-2 flex-wrap">
             <span
               className={clsx(
-                "text-[10px] font-mono px-1.5 py-0.5 rounded border",
+                "text-2xs font-mono px-1.5 py-0.5 rounded border",
                 TYPE_COLORS[node.type] || TYPE_COLORS.document,
               )}
             >
               {node.type}
             </span>
             {node.status !== "active" && (
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border text-ember bg-ember/10 border-ember/20">
+              <span className="text-2xs font-mono px-1.5 py-0.5 rounded border text-ember bg-ember/10 border-ember/20">
                 {node.status}
               </span>
             )}
@@ -74,14 +74,14 @@ export default function NodeCard({
             <>
               <button
                 onClick={() => onApprove?.(node.id)}
-                className="w-6 h-6 flex items-center justify-center rounded text-green-400 hover:bg-green-400/10 transition-colors"
+                className="w-6 h-6 flex items-center justify-center rounded text-success hover:bg-success/10 transition-colors"
                 title="Approve"
               >
                 <CheckCircle size={13} />
               </button>
               <button
                 onClick={() => onReject?.(node.id)}
-                className="w-6 h-6 flex items-center justify-center rounded text-red-400 hover:bg-red-400/10 transition-colors"
+                className="w-6 h-6 flex items-center justify-center rounded text-error hover:bg-error/10 transition-colors"
                 title="Reject"
               >
                 <XCircle size={13} />
@@ -98,7 +98,7 @@ export default function NodeCard({
               </button>
               <button
                 onClick={() => onDelete?.(node.id)}
-                className="w-6 h-6 flex items-center justify-center rounded text-text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                className="w-6 h-6 flex items-center justify-center rounded text-text-muted hover:text-error hover:bg-error/10 transition-colors"
                 title="Delete"
               >
                 <Trash2 size={12} />
@@ -122,7 +122,7 @@ export default function NodeCard({
           {node.body.length > 120 && (
             <button
               onClick={() => setExpanded(!expanded)}
-              className="mt-1 text-text-muted text-[10px] flex items-center gap-0.5 hover:text-dawn transition-colors"
+              className="mt-1 text-text-muted text-2xs flex items-center gap-0.5 hover:text-dawn transition-colors"
             >
               {expanded ? <><ChevronUp size={10} /> Less</> : <><ChevronDown size={10} /> More</>}
             </button>
@@ -132,21 +132,19 @@ export default function NodeCard({
 
       {/* Footer */}
       <div className="mt-3 flex items-center justify-between gap-2">
-        {/* Tags */}
         <div className="flex flex-wrap gap-1">
           {(node.tags || []).map((tag) => (
             <span
               key={tag}
-              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-elevated text-text-muted border border-rim"
+              className="text-2xs font-mono px-1.5 py-0.5 rounded bg-elevated text-text-muted border border-rim"
             >
               {tag}
             </span>
           ))}
         </div>
 
-        {/* Confidence */}
         <span
-          className={clsx("text-[10px] font-mono flex-shrink-0", CONFIDENCE_COLOR(node.confidence))}
+          className={clsx("text-2xs font-mono flex-shrink-0", CONFIDENCE_COLOR(node.confidence))}
           title={`Confidence: ${Math.round(node.confidence * 100)}%`}
         >
           {Math.round(node.confidence * 100)}%

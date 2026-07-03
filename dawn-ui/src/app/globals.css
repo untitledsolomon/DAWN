@@ -2,29 +2,43 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Dawn horizon line — the signature visual element */
+/* ── Dawn horizon line ──────────────────────────────────────────────────────────── */
 .dawn-line {
   height: 1px;
   background: linear-gradient(
     90deg,
     transparent 0%,
-    #C96442 35%,
-    #0FA8A6 65%,
+    #C96442 25%,
+    #0FA8A6 50%,
+    #C96442 75%,
     transparent 100%
   );
-  opacity: 0.5;
+  opacity: 0.6;
 }
 
-/* Scrollbar */
+.dawn-line-vertical {
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    #C96442 25%,
+    #0FA8A6 50%,
+    #C96442 75%,
+    transparent 100%
+  );
+  opacity: 0.4;
+}
+
+/* ── Scrollbar ──────────────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #DDDAD5; border-radius: 2px; }
 ::-webkit-scrollbar-thumb:hover { background: #0FA8A644; }
 
-/* Selection */
+/* ── Selection ──────────────────────────────────────────────────────────────────── */
 ::selection { background: #0FA8A633; color: #2B2A27; }
 
-/* Base */
+/* ── Base ───────────────────────────────────────────────────────────────────────── */
 html, body { height: 100%; }
 body {
   background-color: #F4F3F1;
@@ -33,14 +47,17 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Prose in DAWN responses */
+/* ── Prose in DAWN responses ────────────────────────────────────────────────────── */
 .dawn-prose h1, .dawn-prose h2, .dawn-prose h3 {
   color: #2B2A27;
   font-weight: 600;
   margin-top: 1rem;
   margin-bottom: 0.5rem;
 }
-.dawn-prose p { margin-bottom: 0.75rem; color: #45433E; }
+.dawn-prose h1 { font-size: 1.125rem; letter-spacing: -0.01em; }
+.dawn-prose h2 { font-size: 1rem; letter-spacing: -0.01em; }
+.dawn-prose h3 { font-size: 0.9375rem; }
+.dawn-prose p { margin-bottom: 0.75rem; color: #45433E; line-height: 1.65; }
 .dawn-prose code {
   font-family: var(--font-jetbrains), monospace;
   background: #EDEBE8;
@@ -77,4 +94,64 @@ body {
   padding-left: 1rem;
   color: #6B6862;
   margin: 0.75rem 0;
-} 
+}
+
+/* ── Animations ─────────────────────────────────────────────────────────────────── */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes pulse-slow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes scan {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, #EDEBE8 25%, #F4F3F1 50%, #EDEBE8 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 3s ease-in-out infinite;
+}
+
+.animate-scan {
+  animation: scan 1.5s ease-in-out infinite;
+}
+
+/* ── Sidebar scrollbar ──────────────────────────────────────────────────────────── */
+.sidebar-scroll::-webkit-scrollbar { width: 2px; }
+.sidebar-scroll::-webkit-scrollbar-thumb { background: transparent; }
+.sidebar-scroll:hover::-webkit-scrollbar-thumb { background: #DDDAD5; }
+
+/* ── Input glow ─────────────────────────────────────────────────────────────────── */
+.input-glow:focus-within {
+  box-shadow: 0 0 0 1px rgba(15, 168, 166, 0.3), 0 0 16px rgba(15, 168, 166, 0.06);
+}
+
+/* ── Settings tab transition ────────────────────────────────────────────────────── */
+.settings-tab-enter {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.settings-tab-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.15s ease-out, transform 0.15s ease-out;
+}

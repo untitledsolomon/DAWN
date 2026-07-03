@@ -1,13 +1,29 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, RotateCcw, Bot, MessageSquare } from "lucide-react";
+import {
+  Send,
+  RotateCcw,
+  Bot,
+  MessageSquare,
+  Sparkles,
+  Zap,
+  Plus,
+  Settings,
+} from "lucide-react";
+import Link from "next/link";
 import { streamChat } from "@/lib/api";
 import { streamAgent } from "@/lib/agent-api";
 import type { ChatMessage, ToolCall } from "@/lib/types";
-import type { AgentChatMessage, AgentTraceEntry, ChatMode } from "@/lib/agent-types";
+import type {
+  AgentChatMessage,
+  AgentTraceEntry,
+  ChatMode,
+} from "@/lib/agent-types";
 import Message from "./Message";
-import AgentTraceIndicator, { AgentWarningBanner } from "./AgentTraceIndicator";
+import AgentTraceIndicator, {
+  AgentWarningBanner,
+} from "./AgentTraceIndicator";
 
 let messageId = 0;
 const nextId = () => String(++messageId);
@@ -18,9 +34,15 @@ export default function ChatWindow() {
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
-  const [streamingToolCalls, setStreamingToolCalls] = useState<ToolCall[]>([]);
-  const [streamingTrace, setStreamingTrace] = useState<AgentTraceEntry[]>([]);
-  const [streamingWarning, setStreamingWarning] = useState<string | null>(null);
+  const [streamingToolCalls, setStreamingToolCalls] = useState<
+    ToolCall[]
+  >([]);
+  const [streamingTrace, setStreamingTrace] = useState<
+    AgentTraceEntry[]
+  >([]);
+  const [streamingWarning, setStreamingWarning] = useState<
+    string | null
+  >(null);
   const [thinkingState, setThinkingState] = useState(false);
   const [thinkingLabel, setThinkingLabel] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -41,7 +63,8 @@ export default function ChatWindow() {
   }, [input]);
 
   const buildHistory = useCallback(
-    () => messages.map((m) => ({ role: m.role, content: m.content })),
+    () =>
+      messages.map((m) => ({ role: m.role, content: m.content })),
     [messages],
   );
 
@@ -53,13 +76,21 @@ export default function ChatWindow() {
       const toolCalls: ToolCall[] = [];
 
       try {
-        for await (const event of streamChat(text, buildHistory(), sessionId.current)) {
+        for await (const event of streamChat(
+          text,
+          buildHistory(),
+          sessionId.current,
+        )) {
           switch (event.type) {
             case "thinking":
               setThinkingState(true);
               break;
             case "tool":
-              toolCalls.push({ name: event.name, args: event.args, result_count: event.result_count });
+              toolCalls.push({
+                name: event.name,
+                args: event.args,
+                result_count: event.result_count,
+              });
               setStreamingToolCalls([...toolCalls]);
               setThinkingState(false);
               break;
@@ -117,21 +148,29 @@ export default function ChatWindow() {
               break;
 
             case "tool_call":
-              trace.push({ call: { name: event.name, args: event.args } });
+              trace.push({
+                call: { name: event.name, args: event.args },
+              });
               setStreamingTrace([...trace]);
               setThinkingState(false);
               break;
 
             case "tool_result": {
-              // Attach the result to the most recent matching pending call
-              const idx = [...trace].reverse().findIndex(
-                (t) => t.call.name === event.name && !t.result,
-              );
+              const idx = [...trace]
+                .reverse()
+                .findIndex(
+                  (t) => t.call.name === event.name && !t.result,
+                );
               if (idx !== -1) {
                 const realIdx = trace.length - 1 - idx;
                 trace[realIdx] = {
                   ...trace[realIdx],
-                  result: { name: event.name, success: event.success, output: event.output, error: event.error },
+                  result: {
+                    name: event.name,
+                    success: event.success,
+                    output: event.output,
+                    error: event.error,
+                  },
                 };
                 setStreamingTrace([...trace]);
               }
@@ -154,7 +193,8 @@ export default function ChatWindow() {
               break;
 
             case "iteration_limit":
-              fullContent = fullContent || `⚠️ ${event.content}`;
+              fullContent =
+                fullContent || `⚠️ ${event.content}`;
               break;
 
             case "error":
@@ -165,7 +205,8 @@ export default function ChatWindow() {
         }
       } catch (err) {
         console.error("[sendAgent] error:", err);
-        fullContent = "⚠️ Connection error. Is the DAWN API running?";
+        fullContent =
+          "⚠️ Connection error. Is the DAWN API running?";
         setStreamingContent(fullContent);
       }
 
@@ -216,7 +257,9 @@ export default function ChatWindow() {
     setThinkingState(false);
   }, [input, isStreaming, mode, sendAgent, sendChat]);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (
+    e: React.KeyboardEvent<HTMLTextAreaElement>,
+  ) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
@@ -225,49 +268,21 @@ export default function ChatWindow() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Mode toggle */}
-      <div className="flex items-center justify-center gap-1 px-4 pt-3">
-        <div className="inline-flex items-center gap-0.5 p-0.5 rounded-lg bg-surface border border-rim">
-          <button
-            onClick={() => !isStreaming && setMode("chat")}
-            disabled={isStreaming}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all disabled:opacity-50 ${
-              mode === "chat"
-                ? "bg-dawn/90 text-abyss"
-                : "text-text-muted hover:text-text-secondary"
-            }`}
-          >
-            <MessageSquare size={12} />
-            Chat
-          </button>
-          <button
-            onClick={() => !isStreaming && setMode("agent")}
-            disabled={isStreaming}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all disabled:opacity-50 ${
-              mode === "agent"
-                ? "bg-dawn/90 text-abyss"
-                : "text-text-muted hover:text-text-secondary"
-            }`}
-          >
-            <Bot size={12} />
-            Agent
-          </button>
-        </div>
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
-        {messages.length === 0 && !isStreaming && <EmptyState mode={mode} />}
+      {/* Messages area */}
+      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+        {messages.length === 0 && !isStreaming && (
+          <EmptyState mode={mode} />
+        )}
 
         {messages.map((msg) => (
           <div key={msg.id}>
             {msg.trace && msg.trace.length > 0 && (
-              <div className="ml-10 mb-1">
+              <div className="ml-12 mb-1">
                 <AgentTraceIndicator trace={msg.trace} />
               </div>
             )}
             {msg.warning && (
-              <div className="ml-10 mb-1">
+              <div className="ml-12 mb-1">
                 <AgentWarningBanner warning={msg.warning} />
               </div>
             )}
@@ -279,13 +294,15 @@ export default function ChatWindow() {
         {isStreaming && (
           <div>
             {mode === "agent" && (
-              <div className="ml-10 mb-1">
+              <div className="ml-12 mb-1">
                 <AgentTraceIndicator
                   trace={streamingTrace}
                   thinking={thinkingState}
                   thinkingLabel={thinkingLabel}
                 />
-                {streamingWarning && <AgentWarningBanner warning={streamingWarning} />}
+                {streamingWarning && (
+                  <AgentWarningBanner warning={streamingWarning} />
+                )}
               </div>
             )}
             <Message
@@ -297,7 +314,9 @@ export default function ChatWindow() {
               }}
               isStreaming
               streamingToolCalls={
-                mode === "chat" && !thinkingState ? streamingToolCalls : []
+                mode === "chat" && !thinkingState
+                  ? streamingToolCalls
+                  : []
               }
             />
           </div>
@@ -307,38 +326,79 @@ export default function ChatWindow() {
       </div>
 
       {/* Input bar */}
-      <div className="border-t border-rim px-4 py-3">
-        <div className="flex items-end gap-2 bg-surface border border-rim rounded-xl px-3 py-2 focus-within:border-dawn/50 transition-colors">
+      <div className="border-t border-rim px-4 pb-4 pt-3">
+        {/* Mode toggle — inline, subtle */}
+        <div className="flex items-center justify-between mb-3">
+          <div className="inline-flex items-center gap-0.5 p-0.5 rounded-lg bg-elevated/60 border border-rim">
+            <button
+              onClick={() => !isStreaming && setMode("chat")}
+              disabled={isStreaming}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all disabled:opacity-50 ${
+                mode === "chat"
+                  ? "bg-dawn/90 text-white shadow-soft"
+                  : "text-text-muted hover:text-text-secondary"
+              }`}
+            >
+              <MessageSquare size={12} />
+              Chat
+            </button>
+            <button
+              onClick={() => !isStreaming && setMode("agent")}
+              disabled={isStreaming}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all disabled:opacity-50 ${
+                mode === "agent"
+                  ? "bg-dawn/90 text-white shadow-soft"
+                  : "text-text-muted hover:text-text-secondary"
+              }`}
+            >
+              <Bot size={12} />
+              Agent
+            </button>
+          </div>
+
+          <div className="flex items-center gap-1">
+            {messages.length > 0 && (
+              <button
+                onClick={() => setMessages([])}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all text-xs"
+              >
+                <RotateCcw size={12} />
+                Clear
+              </button>
+            )}
+            <Link
+              href="/settings"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all text-xs"
+            >
+              <Settings size={12} />
+            </Link>
+          </div>
+        </div>
+
+        <div className="flex items-end gap-2 bg-surface border border-rim rounded-xl px-4 py-2.5 input-glow transition-all shadow-soft">
           <textarea
             ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={mode === "agent" ? "Ask DAWN to do something..." : "Ask DAWN anything..."}
+            placeholder={
+              mode === "agent"
+                ? "Ask DAWN to do something..."
+                : "Ask DAWN anything..."
+            }
             rows={1}
             disabled={isStreaming}
             className="flex-1 bg-transparent text-text-primary text-sm placeholder:text-text-muted resize-none outline-none leading-relaxed py-1 max-h-40 disabled:opacity-50"
           />
-          <div className="flex items-center gap-1 pb-1">
-            {messages.length > 0 && (
-              <button
-                onClick={() => setMessages([])}
-                className="w-7 h-7 flex items-center justify-center rounded-lg text-text-muted hover:text-text-secondary hover:bg-elevated transition-all"
-                title="Clear chat"
-              >
-                <RotateCcw size={13} />
-              </button>
-            )}
-            <button
-              onClick={send}
-              disabled={!input.trim() || isStreaming}
-              className="w-7 h-7 flex items-center justify-center rounded-lg bg-dawn/90 text-abyss hover:bg-dawn disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-            >
-              <Send size={13} />
-            </button>
-          </div>
+          <button
+            onClick={send}
+            disabled={!input.trim() || isStreaming}
+            className="w-8 h-8 flex items-center justify-center rounded-lg bg-dawn/90 text-white hover:bg-dawn disabled:opacity-30 disabled:cursor-not-allowed transition-all flex-shrink-0"
+          >
+            <Send size={13} />
+          </button>
         </div>
-        <p className="text-text-muted text-[10px] mt-1.5 px-1">
+        <p className="text-text-muted text-2xs mt-1.5 px-1">
           {mode === "agent"
             ? "Shift+Enter for new line · Agent mode can read/write files, use git, and search the web"
             : "Shift+Enter for new line · DAWN searches your knowledge graph before answering"}
@@ -363,19 +423,35 @@ function EmptyState({ mode }: { mode: ChatMode }) {
     "Write a short README.md to the sandbox",
   ];
 
-  const suggestions = mode === "agent" ? agentSuggestions : chatSuggestions;
+  const suggestions =
+    mode === "agent" ? agentSuggestions : chatSuggestions;
 
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-8 py-12">
+    <div className="flex flex-col items-center justify-center h-full gap-8 py-16">
       <div className="text-center">
-        <div className="w-12 h-12 rounded-2xl bg-dawn/10 border border-dawn/25 flex items-center justify-center mx-auto mb-4">
-          <span className="text-dawn text-xl">◈</span>
+        {/* Logo mark — larger, more polished */}
+        <div className="relative mx-auto mb-5">
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-dawn/15 to-ember/10 border border-dawn/25 flex items-center justify-center shadow-dawn">
+            <Zap size={26} className="text-dawn" strokeWidth={1.5} />
+          </div>
+          <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-surface border border-rim flex items-center justify-center">
+            <span className="w-2 h-2 rounded-full bg-success" />
+          </div>
         </div>
-        <h2 className="text-text-primary font-semibold text-lg">DAWN</h2>
+        <h2 className="text-text-primary font-semibold text-xl tracking-tight">
+          DAWN
+        </h2>
         <p className="text-text-muted text-sm mt-1">
-          {mode === "agent" ? "Agent mode — tools enabled" : "Digital AI Working Network"}
+          {mode === "agent"
+            ? "Agent mode — tools enabled"
+            : "Digital AI Working Network"}
+        </p>
+        <p className="text-text-muted text-2xs mt-1.5 font-mono">
+          Regent Knowledge Layer · Kampala
         </p>
       </div>
+
+      {/* Suggestion grid */}
       <div className="grid grid-cols-1 gap-2 w-full max-w-lg">
         {suggestions.map((s) => (
           <button
@@ -383,20 +459,26 @@ function EmptyState({ mode }: { mode: ChatMode }) {
             onClick={() => {
               const ta = document.querySelector("textarea");
               if (ta) {
-                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                  window.HTMLTextAreaElement.prototype,
-                  "value",
-                )?.set;
+                const nativeInputValueSetter =
+                  Object.getOwnPropertyDescriptor(
+                    window.HTMLTextAreaElement.prototype,
+                    "value",
+                  )?.set;
                 nativeInputValueSetter?.call(ta, s);
-                ta.dispatchEvent(new Event("input", { bubbles: true }));
+                ta.dispatchEvent(
+                  new Event("input", { bubbles: true }),
+                );
               }
             }}
-            className="text-left px-4 py-2.5 rounded-xl bg-surface border border-rim hover:border-dawn/30 text-text-secondary text-sm transition-all hover:text-text-primary"
+            className="text-left px-4 py-3 rounded-xl bg-surface border border-rim hover:border-dawn/30 text-text-secondary text-sm transition-all hover:text-text-primary hover:shadow-soft hover:bg-surface-hover"
           >
             {s}
           </button>
         ))}
       </div>
+
+      {/* Horizon decorative line */}
+      <div className="w-32 dawn-line opacity-30" />
     </div>
   );
 }

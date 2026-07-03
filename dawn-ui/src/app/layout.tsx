@@ -16,13 +16,18 @@ const jetbrains = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: "DAWN — Regent Knowledge Layer",
-  description: "Digital AI Working Network — internal knowledge layer for Regent",
+  description:
+    "Digital AI Working Network — internal knowledge layer for Regent, Kampala",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html lang="en" className={`${outfit.variable} ${jetbrains.variable}`}>
-      <body className="bg-abyss text-text-primary antialiased">
+      <body className="bg-canvas text-text-primary antialiased">
         {children}
       </body>
     </html>
