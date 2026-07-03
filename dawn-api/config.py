@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     # Auth
     dawn_api_key: str = "dev-key"
 
+    # OCR — optional explicit path to the tesseract binary. Leave unset on
+    # Linux (VPS deploy) where `apt-get install tesseract-ocr` puts it on
+    # PATH already. On Windows dev machines, PATH resolution is often
+    # session/shell-dependent (PowerShell vs cmd, User vs Machine scope,
+    # requires a fresh terminal after install) — setting this explicitly
+    # sidesteps all of that.
+    # e.g. in .env: TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
+    tesseract_cmd: Optional[str] = None
+
     # CORS
     allowed_origins: str = "http://localhost:3000"
 

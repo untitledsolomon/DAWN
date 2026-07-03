@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 import re
 import db.client as db
+from llm.embeddings import embed_text
 
 # Words not worth searching for
 STOPWORDS = {
@@ -55,12 +56,23 @@ def extract_key_terms(query: str) -> list[str]:
     return candidates
 
 
-async def build_context(query: str, max_nodes: int = 10) -> ContextResult:
+async def build_context(query: str, max_nodes: int = 10, include_code: bool = False) -> ContextResult:
     """
     Main retrieval pipeline.
-    1. Try fuzzy search on full query + key terms
-    2. Traverse from best-matching entry nodes
-    3. Return assembled context string + metadata
+    1. Try fuzzy search on full query + key terms (code-tagged nodes
+       excluded by default — see include_code)
+    2. If fuzzy search finds nothing, fall back to semantic (embedding)
+       search on the raw query
+    3. Traverse from best-matching entry nodes
+    4. Return assembled context string + metadata
+
+    include_code=False by default: once repo ingestion has been used a
+    few times, code-chunk nodes vastly outnumber concept/entity/fact
+    nodes in the graph, and trigram similarity on source code text
+    competes directly with — and often crowds out — the conceptual
+    nodes a normal chat query is actually looking for. Set
+    include_code=True for queries that are explicitly about the
+    codebase (e.g. routed there by intent detection upstream).
     """
     tool_calls: list[ToolCall] = []
     node_ids: list[str] = []
@@ -68,12 +80,14 @@ async def build_context(query: str, max_nodes: int = 10) -> ContextResult:
     context_parts: list[str] = []
     seen_ids: set[str] = set()
 
-    # ── Stage 1: Find entry nodes ─────────────────────────────────────────────
+    exclude_tags = None if include_code else ["code"]
+
+    # ── Stage 1: Find entry nodes via fuzzy search ───────────────────────────
     candidates = extract_key_terms(query)
     entry_nodes: list[dict] = []
 
     for term in candidates[:4]:  # Don't hammer the DB — first 4 candidates
-        results = await db.rpc_fuzzy_search(term, limit=3, threshold=0.15)
+        results = await db.rpc_fuzzy_search(term, limit=3, threshold=0.15, exclude_tags=exclude_tags)
         tc = ToolCall(name="fuzzy_search", args={"query": term}, result_count=len(results))
         tool_calls.append(tc)
 
@@ -84,6 +98,22 @@ async def build_context(query: str, max_nodes: int = 10) -> ContextResult:
 
         if len(entry_nodes) >= 3:
             break  # Good enough entry points found
+
+    # ── Stage 1b: Semantic fallback if fuzzy search found nothing ───────────
+    # Trigram similarity misses paraphrases and conceptually-related but
+    # differently-worded content ("bot keeps losing money" vs a node
+    # titled "Sharpe ratio degradation") — this is exactly what
+    # embeddings exist to catch, and until now nothing called it.
+    if not entry_nodes:
+        embedding = embed_text(query)
+        if embedding:
+            results = await db.rpc_semantic_search(embedding, limit=5, exclude_tags=exclude_tags)
+            tc = ToolCall(name="semantic_search", args={"query": query}, result_count=len(results))
+            tool_calls.append(tc)
+            for node in results:
+                if node["id"] not in seen_ids:
+                    entry_nodes.append(node)
+                    seen_ids.add(node["id"])
 
     if not entry_nodes:
         return ContextResult(
@@ -127,6 +157,46 @@ async def build_context(query: str, max_nodes: int = 10) -> ContextResult:
     context = "\n\n".join(context_parts)
     return ContextResult(
         context=context,
+        tool_calls=tool_calls,
+        node_ids=node_ids,
+        node_titles=node_titles,
+    )
+
+
+async def build_code_context(query: str, max_nodes: int = 8) -> ContextResult:
+    """
+    Retrieval pipeline scoped specifically to code-tagged nodes — for
+    queries that are explicitly about the codebase itself (e.g. "where
+    do we handle Supabase polling retries", "show me the MT5 EA connection
+    logic"). Uses fuzzy_search_code (requires migration 002) rather than
+    build_context's default code-exclusion behavior.
+    """
+    tool_calls: list[ToolCall] = []
+    node_ids: list[str] = []
+    node_titles: list[str] = []
+    context_parts: list[str] = []
+    seen_ids: set[str] = set()
+
+    candidates = extract_key_terms(query)
+    for term in candidates[:4]:
+        results = await db.rpc_fuzzy_search_code(term, limit=max_nodes)
+        tc = ToolCall(name="fuzzy_search_code", args={"query": term}, result_count=len(results))
+        tool_calls.append(tc)
+
+        for node in results:
+            if node["id"] not in seen_ids and len(node_ids) < max_nodes:
+                seen_ids.add(node["id"])
+                node_ids.append(node["id"])
+                node_titles.append(node["title"])
+                ref = f" ({node['source_ref']})" if node.get("source_ref") else ""
+                if node.get("body"):
+                    context_parts.append(f"**{node['title']}**{ref}:\n```\n{node['body']}\n```")
+
+        if len(node_ids) >= max_nodes:
+            break
+
+    return ContextResult(
+        context="\n\n".join(context_parts),
         tool_calls=tool_calls,
         node_ids=node_ids,
         node_titles=node_titles,

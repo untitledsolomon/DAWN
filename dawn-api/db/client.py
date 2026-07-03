@@ -2,6 +2,9 @@ from supabase import create_client, Client
 from config import settings
 from typing import Optional
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 _client: Optional[Client] = None
 
@@ -19,6 +22,25 @@ async def create_node(data: dict) -> dict:
     db = get_db()
     res = db.table("nodes").insert(data).execute()
     return res.data[0] if res.data else {}
+
+
+async def create_nodes_batch(rows: list[dict], batch_size: int = 200) -> list[dict]:
+    """
+    Insert many node rows in chunked multi-row inserts instead of one
+    request per row. Returns all created rows (with generated ids) in
+    the same order they were submitted. Used by large ingests (big PDFs,
+    repos with many files) to avoid tens of thousands of individual
+    round trips to Supabase.
+    """
+    if not rows:
+        return []
+    db = get_db()
+    created: list[dict] = []
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i:i + batch_size]
+        res = db.table("nodes").insert(batch).execute()
+        created.extend(res.data or [])
+    return created
 
 
 async def get_node_by_id(node_id: str) -> Optional[dict]:
@@ -77,10 +99,94 @@ async def create_edge(data: dict) -> dict:
     return res.data[0] if res.data else {}
 
 
+async def create_edges_batch(rows: list[dict], batch_size: int = 200) -> list[dict]:
+    if not rows:
+        return []
+    db = get_db()
+    created: list[dict] = []
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i:i + batch_size]
+        res = db.table("edges").insert(batch).execute()
+        created.extend(res.data or [])
+    return created
+
+
 async def delete_edge(edge_id: str) -> bool:
     db = get_db()
     db.table("edges").delete().eq("id", edge_id).execute()
     return True
+
+
+async def get_nodes_by_source_ref_prefix(prefix: str, limit: int = 5000) -> list[dict]:
+    """
+    Find existing active/stale nodes whose source_ref starts with the given
+    prefix (e.g. a repo path or a file path). Used to detect and clean up
+    prior ingests of the same source before re-ingesting — see
+    archive_nodes_batch for why archiving alone isn't enough.
+    """
+    db = get_db()
+    res = (
+        db.table("nodes")
+        .select("id, title, source_ref, status")
+        .like("source_ref", f"{prefix}%")
+        .in_("status", ["active", "stale"])
+        .limit(limit)
+        .execute()
+    )
+    return res.data or []
+
+
+async def archive_nodes_batch(node_ids_and_titles: list[tuple], batch_size: int = 200):
+    """
+    Archive prior nodes from a re-ingested source and rename them out of
+    the way. Renaming is required, not just cosmetic: idx_nodes_title_lower
+    is a UNIQUE index on LOWER(title) covering ALL rows regardless of
+    status, so an archived node still blocks a new insert of the same
+    title. We prefix the old title with an "archived:" + short id marker
+    so it's clearly identifiable and out of collision range, while the
+    row (and any edges pointing at it) stays intact for history.
+
+    Args:
+        node_ids_and_titles: list of (node_id, old_title) tuples.
+    """
+    if not node_ids_and_titles:
+        return
+    db = get_db()
+    for i in range(0, len(node_ids_and_titles), batch_size):
+        batch = node_ids_and_titles[i:i + batch_size]
+        for node_id, old_title in batch:
+            new_title = f"[archived {node_id[:8]}] {old_title}"[:250]
+            db.table("nodes").update({
+                "status": "archived",
+                "title": new_title,
+            }).eq("id", node_id).execute()
+
+
+async def update_node_embeddings(node_id_to_embedding: dict, batch_size: int = 50) -> int:
+    """
+    Write embeddings back onto existing nodes by id. Supabase's Python
+    client doesn't support a true multi-row "update different values per
+    row" in one call, so this is one request per node — but it's kept
+    to a modest batch_size and always called from background ingestion
+    tasks, never inline on the request path, so it doesn't block anything
+    user-facing. Returns count of successful updates.
+    """
+    if not node_id_to_embedding:
+        return 0
+    db = get_db()
+    updated = 0
+    items = list(node_id_to_embedding.items())
+    for i in range(0, len(items), batch_size):
+        batch = items[i:i + batch_size]
+        for node_id, embedding in batch:
+            if embedding is None:
+                continue
+            try:
+                db.table("nodes").update({"embedding": embedding}).eq("id", node_id).execute()
+                updated += 1
+            except Exception as e:
+                logger.error(f"Failed to write embedding for node {node_id}: {e}")
+    return updated
 
 
 # ── Tag helpers ───────────────────────────────────────────────────────────────
@@ -100,6 +206,16 @@ async def create_tag(name: str, description: str = "") -> dict:
 async def attach_tag(node_id: str, tag_id: str):
     db = get_db()
     db.table("node_tags").upsert({"node_id": node_id, "tag_id": tag_id}).execute()
+
+
+async def attach_tags_batch(node_ids: list[str], tag_ids: list[str], batch_size: int = 500):
+    """Attach the same set of tags to many nodes in chunked multi-row upserts."""
+    if not node_ids or not tag_ids:
+        return
+    db = get_db()
+    rows = [{"node_id": nid, "tag_id": tid} for nid in node_ids for tid in tag_ids]
+    for i in range(0, len(rows), batch_size):
+        db.table("node_tags").upsert(rows[i:i + batch_size]).execute()
 
 
 # ── Graph tool functions (call Postgres RPC) ──────────────────────────────────
@@ -127,10 +243,46 @@ async def rpc_fuzzy_search(
     query: str,
     limit: int = 5,
     threshold: float = 0.2,
+    exclude_types: Optional[list[str]] = None,
+    exclude_tags: Optional[list[str]] = None,
 ) -> list[dict]:
+    """
+    exclude_types/exclude_tags require migration 002 (adds p_exclude_types/
+    p_exclude_tags params to the fuzzy_search RPC). If that migration
+    hasn't been applied yet, Postgres will raise an unknown-parameter
+    error — caught here and retried with the original signature, so this
+    doesn't hard-break search on an un-migrated database. Once migrated,
+    the retry path is never hit.
+    """
+    db = get_db()
+    params = {"p_query": query, "p_limit": limit, "p_threshold": threshold}
+    if exclude_types:
+        params["p_exclude_types"] = exclude_types
+    if exclude_tags:
+        params["p_exclude_tags"] = exclude_tags
+
+    try:
+        res = db.rpc("fuzzy_search", params).execute()
+        return res.data or []
+    except Exception as e:
+        if (exclude_types or exclude_tags) and "p_exclude" in str(e):
+            logger.warning(
+                "fuzzy_search called with exclude filters but migration 002 "
+                "doesn't appear to be applied — falling back to unfiltered search."
+            )
+            res = db.rpc(
+                "fuzzy_search",
+                {"p_query": query, "p_limit": limit, "p_threshold": threshold},
+            ).execute()
+            return res.data or []
+        raise
+
+
+async def rpc_fuzzy_search_code(query: str, limit: int = 5, threshold: float = 0.2) -> list[dict]:
+    """Search only nodes tagged 'code' — requires migration 002 (fuzzy_search_code RPC)."""
     db = get_db()
     res = db.rpc(
-        "fuzzy_search",
+        "fuzzy_search_code",
         {"p_query": query, "p_limit": limit, "p_threshold": threshold},
     ).execute()
     return res.data or []
@@ -142,13 +294,32 @@ async def rpc_search_tags(tag_name: str) -> list[dict]:
     return res.data or []
 
 
-async def rpc_semantic_search(embedding: list[float], limit: int = 5) -> list[dict]:
+async def rpc_semantic_search(
+    embedding: list[float],
+    limit: int = 5,
+    exclude_types: Optional[list[str]] = None,
+    exclude_tags: Optional[list[str]] = None,
+) -> list[dict]:
+    """See rpc_fuzzy_search docstring re: migration 002 fallback behavior."""
     db = get_db()
-    res = db.rpc(
-        "semantic_search",
-        {"p_embedding": embedding, "p_limit": limit},
-    ).execute()
-    return res.data or []
+    params = {"p_embedding": embedding, "p_limit": limit}
+    if exclude_types:
+        params["p_exclude_types"] = exclude_types
+    if exclude_tags:
+        params["p_exclude_tags"] = exclude_tags
+
+    try:
+        res = db.rpc("semantic_search", params).execute()
+        return res.data or []
+    except Exception as e:
+        if (exclude_types or exclude_tags) and "p_exclude" in str(e):
+            logger.warning(
+                "semantic_search called with exclude filters but migration 002 "
+                "doesn't appear to be applied — falling back to unfiltered search."
+            )
+            res = db.rpc("semantic_search", {"p_embedding": embedding, "p_limit": limit}).execute()
+            return res.data or []
+        raise
 
 
 # ── Memory ────────────────────────────────────────────────────────────────────
