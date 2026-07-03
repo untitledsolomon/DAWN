@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # Tools
     filesystem_sandbox_root: str = "./sandbox"
     skills_install_root: str = "./installed_skills"
-    tools_enabled: str = "filesystem,git,websearch,install_skill"
+    tools_enabled: str = "filesystem,git,websearch,install_skill,terminal,web_fetch"
 
     # Web search
     brave_search_api_key: Optional[str] = None

@@ -1,0 +1,11 @@
+name: skill-converter
+description: >
+  Converts Vercel-style SKILL.md skills (from github.com/vercel-labs/skills
+  and similar repos) into skill.yaml format that DAWN's install_skill tool
+  can consume. Also installs skills from the Vercel ecosystem by fetching
+  the SKILL.md, parsing its YAML frontmatter, and generating a valid
+  skill.yaml wrapper.
+version: 1.0.0
+author: regent
+source: https://github.com/vercel-labs/skills
+type: tool

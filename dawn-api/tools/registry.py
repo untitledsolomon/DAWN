@@ -80,4 +80,14 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register SkillInstallTool: {e}")
 
-    # terminal.py registers itself here once it lands
+    try:
+        from tools.webfetch import WebFetchTool
+        registry.register(WebFetchTool())
+    except Exception as e:
+        logger.error(f"Failed to register WebFetchTool: {e}")
+    
+    try:
+        from tools.terminal import TerminalTool
+        registry.register(TerminalTool())
+    except Exception as e:
+        logger.error(f"Failed to register TerminalTool: {e}")

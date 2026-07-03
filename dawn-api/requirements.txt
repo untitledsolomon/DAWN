@@ -18,3 +18,4 @@ striprtf==0.0.26
 pytesseract==0.3.10
 Pillow==10.4.0
 pyyaml==6.0.1
+httpx
