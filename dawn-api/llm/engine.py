@@ -4,6 +4,8 @@ Switch via LLM_MODE env var: "deepseek" | "local"
 """
 from typing import AsyncGenerator, Optional
 from dataclasses import dataclass, field
+
+from pymupdf import message
 from config import settings
 import logging
 import json
@@ -87,6 +89,7 @@ class DeepSeekEngine:
         self,
         messages: list[dict],
         tools: list[dict],
+        max_tokens: int = 8192,
     ) -> CompletionResult:
         """
         Like complete(), but offers the model a set of callable tools
@@ -99,20 +102,32 @@ class DeepSeekEngine:
             tools=tools,
             tool_choice="auto",
             stream=False,
-            max_tokens=1024,
+            max_tokens=max_tokens,
             temperature=0.1,  # low on purpose — determinism matters more than
                               # creativity when deciding whether to call a tool
         )
-        message = response.choices[0].message
+        choice = response.choices[0]
+        message = choice.message
 
         if message.tool_calls:
             calls = []
             for tc in message.tool_calls:
-                try:
-                    args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-                except json.JSONDecodeError:
-                    logger.warning(f"Model returned malformed JSON args for '{tc.function.name}': {tc.function.arguments!r}")
-                    args = {}
+                args = {}
+                if tc.function.arguments:
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError as e:
+                        if choice.finish_reason == "length":
+                            err = (
+                                "Tool call arguments were truncated because the response "
+                                "hit the max_tokens limit before finishing. Break large "
+                                "file writes into smaller chunks, or write the file in "
+                                "multiple sequential 'write'/'append' calls."
+                            )
+                        else:
+                            err = f"Tool call arguments were not valid JSON: {e}"
+                        logger.warning(f"{err} Raw (truncated): {tc.function.arguments[:200]}...")
+                        args = {"__parse_error__": err}
                 calls.append(ToolCallRequest(id=tc.id, name=tc.function.name, args=args))
             return CompletionResult(content=message.content or "", tool_calls=calls)
 

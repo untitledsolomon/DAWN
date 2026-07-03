@@ -23,7 +23,7 @@ from tools.executor import execute_tool_call
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_ITERATIONS = 50
+DEFAULT_MAX_ITERATIONS = 500
 
 # Phrases that claim a real-world action was taken. If these appear in a
 # "final answer" (i.e. a response with no accompanying tool_call), the model
@@ -89,6 +89,21 @@ async def _execute_tool_calls(
     for call in result.tool_calls:
         yield {"type": "tool_call", "name": call.name, "args": call.args}
 
+        if "__parse_error__" in call.args:
+            error = (
+                f"Your tool call arguments for '{call.name}' were not valid JSON "
+                f"({call.args['__parse_error__']}). This usually happens with long "
+                f"multi-line string values containing quotes. Re-emit the call with "
+                f"the 'content' argument base64-encoded to avoid escaping issues."
+            )
+            yield {"type": "tool_result", "name": call.name, "success": False, "output": None, "error": error}
+            messages.append(engine.tool_result_message(
+                tool_call_id=call.id,
+                tool_name=call.name,
+                result_json=json.dumps({"success": False, "output": None, "error": error, "metadata": {}}),
+            ))
+            continue
+        
         # Defense in depth: even though disallowed tools weren't offered in
         # tool_specs, don't trust that the model can't hallucinate a call to
         # one anyway — re-check authorization at execution time.
@@ -147,6 +162,9 @@ async def run_agent_loop(
     engine = get_engine()
     registry = get_registry()
 
+    engine = get_engine()
+    registry = get_registry()
+
     if not isinstance(engine, DeepSeekEngine):
         yield {"type": "error", "content": (
             "Agent/tool workflows currently require LLM_MODE=deepseek — "
@@ -154,20 +172,29 @@ async def run_agent_loop(
         )}
         return
 
-    all_tools = registry.list_tools()
-    if not all_tools:
-        yield {"type": "error", "content": "No tools are registered — check TOOLS_ENABLED in config."}
-        return
+    def _current_tools() -> tuple[set[str], list[dict]]:
+        """
+        Re-snapshot allowed tool names + specs from the live registry.
+        Must be called fresh after any tool execution — install_skill
+        mutates the registry in place mid-loop (see skills/installer.py),
+        so a stale snapshot taken once at the top would never see a
+        newly installed skill, causing the model to be offered (or to
+        hallucinate) a tool name this snapshot doesn't yet recognize.
+        """
+        all_tools = registry.list_tools()
+        if not all_tools:
+            return set(), []
+        names = set(identity.allowed_tools([t.name for t in all_tools]))
+        specs = [t.spec() for t in all_tools if t.name in names]
+        return names, specs
 
-    allowed_names = set(identity.allowed_tools([t.name for t in all_tools]))
+    allowed_names, tool_specs = _current_tools()
     if not allowed_names:
-        yield {"type": "error", "content": "This identity is not authorized to use any tools."}
+        yield {"type": "error", "content": "No tools are registered, or this identity is not authorized to use any."}
         return
-
-    tool_specs = [t.spec() for t in all_tools if t.name in allowed_names]
 
     messages = build_agent_messages(user_message, history or [])
-
+    
     yield {"type": "thinking", "content": "Working on it..."}
 
     for iteration in range(1, max_iterations + 1):
@@ -181,6 +208,7 @@ async def run_agent_loop(
         if result.wants_tool_call:
             async for event in _execute_tool_calls(result, messages, registry, allowed_names, engine, identity):
                 yield event
+            allowed_names, tool_specs = _current_tools()
             continue  # get another completion now that tool results are in history
 
         # No tool call this turn — this is either a genuine final answer, or
@@ -215,6 +243,7 @@ async def run_agent_loop(
             if result.wants_tool_call:
                 async for event in _execute_tool_calls(result, messages, registry, allowed_names, engine, identity):
                     yield event
+                allowed_names, tool_specs = _current_tools()
                 continue  # back to the top for another completion
 
             if _claims_unverified_action(result.content):

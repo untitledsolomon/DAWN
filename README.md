@@ -27,7 +27,7 @@ Order matters: extensions first, then enums, then tables, then functions, then s
 cd dawn-api
 cp .env.example .env       # Fill in SUPABASE_URL, SUPABASE_SERVICE_KEY, DEEPSEEK_API_KEY
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+uvicorn main:app --reload --port 8000 --loop asyncio
 ```
 
 ### VPS (new 8GB box, via Docker)
