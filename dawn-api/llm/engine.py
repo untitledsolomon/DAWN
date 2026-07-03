@@ -3,10 +3,31 @@ LLM Engine — abstracts local llama.cpp and DeepSeek API behind one interface.
 Switch via LLM_MODE env var: "deepseek" | "local"
 """
 from typing import AsyncGenerator, Optional
+from dataclasses import dataclass, field
 from config import settings
 import logging
+import json
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolCallRequest:
+    """One tool call the model wants to make, normalised across backends."""
+    id: str
+    name: str
+    args: dict
+
+
+@dataclass
+class CompletionResult:
+    """Result of complete_with_tools() — either a final text answer, or tool_calls to execute."""
+    content: str = ""
+    tool_calls: list[ToolCallRequest] = field(default_factory=list)
+
+    @property
+    def wants_tool_call(self) -> bool:
+        return len(self.tool_calls) > 0
 
 DAWN_SYSTEM_PROMPT = """You are DAWN — the internal knowledge layer and AI assistant for Regent, \
 a digital systems and strategy firm based in Kampala, Uganda.
@@ -62,6 +83,65 @@ class DeepSeekEngine:
         )
         return response.choices[0].message.content or ""
 
+    async def complete_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+    ) -> CompletionResult:
+        """
+        Like complete(), but offers the model a set of callable tools
+        (OpenAI/DeepSeek function-calling spec, e.g. registry.specs()).
+        Returns either final text content, or a list of tool calls to run.
+        """
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            stream=False,
+            max_tokens=1024,
+            temperature=0.1,  # low on purpose — determinism matters more than
+                              # creativity when deciding whether to call a tool
+        )
+        message = response.choices[0].message
+
+        if message.tool_calls:
+            calls = []
+            for tc in message.tool_calls:
+                try:
+                    args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                except json.JSONDecodeError:
+                    logger.warning(f"Model returned malformed JSON args for '{tc.function.name}': {tc.function.arguments!r}")
+                    args = {}
+                calls.append(ToolCallRequest(id=tc.id, name=tc.function.name, args=args))
+            return CompletionResult(content=message.content or "", tool_calls=calls)
+
+        return CompletionResult(content=message.content or "")
+
+    def tool_result_message(self, tool_call_id: str, tool_name: str, result_json: str) -> dict:
+        """Build the 'tool' role message DeepSeek expects after a tool call."""
+        return {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "name": tool_name,
+            "content": result_json,
+        }
+
+    def assistant_tool_call_message(self, content: str, tool_calls: list[ToolCallRequest]) -> dict:
+        """Build the assistant message that recorded the tool call(s), for history."""
+        return {
+            "role": "assistant",
+            "content": content or None,
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.name, "arguments": json.dumps(tc.args)},
+                }
+                for tc in tool_calls
+            ],
+        }
+
 
 class LocalEngine:
     def __init__(self):
@@ -98,8 +178,29 @@ class LocalEngine:
         )
         return output["choices"][0]["message"]["content"] or ""
 
+    async def complete_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+    ) -> CompletionResult:
+        """
+        Tool-calling support depends entirely on the loaded GGUF's chat
+        template (e.g. models fine-tuned on ChatML-with-functions or
+        Hermes-style function calling). Rather than silently returning
+        plain text and pretending tools were considered, this raises so
+        the caller can fall back or surface a clear error — flip this on
+        deliberately once you've confirmed your local model actually
+        supports function calling in llama-cpp-python's format.
+        """
+        raise NotImplementedError(
+            "LocalEngine.complete_with_tools() is not implemented — tool-calling "
+            "support varies by GGUF chat template and hasn't been verified for "
+            "the currently configured local model. Use LLM_MODE=deepseek for "
+            "agent/tool workflows until this is validated."
+        )
 
-# ── Singleton ─────────────────────────────────────────────────────────────────
+
+# ── Singleton ────────────────────────────────────────────────────────────────
 
 _engine: Optional[DeepSeekEngine | LocalEngine] = None
 
@@ -129,7 +230,7 @@ def build_messages(
     """Assemble the full message list for the LLM."""
     system = DAWN_SYSTEM_PROMPT
     if context:
-        system += f"\n\n─── KNOWLEDGE GRAPH CONTEXT ───\n{context}\n────────────────────────────────"
+        system += f"\n\n─── KNOWLEDGE GRAPH CONTEXT ───\n{context}\n─────────────────────────────"
 
     messages = [{"role": "system", "content": system}]
 

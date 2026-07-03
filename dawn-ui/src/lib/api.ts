@@ -1,4 +1,5 @@
 import type { DawnNode, Tag, IngestionLog, SSEEvent } from "./types";
+import type { AgentSSEEvent } from "./agent-types";
 
 const BASE = process.env.NEXT_PUBLIC_DAWN_API_URL || "http://localhost:8000";
 const KEY = process.env.NEXT_PUBLIC_DAWN_API_KEY || "";

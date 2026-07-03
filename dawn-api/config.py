@@ -22,6 +22,17 @@ class Settings(BaseSettings):
 
     # Auth
     dawn_api_key: str = "dev-key"
+    
+    # Tools
+    filesystem_sandbox_root: str = "./sandbox"
+    skills_install_root: str = "./installed_skills"
+    tools_enabled: str = "filesystem,git,websearch,install_skill"
+
+    # Web search
+    brave_search_api_key: Optional[str] = None
+
+    # Auth tiers
+    dawn_api_keys: Optional[str] = None  # JSON: {"sk-owner-xxx": "owner", "sk-app-yyy": "service"}
 
     # OCR — optional explicit path to the tesseract binary. Leave unset on
     # Linux (VPS deploy) where `apt-get install tesseract-ocr` puts it on

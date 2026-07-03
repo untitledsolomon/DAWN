@@ -1,21 +1,28 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, RotateCcw } from "lucide-react";
+import { Send, RotateCcw, Bot, MessageSquare } from "lucide-react";
 import { streamChat } from "@/lib/api";
+import { streamAgent } from "@/lib/agent-api";
 import type { ChatMessage, ToolCall } from "@/lib/types";
+import type { AgentChatMessage, AgentTraceEntry, ChatMode } from "@/lib/agent-types";
 import Message from "./Message";
+import AgentTraceIndicator, { AgentWarningBanner } from "./AgentTraceIndicator";
 
 let messageId = 0;
 const nextId = () => String(++messageId);
 
 export default function ChatWindow() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [mode, setMode] = useState<ChatMode>("chat");
+  const [messages, setMessages] = useState<AgentChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingToolCalls, setStreamingToolCalls] = useState<ToolCall[]>([]);
+  const [streamingTrace, setStreamingTrace] = useState<AgentTraceEntry[]>([]);
+  const [streamingWarning, setStreamingWarning] = useState<string | null>(null);
   const [thinkingState, setThinkingState] = useState(false);
+  const [thinkingLabel, setThinkingLabel] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sessionId = useRef(crypto.randomUUID());
@@ -33,16 +40,153 @@ export default function ChatWindow() {
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
   }, [input]);
 
-  const buildHistory = useCallback(() =>
-    messages.map((m) => ({ role: m.role, content: m.content })),
-  [messages]);
+  const buildHistory = useCallback(
+    () => messages.map((m) => ({ role: m.role, content: m.content })),
+    [messages],
+  );
+
+  const sendChat = useCallback(
+    async (text: string) => {
+      let fullContent = "";
+      let finalNodeIds: string[] = [];
+      let finalNodeTitles: string[] = [];
+      const toolCalls: ToolCall[] = [];
+
+      try {
+        for await (const event of streamChat(text, buildHistory(), sessionId.current)) {
+          switch (event.type) {
+            case "thinking":
+              setThinkingState(true);
+              break;
+            case "tool":
+              toolCalls.push({ name: event.name, args: event.args, result_count: event.result_count });
+              setStreamingToolCalls([...toolCalls]);
+              setThinkingState(false);
+              break;
+            case "context":
+              finalNodeIds = event.node_ids;
+              finalNodeTitles = event.node_titles;
+              break;
+            case "token":
+              fullContent += event.content;
+              setStreamingContent(fullContent);
+              setThinkingState(false);
+              break;
+            case "done":
+              finalNodeIds = event.node_ids;
+              finalNodeTitles = event.node_titles;
+              break;
+            case "error":
+              fullContent = `⚠️ Error: ${event.message}`;
+              setStreamingContent(fullContent);
+              break;
+          }
+        }
+      } catch (err) {
+        console.error("[sendChat] error:", err);
+        fullContent = "⚠️ Connection error. Is the DAWN API running?";
+        setStreamingContent(fullContent);
+      }
+
+      const assistantMsg: AgentChatMessage = {
+        id: nextId(),
+        role: "assistant",
+        content: fullContent,
+        tool_calls: toolCalls,
+        node_ids: finalNodeIds,
+        node_titles: finalNodeTitles,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
+    },
+    [buildHistory],
+  );
+
+  const sendAgent = useCallback(
+    async (text: string) => {
+      let fullContent = "";
+      const trace: AgentTraceEntry[] = [];
+      let warning: string | undefined;
+
+      try {
+        for await (const event of streamAgent(text, buildHistory())) {
+          switch (event.type) {
+            case "thinking":
+              setThinkingLabel(event.content);
+              setThinkingState(true);
+              break;
+
+            case "tool_call":
+              trace.push({ call: { name: event.name, args: event.args } });
+              setStreamingTrace([...trace]);
+              setThinkingState(false);
+              break;
+
+            case "tool_result": {
+              // Attach the result to the most recent matching pending call
+              const idx = [...trace].reverse().findIndex(
+                (t) => t.call.name === event.name && !t.result,
+              );
+              if (idx !== -1) {
+                const realIdx = trace.length - 1 - idx;
+                trace[realIdx] = {
+                  ...trace[realIdx],
+                  result: { name: event.name, success: event.success, output: event.output, error: event.error },
+                };
+                setStreamingTrace([...trace]);
+              }
+              break;
+            }
+
+            case "warning":
+              warning = event.content;
+              setStreamingWarning(event.content);
+              break;
+
+            case "token":
+              fullContent += event.content;
+              setStreamingContent(fullContent);
+              setThinkingState(false);
+              break;
+
+            case "done":
+              fullContent = event.content;
+              break;
+
+            case "iteration_limit":
+              fullContent = fullContent || `⚠️ ${event.content}`;
+              break;
+
+            case "error":
+              fullContent = `⚠️ Error: ${event.content}`;
+              setStreamingContent(fullContent);
+              break;
+          }
+        }
+      } catch (err) {
+        console.error("[sendAgent] error:", err);
+        fullContent = "⚠️ Connection error. Is the DAWN API running?";
+        setStreamingContent(fullContent);
+      }
+
+      const assistantMsg: AgentChatMessage = {
+        id: nextId(),
+        role: "assistant",
+        content: fullContent,
+        trace,
+        warning,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
+    },
+    [buildHistory],
+  );
 
   const send = useCallback(async () => {
     const text = input.trim();
     if (!text || isStreaming) return;
 
-    // Add user message
-    const userMsg: ChatMessage = {
+    const userMsg: AgentChatMessage = {
       id: nextId(),
       role: "user",
       content: text,
@@ -53,73 +197,24 @@ export default function ChatWindow() {
     setIsStreaming(true);
     setStreamingContent("");
     setStreamingToolCalls([]);
+    setStreamingTrace([]);
+    setStreamingWarning(null);
     setThinkingState(true);
+    setThinkingLabel("");
 
-    let fullContent = "";
-    let finalNodeIds: string[] = [];
-    let finalNodeTitles: string[] = [];
-    const toolCalls: ToolCall[] = [];
-
-    try {
-      for await (const event of streamChat(text, buildHistory(), sessionId.current)) {
-        switch (event.type) {
-          case "thinking":
-            setThinkingState(true);
-            break;
-
-          case "tool":
-            toolCalls.push({
-              name: event.name,
-              args: event.args,
-              result_count: event.result_count,
-            });
-            setStreamingToolCalls([...toolCalls]);
-            setThinkingState(false);
-            break;
-
-          case "context":
-            finalNodeIds = event.node_ids;
-            finalNodeTitles = event.node_titles;
-            break;
-
-          case "token":
-            fullContent += event.content;
-            setStreamingContent(fullContent);
-            setThinkingState(false);
-            break;
-
-          case "done":
-            finalNodeIds = event.node_ids;
-            finalNodeTitles = event.node_titles;
-            break;
-
-          case "error":
-            fullContent = `⚠️ Error: ${event.message}`;
-            setStreamingContent(fullContent);
-            break;
-        }
-      }
-    } catch (err) {
-      fullContent = `⚠️ Connection error. Is the DAWN API running?`;
-      setStreamingContent(fullContent);
+    if (mode === "agent") {
+      await sendAgent(text);
+    } else {
+      await sendChat(text);
     }
 
-    // Finalise assistant message
-    const assistantMsg: ChatMessage = {
-      id: nextId(),
-      role: "assistant",
-      content: fullContent,
-      tool_calls: toolCalls,
-      node_ids: finalNodeIds,
-      node_titles: finalNodeTitles,
-      timestamp: new Date(),
-    };
-    setMessages((prev) => [...prev, assistantMsg]);
     setIsStreaming(false);
     setStreamingContent("");
     setStreamingToolCalls([]);
+    setStreamingTrace([]);
+    setStreamingWarning(null);
     setThinkingState(false);
-  }, [input, isStreaming, buildHistory]);
+  }, [input, isStreaming, mode, sendAgent, sendChat]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -130,28 +225,82 @@ export default function ChatWindow() {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Mode toggle */}
+      <div className="flex items-center justify-center gap-1 px-4 pt-3">
+        <div className="inline-flex items-center gap-0.5 p-0.5 rounded-lg bg-surface border border-rim">
+          <button
+            onClick={() => !isStreaming && setMode("chat")}
+            disabled={isStreaming}
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all disabled:opacity-50 ${
+              mode === "chat"
+                ? "bg-dawn/90 text-abyss"
+                : "text-text-muted hover:text-text-secondary"
+            }`}
+          >
+            <MessageSquare size={12} />
+            Chat
+          </button>
+          <button
+            onClick={() => !isStreaming && setMode("agent")}
+            disabled={isStreaming}
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all disabled:opacity-50 ${
+              mode === "agent"
+                ? "bg-dawn/90 text-abyss"
+                : "text-text-muted hover:text-text-secondary"
+            }`}
+          >
+            <Bot size={12} />
+            Agent
+          </button>
+        </div>
+      </div>
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
-        {messages.length === 0 && !isStreaming && (
-          <EmptyState />
-        )}
+        {messages.length === 0 && !isStreaming && <EmptyState mode={mode} />}
 
         {messages.map((msg) => (
-          <Message key={msg.id} message={msg} />
+          <div key={msg.id}>
+            {msg.trace && msg.trace.length > 0 && (
+              <div className="ml-10 mb-1">
+                <AgentTraceIndicator trace={msg.trace} />
+              </div>
+            )}
+            {msg.warning && (
+              <div className="ml-10 mb-1">
+                <AgentWarningBanner warning={msg.warning} />
+              </div>
+            )}
+            <Message message={msg} />
+          </div>
         ))}
 
         {/* Streaming message */}
         {isStreaming && (
-          <Message
-            message={{
-              id: "streaming",
-              role: "assistant",
-              content: streamingContent,
-              timestamp: new Date(),
-            }}
-            isStreaming
-            streamingToolCalls={thinkingState ? [] : streamingToolCalls}
-          />
+          <div>
+            {mode === "agent" && (
+              <div className="ml-10 mb-1">
+                <AgentTraceIndicator
+                  trace={streamingTrace}
+                  thinking={thinkingState}
+                  thinkingLabel={thinkingLabel}
+                />
+                {streamingWarning && <AgentWarningBanner warning={streamingWarning} />}
+              </div>
+            )}
+            <Message
+              message={{
+                id: "streaming",
+                role: "assistant",
+                content: streamingContent,
+                timestamp: new Date(),
+              }}
+              isStreaming
+              streamingToolCalls={
+                mode === "chat" && !thinkingState ? streamingToolCalls : []
+              }
+            />
+          </div>
         )}
 
         <div ref={bottomRef} />
@@ -165,7 +314,7 @@ export default function ChatWindow() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask DAWN anything..."
+            placeholder={mode === "agent" ? "Ask DAWN to do something..." : "Ask DAWN anything..."}
             rows={1}
             disabled={isStreaming}
             className="flex-1 bg-transparent text-text-primary text-sm placeholder:text-text-muted resize-none outline-none leading-relaxed py-1 max-h-40 disabled:opacity-50"
@@ -190,20 +339,31 @@ export default function ChatWindow() {
           </div>
         </div>
         <p className="text-text-muted text-[10px] mt-1.5 px-1">
-          Shift+Enter for new line · DAWN searches your knowledge graph before answering
+          {mode === "agent"
+            ? "Shift+Enter for new line · Agent mode can read/write files, use git, and search the web"
+            : "Shift+Enter for new line · DAWN searches your knowledge graph before answering"}
         </p>
       </div>
     </div>
   );
 }
 
-function EmptyState() {
-  const suggestions = [
+function EmptyState({ mode }: { mode: ChatMode }) {
+  const chatSuggestions = [
     "What's the current status of the Sentinel trading bot?",
     "Explain how Axis handles Uganda PAYE compliance",
     "What are the modules in Regent CRM?",
     "Summarise the EconSim architecture",
   ];
+
+  const agentSuggestions = [
+    "List the files in the sandbox",
+    "Clone a small test repo and show me its structure",
+    "Search the web for the latest DeepSeek model release",
+    "Write a short README.md to the sandbox",
+  ];
+
+  const suggestions = mode === "agent" ? agentSuggestions : chatSuggestions;
 
   return (
     <div className="flex flex-col items-center justify-center h-full gap-8 py-12">
@@ -212,7 +372,9 @@ function EmptyState() {
           <span className="text-dawn text-xl">◈</span>
         </div>
         <h2 className="text-text-primary font-semibold text-lg">DAWN</h2>
-        <p className="text-text-muted text-sm mt-1">Digital AI Working Network</p>
+        <p className="text-text-muted text-sm mt-1">
+          {mode === "agent" ? "Agent mode — tools enabled" : "Digital AI Working Network"}
+        </p>
       </div>
       <div className="grid grid-cols-1 gap-2 w-full max-w-lg">
         {suggestions.map((s) => (
@@ -222,7 +384,8 @@ function EmptyState() {
               const ta = document.querySelector("textarea");
               if (ta) {
                 const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                  window.HTMLTextAreaElement.prototype, "value"
+                  window.HTMLTextAreaElement.prototype,
+                  "value",
                 )?.set;
                 nativeInputValueSetter?.call(ta, s);
                 ta.dispatchEvent(new Event("input", { bubbles: true }));
