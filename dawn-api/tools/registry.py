@@ -105,3 +105,10 @@ def _register_default_tools(registry: ToolRegistry) -> None:
         registry.register(OSINTTool())
     except Exception as e:
         logger.error(f"Failed to register OSINTTool: {e}")
+
+    # v30.0 — Pentesting tool (wraps 35+ security tools)
+    try:
+        from tools.pentest_tool import PentestTool
+        registry.register(PentestTool())
+    except Exception as e:
+        logger.error(f"Failed to register PentestTool: {e}")

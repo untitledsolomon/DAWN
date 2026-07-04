@@ -676,3 +676,27 @@ Storage: MinIO or S3 (for file uploads, backups)
 
 *Last updated: July 2026*  
 *Maintained by Solomon John — Regent*
+
+---
+
+## v30.0 — Full Pentesting & Security Tool Stack
+
+**Priority: HIGH — Solomon needs DAWN to run security operations autonomously**
+
+**Status: ✅ DONE (code written, tools installed, needs PR merge + API restart)**
+
+- [x] 🛡️ **35+ security tools installed** — nmap, masscan, sqlmap, hydra, john, hashcat, theHarvester, Amass, Sublist3r, recon-ng, SpiderFoot, ligolo-ng, GoPhish, Evilginx, SET, Zphisher, nikto, whatweb, gobuster, ffuf, dirb, tcpdump, tshark, exiftool, binwalk, foremost, volatility3, impacket, scapy, arp-scan, fping, medusa, crunch, netcat, whois, dig
+- [x] 🛡️ **PentestTool** — `tools/pentest_tool.py` wraps all tools with inventory, check, list, run commands
+- [x] 🛡️ **Background scheduler** — `tools/scheduler.py` with SQLite DB for automated LAN scans, port scans, device tracking
+- [x] 🛡️ **Tool execution API** — `POST /pentest/tools/execute` for running any tool
+- [x] 🛡️ **Schedule management** — CRUD endpoints for scheduled tasks
+- [x] 🛡️ **Network device tracking** — Auto-discovers and tracks devices over time
+- [x] 🛡️ **Ligolo-ng tunnel** — Agent/proxy for pivoting into home/office networks
+- [x] 🛡️ **GoPhish + Evilginx** — Phishing campaign management and 2FA bypass testing
+- [x] 🛡️ **Scheduled daily LAN scan** — Auto-discovers new devices every 24h
+- [x] 🛡️ **Scheduled weekly port scan** — Full port scan of known devices every 7 days
+
+**Not yet implemented:**
+- [ ] 🛡️ **WPScan** — Needs `gem install wpscan` (Ruby gem, sandbox restriction)
+- [ ] 🛡️ **CrackMapExec/NetExec** — Build issue with aardwolf dependency, use `pip install netexec` instead
+- [ ] 🛡️ **Ligolo agent deployment** — Deploy agent on a home device (Raspberry Pi, always-on machine)

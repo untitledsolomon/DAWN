@@ -118,3 +118,28 @@ def health():
         "version": "3.0.0",
         "llm_mode": settings.llm_mode,
     }
+
+
+# ── v30.0 — Pentest Scheduler ───────────────────────────────────────────────
+@app.on_event("startup")
+async def start_pentest_scheduler():
+    """Start the background pentest scheduler."""
+    try:
+        from tools.scheduler import get_scheduler
+        scheduler = get_scheduler()
+        await scheduler.start()
+        logger.info("Pentest scheduler started")
+    except Exception as e:
+        logger.error(f"Failed to start pentest scheduler: {e}")
+
+
+@app.on_event("shutdown")
+async def stop_pentest_scheduler():
+    """Stop the background pentest scheduler."""
+    try:
+        from tools.scheduler import get_scheduler
+        scheduler = get_scheduler()
+        await scheduler.stop()
+        logger.info("Pentest scheduler stopped")
+    except Exception as e:
+        logger.error(f"Failed to stop pentest scheduler: {e}")

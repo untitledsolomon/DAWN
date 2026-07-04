@@ -70,3 +70,7 @@ redis>=5.0.0             # Uncomment for Redis caching
 # v26.0 — Developer Experience
 ruff>=0.1.0              # Uncomment for linting
 pytest>=7.4.0            # Uncomment for testing
+
+# v30.0 — Pentesting & Security Tool Stack
+scapy>=2.5.0
+impacket>=0.11.0
