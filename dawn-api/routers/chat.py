@@ -83,6 +83,25 @@ def _ensure_session_sync(session_id: Optional[str]) -> str:
         return session_id or "unknown"
 
 
+def _needs_title_sync(session_id: str) -> bool:
+    """Whether a session still has its placeholder title and should be
+    (re)titled from the first real message. Checking DB state — rather than
+    just "was session_id absent from the request" — means sessions that got
+    stuck as "New Chat" (e.g. from an earlier bug, or a client retry) get
+    fixed automatically on their next message instead of staying broken
+    forever."""
+    try:
+        supabase = db.get_db()
+        res = supabase.table("chat_sessions").select("title").eq("id", session_id).execute()
+        if not res.data:
+            return True
+        title = (res.data[0].get("title") or "").strip()
+        return title == "" or title == "New Chat"
+    except Exception as e:
+        logger.warning(f"[chat] Failed to check session title: {e}")
+        return False
+
+
 async def _generate_title(session_id: str, first_message: str, llm_complete_fn):
     """Generate a concise, meaningful title using the LLM."""
     prompt = (
@@ -258,8 +277,10 @@ async def chat(
         # 1. Save user message immediately
         _save_message_sync(session_id, "user", req.message)
 
-        # 2. Auto-title on first message (using AI)
-        if not req.session_id:
+        # 2. Auto-title on first message (using AI) — retitle whenever the
+        # session still has its placeholder title, not just when the request
+        # omitted session_id, so previously-stuck "New Chat" sessions self-heal.
+        if _needs_title_sync(session_id):
             background_tasks.add_task(_generate_title, session_id, req.message, engine.complete)
 
         # 3. Show thinking state

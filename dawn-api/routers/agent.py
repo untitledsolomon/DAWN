@@ -12,7 +12,12 @@ import db.client as db
 
 # Reuse the exact same persistence + title helpers routers/chat.py uses, so
 # Chat mode and Agent mode sessions/messages/titles behave identically.
-from routers.chat import _save_message_sync, _ensure_session_sync, _generate_title
+from routers.chat import (
+    _save_message_sync,
+    _ensure_session_sync,
+    _generate_title,
+    _needs_title_sync,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +66,6 @@ async def agent(
 
     # Ensure we have a session, exactly like /chat/ does.
     session_id = _ensure_session_sync(req.session_id)
-    is_new_session = not req.session_id
 
     tool_calls_list: list[dict] = []
     full_response: list[str] = []
@@ -72,8 +76,10 @@ async def agent(
         # 1. Save user message immediately
         _save_message_sync(session_id, "user", req.message)
 
-        # 2. Auto-title on first message (using AI) — same as chat mode
-        if is_new_session:
+        # 2. Auto-title on first message (using AI) — retitle whenever the
+        # session still has its placeholder title, same as chat mode. This
+        # also self-heals any session left stuck at "New Chat" from before.
+        if _needs_title_sync(session_id):
             background_tasks.add_task(
                 _generate_title, session_id, req.message, engine.complete
             )

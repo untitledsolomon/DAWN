@@ -113,3 +113,11 @@ def _register_default_tools(registry: ToolRegistry) -> None:
         registry.register(NmapTool())
     except Exception as e:
         logger.error(f"Failed to register NmapTool: {e}")
+
+    # v7.0 — Database (full Supabase table access, OWNER tier only —
+    # see TIER_TOOL_ACCESS in llm/identity.py)
+    try:
+        from tools.database import DatabaseTool
+        registry.register(DatabaseTool())
+    except Exception as e:
+        logger.error(f"Failed to register DatabaseTool: {e}")
