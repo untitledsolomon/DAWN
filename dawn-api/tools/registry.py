@@ -98,3 +98,10 @@ def _register_default_tools(registry: ToolRegistry) -> None:
         registry.register(OmniTool())
     except Exception as e:
         logger.error(f"Failed to register OmniTool: {e}")
+
+    # OSINT recon tool
+    try:
+        from tools.osint_tool import OSINTTool
+        registry.register(OSINTTool())
+    except Exception as e:
+        logger.error(f"Failed to register OSINTTool: {e}")

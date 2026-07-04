@@ -249,20 +249,22 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
         )}
       </div>
 
-      {/* Primary navigation */}
-      <nav className={clsx("flex flex-col gap-0.5 pt-2 px-2", collapsed && "items-center")}>
-        {PRIMARY_NAV.map((item) => <NavLink key={item.href} {...item} />)}
-      </nav>
+      {/* Scrollable nav + recent area */}
+      <div className="flex-1 min-h-0 overflow-y-auto sidebar-scroll flex flex-col">
+        {/* Primary navigation */}
+        <nav className={clsx("flex flex-col gap-0.5 pt-2 px-2 flex-shrink-0", collapsed && "items-center")}>
+          {PRIMARY_NAV.map((item) => <NavLink key={item.href} {...item} />)}
+        </nav>
 
-      {/* Tools section */}
-      <NavSection label="Tools" items={TOOLS_NAV} />
+        {/* Tools section */}
+        <div className="flex-shrink-0"><NavSection label="Tools" items={TOOLS_NAV} /></div>
 
-      {/* Business section */}
-      <NavSection label="Business" items={BUSINESS_NAV} />
+        {/* Business section */}
+        <div className="flex-shrink-0"><NavSection label="Business" items={BUSINESS_NAV} /></div>
 
-      {/* Recent conversations */}
-      {!collapsed && (
-        <div className="flex-1 flex flex-col min-h-0 pt-3 px-2">
+        {/* Recent conversations */}
+        {!collapsed && (
+          <div className="flex flex-col pt-3 px-2">
           <div className="flex items-center justify-between px-2 py-1.5">
             <button onClick={() => setRecentOpen(!recentOpen)} className="flex items-center gap-1.5 rounded-md text-text-muted hover:text-text-secondary hover:bg-elevated/40 transition-all text-2xs font-medium uppercase tracking-wider">
               <ChevronDown size={10} className={clsx("transition-transform", recentOpen && "rotate-0", !recentOpen && "-rotate-90")} />
@@ -274,7 +276,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
           </div>
 
           {recentOpen && (
-            <div className="flex-1 overflow-y-auto sidebar-scroll mt-1 space-y-0.5">
+            <div className="mt-1 space-y-0.5">
               {loading ? (
                 <div className="px-2.5 py-3 text-center text-text-muted text-2xs">Loading...</div>
               ) : sessions.length === 0 ? (
@@ -317,9 +319,11 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
           )}
         </div>
       )}
+      </div>
+      {/* end scrollable nav + recent area */}
 
       {/* Bottom section */}
-      <div className={clsx("border-t border-rim pt-1 pb-2 px-2 flex flex-col gap-0.5", collapsed && "items-center")}>
+      <div className={clsx("border-t border-rim pt-1 pb-2 px-2 flex flex-col gap-0.5 flex-shrink-0", collapsed && "items-center")}>
         <Link href="/settings" title={collapsed ? "Settings" : undefined}
           className={clsx("flex items-center gap-2.5 rounded-lg transition-all duration-150 group relative", collapsed ? "w-10 h-10 justify-center" : "px-2.5 py-2",
             path === "/settings" ? "bg-dawn/10 text-dawn" : "text-text-muted hover:text-text-secondary hover:bg-elevated/60")}>
