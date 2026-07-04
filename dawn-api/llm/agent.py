@@ -49,10 +49,11 @@ def _claims_unverified_action(text: str) -> bool:
 def build_agent_messages(user_message: str, history: list[dict]) -> list[dict]:
     """
     Agent-mode message builder. Unlike llm.engine.build_messages(), this does
-    NOT inject knowledge-graph context — the agent gets its context by calling
-    tools (including, later, a knowledge_graph tool wrapping llm.tools.build_context
-    if you want to unify the two paths). Kept separate deliberately so agent
-    runs don't pay for a graph traversal they may not need.
+    NOT inject knowledge-graph context up front — the agent instead calls the
+    knowledge_graph tool (tools/knowledge_graph.py, wrapping llm.tools.build_context
+    and the same memory lookup routers/chat.py uses) on demand. Kept separate
+    deliberately so agent runs don't pay for a graph traversal on every single
+    turn regardless of whether the task needs it.
     """
     system = (
         DAWN_SYSTEM_PROMPT
@@ -60,6 +61,11 @@ def build_agent_messages(user_message: str, history: list[dict]) -> list[dict]:
           "web search, and installing new capabilities inside a sandboxed workspace. "
           "Use them when the task requires reading, writing, or inspecting real "
           "files or repositories — don't guess at contents you haven't actually read."
+        + "\n\nBefore answering questions about Solomon, his projects, past decisions, "
+          "or anything that might already be recorded, call the knowledge_graph tool "
+          "first (search for topics/entities, recall for personal facts and "
+          "preferences) rather than relying only on conversation history or "
+          "guessing — DAWN's knowledge graph and memory may already have the answer."
         + "\n"
         + AGENT_SAFETY_PROMPT
     )

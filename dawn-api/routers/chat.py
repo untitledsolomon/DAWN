@@ -165,8 +165,10 @@ async def _extract_and_store_memory(
         facts = await extract_memory_facts(conversation, llm_complete_fn)
 
         if not facts:
+            logger.info("[memory] No durable facts extracted from this exchange")
             return
 
+        logger.info(f"[memory] Extracted {len(facts)} fact(s), storing as memory nodes")
         supabase = db.get_db()
 
         # Create memory session
@@ -218,8 +220,51 @@ async def _extract_and_store_memory(
                         }).execute()
                 except Exception:
                     pass
+
+            # Link this new memory node into the graph. Without this, every
+            # extracted fact was an isolated node — never connected to
+            # anything else, so "knowledge graph" was really just a flat
+            # pile of unconnected memories. Fuzzy-match the fact's own title
+            # against existing nodes and add a generic 'related_to' edge to
+            # the best few matches, so traversal-based retrieval can surface
+            # this fact from a related query later, not just exact search.
+            if node.get("id"):
+                await _link_node_to_related(node["id"], fact.get("title", ""))
     except Exception as e:
         logger.warning(f"[chat] Memory extraction failed: {e}")
+
+
+async def _link_node_to_related(node_id: str, title: str, max_links: int = 3) -> None:
+    """Best-effort: connect a freshly-created node to existing related nodes
+    via 'related_to' edges, using the same fuzzy search retrieval already
+    relies on. Never raises — a missed link isn't worth failing the whole
+    memory-extraction background task over."""
+    if not title:
+        return
+    try:
+        matches = await db.rpc_fuzzy_search(title, limit=max_links + 1, threshold=0.3)
+        linked = 0
+        for match in matches:
+            match_id = match.get("id")
+            if not match_id or match_id == node_id:
+                continue
+            try:
+                db.get_db().table("edges").insert({
+                    "from_node": node_id,
+                    "to_node": match_id,
+                    "relation": "related_to",
+                    "source": "conversation",
+                    "note": "auto-linked from conversation memory extraction",
+                }).execute()
+                linked += 1
+            except Exception as e:
+                logger.warning(f"[memory] Failed to create edge {node_id} -> {match_id}: {e}")
+            if linked >= max_links:
+                break
+        if linked:
+            logger.info(f"[memory] Linked new node {node_id} to {linked} related node(s)")
+    except Exception as e:
+        logger.warning(f"[memory] Related-node lookup failed for node {node_id}: {e}")
 
 
 async def _learn_from_error(

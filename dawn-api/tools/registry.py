@@ -121,3 +121,11 @@ def _register_default_tools(registry: ToolRegistry) -> None:
         registry.register(DatabaseTool())
     except Exception as e:
         logger.error(f"Failed to register DatabaseTool: {e}")
+
+    # v7.1 — Knowledge graph (read-only context/memory retrieval for Agent
+    # mode — gives it what Chat mode already gets automatically, on demand)
+    try:
+        from tools.knowledge_graph import KnowledgeGraphTool
+        registry.register(KnowledgeGraphTool())
+    except Exception as e:
+        logger.error(f"Failed to register KnowledgeGraphTool: {e}")
