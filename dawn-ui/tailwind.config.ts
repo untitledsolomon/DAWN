@@ -4,6 +4,9 @@ const config: Config = {
   content: ["./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
+      fontSize: {
+        "2xs": ["0.625rem", { lineHeight: "0.875rem" }], // 10px
+      },
       colors: {
         // DAWN palette — warm neutral grey base, Claude-UI inspired
         abyss: "#F4F3F1",       // main background — warm light grey

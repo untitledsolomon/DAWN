@@ -26,8 +26,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${outfit.variable} ${jetbrains.variable}`}>
-      <body className="bg-canvas text-text-primary antialiased">
+    <html lang="en" className={`${outfit.variable} ${jetbrains.variable} h-full`}>
+      <body className="h-full bg-canvas text-text-primary antialiased overflow-hidden">
         {children}
       </body>
     </html>
