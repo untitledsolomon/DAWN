@@ -1,6 +1,9 @@
 """DAWN API — Digital AI Working Network"""
 import sys
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
