@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   User,
   Crown,
@@ -19,36 +19,20 @@ import {
   Trash2,
   RefreshCw,
   ChevronRight,
-  ExternalLink,
   Save,
   Eye,
   EyeOff,
   Moon,
   Sun,
   Monitor,
-  Sliders,
   Info,
   AlertTriangle,
 } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
+import { getSettings, updateSetting, getNotificationPrefs, updateNotificationPrefs, listSessions, deleteSession } from "@/lib/api";
+import type { AppSettings, NotificationPrefs, ChatSession } from "@/lib/types";
 
 type TabId = "general" | "model" | "api" | "history" | "appearance" | "notifications";
-
-interface Conversation {
-  id: string;
-  title: string;
-  preview: string;
-  messageCount: number;
-  timestamp: Date;
-}
-
-const MOCK_CONVERSATIONS: Conversation[] = [
-  { id: "1", title: "Sentinel bot status check", preview: "What's the current status of the Sentinel trading bot?", messageCount: 4, timestamp: new Date(Date.now() - 1000 * 60 * 30) },
-  { id: "2", title: "Axis PAYE compliance", preview: "Explain how Axis handles Uganda PAYE compliance", messageCount: 8, timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2) },
-  { id: "3", title: "EconSim architecture review", preview: "Summarise the EconSim architecture", messageCount: 12, timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24) },
-  { id: "4", title: "Mabruk Atelier inventory", preview: "Show me the current Mabruk inventory levels", messageCount: 6, timestamp: new Date(Date.now() - 1000 * 60 * 60 * 36) },
-  { id: "5", title: "Jarvis deployment notes", preview: "What's the status of Jarvis on Paperclip?", messageCount: 3, timestamp: new Date(Date.now() - 1000 * 60 * 60 * 48) },
-];
 
 const TABS: { id: TabId; label: string; icon: React.ElementType; description: string }[] = [
   { id: "general", label: "General", icon: User, description: "Account, identity, and system information" },
@@ -61,22 +45,147 @@ const TABS: { id: TabId; label: string; icon: React.ElementType; description: st
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<TabId>("general");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<string | null>(null);
+
+  // Settings state
   const [model, setModel] = useState<"deepseek" | "local">("deepseek");
+  const [localEndpoint, setLocalEndpoint] = useState("http://localhost:11434");
   const [apiKey, setApiKey] = useState("");
   const [apiKeySaved, setApiKeySaved] = useState(false);
   const [showKey, setShowKey] = useState(false);
-  const [conversations] = useState<Conversation[]>(MOCK_CONVERSATIONS);
   const [theme, setTheme] = useState<"light" | "dark" | "system">("light");
   const [fontSize, setFontSize] = useState<"s" | "m" | "l">("m");
-  const [localEndpoint, setLocalEndpoint] = useState("http://localhost:11434");
-  const [notifications, setNotifications] = useState({
-    agentComplete: true,
-    ingestionFinished: true,
-    graphUpdates: false,
-    systemAlerts: true,
+
+  // Notifications
+  const [notifications, setNotifications] = useState<NotificationPrefs>({
+    agent_complete: true,
+    ingestion_finished: true,
+    graph_updates: false,
+    system_alerts: true,
   });
 
-  const timeAgo = (date: Date) => {
+  // History
+  const [conversations, setConversations] = useState<ChatSession[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Load settings from API
+  const loadSettings = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [settings, prefs] = await Promise.all([
+        getSettings().catch(() => null),
+        getNotificationPrefs().catch(() => null),
+      ]);
+
+      if (settings) {
+        if (settings.model) setModel(settings.model);
+        if (settings.local_endpoint) setLocalEndpoint(settings.local_endpoint);
+        if (settings.theme) setTheme(settings.theme);
+        if (settings.font_size) setFontSize(settings.font_size);
+        if (settings.deepseek_api_key) setApiKey(settings.deepseek_api_key);
+      }
+
+      if (prefs) {
+        setNotifications({
+          agent_complete: prefs.agent_complete ?? true,
+          ingestion_finished: prefs.ingestion_finished ?? true,
+          graph_updates: prefs.graph_updates ?? false,
+          system_alerts: prefs.system_alerts ?? true,
+        });
+      }
+    } catch (e) {
+      console.error("[Settings] Failed to load:", e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadSettings(); }, [loadSettings]);
+
+  // Save a setting
+  const saveSetting = async (key: string, value: unknown) => {
+    setSaving(key);
+    try {
+      await updateSetting(key, value);
+      await new Promise((r) => setTimeout(r, 300));
+    } catch (e) {
+      console.error(`[Settings] Failed to save ${key}:`, e);
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const handleSaveKey = async () => {
+    await saveSetting("deepseek_api_key", apiKey);
+    setApiKeySaved(true);
+    setTimeout(() => setApiKeySaved(false), 2000);
+  };
+
+  const handleModelChange = async (m: "deepseek" | "local") => {
+    setModel(m);
+    await saveSetting("model", m);
+  };
+
+  const handleThemeChange = async (t: "light" | "dark" | "system") => {
+    setTheme(t);
+    await saveSetting("theme", t);
+  };
+
+  const handleFontSizeChange = async (s: "s" | "m" | "l") => {
+    setFontSize(s);
+    await saveSetting("font_size", s);
+  };
+
+  const handleLocalEndpointSave = async () => {
+    await saveSetting("local_endpoint", localEndpoint);
+  };
+
+  const toggleNotification = async (key: keyof NotificationPrefs) => {
+    const newVal = !notifications[key];
+    setNotifications((prev) => ({ ...prev, [key]: newVal }));
+    await updateNotificationPrefs({ [key]: newVal });
+  };
+
+  // Load history
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const sessions = await listSessions();
+      setConversations(sessions);
+    } catch (e) {
+      console.error("[Settings] Failed to load history:", e);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "history") loadHistory();
+  }, [activeTab, loadHistory]);
+
+  const handleDeleteSession = async (id: string) => {
+    if (!confirm("Delete this conversation? This cannot be undone.")) return;
+    try {
+      await deleteSession(id);
+      setConversations((prev) => prev.filter((s) => s.id !== id));
+    } catch (e) {
+      console.error("[Settings] Failed to delete session:", e);
+    }
+  };
+
+  const handleClearAll = async () => {
+    if (!confirm("Clear all conversation history? This cannot be undone.")) return;
+    for (const conv of conversations) {
+      try {
+        await deleteSession(conv.id);
+      } catch { /* skip */ }
+    }
+    setConversations([]);
+  };
+
+  const timeAgo = (dateStr: string) => {
+    const date = new Date(dateStr);
     const mins = Math.floor((Date.now() - date.getTime()) / 1000 / 60);
     if (mins < 60) return `${mins}m ago`;
     const hours = Math.floor(mins / 60);
@@ -84,20 +193,15 @@ export default function SettingsPage() {
     return `${Math.floor(hours / 24)}d ago`;
   };
 
-  const handleSaveKey = () => {
-    setApiKeySaved(true);
-    setTimeout(() => setApiKeySaved(false), 2000);
-  };
-
-  const handleClearAll = () => {
-    if (confirm("Clear all conversation history? This cannot be undone.")) {
-      // In production: DELETE API call
-    }
-  };
-
-  const toggleNotification = (key: keyof typeof notifications) => {
-    setNotifications((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
+  if (loading) {
+    return (
+      <AppShell>
+        <div className="flex items-center justify-center h-full">
+          <div className="w-5 h-5 border-2 border-rim border-t-dawn rounded-full animate-spin" />
+        </div>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell>
@@ -117,7 +221,7 @@ export default function SettingsPage() {
         </header>
 
         <div className="flex flex-1 min-h-0">
-          {/* ── Tab sidebar ──────────────────────────────────────────────────────── */}
+          {/* Tab sidebar */}
           <nav className="w-52 border-r border-rim flex flex-col gap-0.5 p-3 flex-shrink-0 overflow-y-auto bg-surface/50">
             <p className="text-text-muted text-2xs font-medium uppercase tracking-wider px-2.5 pb-2">Sections</p>
             {TABS.map(({ id, label, icon: Icon, description }) => (
@@ -142,10 +246,10 @@ export default function SettingsPage() {
             ))}
           </nav>
 
-          {/* ── Content area ─────────────────────────────────────────────────────── */}
+          {/* Content area */}
           <div className="flex-1 overflow-y-auto">
             <div className="max-w-2xl mx-auto px-8 py-6">
-              {/* ── General ──────────────────────────────────────────────────────── */}
+              {/* General */}
               {activeTab === "general" && (
                 <div className="space-y-6">
                   <div>
@@ -233,7 +337,7 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              {/* ── Model ────────────────────────────────────────────────────────── */}
+              {/* Model */}
               {activeTab === "model" && (
                 <div className="space-y-6">
                   <div>
@@ -244,7 +348,7 @@ export default function SettingsPage() {
                   <div className="space-y-2">
                     <p className="text-text-secondary text-xs font-medium mb-1">Inference Provider</p>
                     <button
-                      onClick={() => setModel("deepseek")}
+                      onClick={() => handleModelChange("deepseek")}
                       className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl border text-left transition-all ${
                         model === "deepseek"
                           ? "bg-dawn/8 border-dawn/30 text-dawn"
@@ -261,9 +365,12 @@ export default function SettingsPage() {
                         <p className="text-xs text-text-muted mt-0.5">Remote · DeepSeek V3 / R1 · Recommended for complex reasoning</p>
                       </div>
                       {model === "deepseek" && <Check size={18} className="text-dawn" />}
+                      {saving === "model" && (
+                        <div className="w-4 h-4 border-2 border-rim border-t-dawn rounded-full animate-spin" />
+                      )}
                     </button>
                     <button
-                      onClick={() => setModel("local")}
+                      onClick={() => handleModelChange("local")}
                       className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl border text-left transition-all ${
                         model === "local"
                           ? "bg-dawn/8 border-dawn/30 text-dawn"
@@ -280,6 +387,9 @@ export default function SettingsPage() {
                         <p className="text-xs text-text-muted mt-0.5">On-device · Ollama / LM Studio · No internet required</p>
                       </div>
                       {model === "local" && <Check size={18} className="text-dawn" />}
+                      {saving === "model" && (
+                        <div className="w-4 h-4 border-2 border-rim border-t-dawn rounded-full animate-spin" />
+                      )}
                     </button>
                   </div>
 
@@ -292,8 +402,16 @@ export default function SettingsPage() {
                           onChange={(e) => setLocalEndpoint(e.target.value)}
                           className="flex-1 bg-surface border border-rim rounded-lg px-3 py-2.5 text-text-primary text-sm font-mono outline-none focus:border-dawn/50 transition-colors"
                         />
-                        <button className="flex items-center gap-1.5 px-3 py-2.5 rounded-lg bg-dawn/90 hover:bg-dawn text-white text-xs font-medium transition-all">
-                          <Save size={12} /> Save
+                        <button
+                          onClick={handleLocalEndpointSave}
+                          className="flex items-center gap-1.5 px-3 py-2.5 rounded-lg bg-dawn/90 hover:bg-dawn text-white text-xs font-medium transition-all"
+                        >
+                          {saving === "local_endpoint" ? (
+                            <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          ) : (
+                            <Save size={12} />
+                          )}
+                          Save
                         </button>
                       </div>
                       <p className="text-text-muted text-xs mt-1.5">Default: http://localhost:11434 (Ollama)</p>
@@ -309,7 +427,7 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              {/* ── API Keys ─────────────────────────────────────────────────────── */}
+              {/* API Keys */}
               {activeTab === "api" && (
                 <div className="space-y-6">
                   <div>
@@ -347,12 +465,14 @@ export default function SettingsPage() {
                               : "bg-dawn/90 hover:bg-dawn text-white disabled:opacity-30"
                           }`}
                         >
-                          {apiKeySaved ? <><Check size={14} /> Saved</> : "Save"}
+                          {apiKeySaved ? <><Check size={14} /> Saved</> : saving === "deepseek_api_key" ? (
+                            <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          ) : "Save"}
                         </button>
                       </div>
                       <div className="flex items-center gap-2 text-text-muted text-xs">
                         <Info size={12} />
-                        <span>Stored encrypted in your browser. Never shared with third parties.</span>
+                        <span>Stored encrypted in the database. Used for DeepSeek API calls.</span>
                       </div>
                     </div>
                   </div>
@@ -371,18 +491,18 @@ export default function SettingsPage() {
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-text-secondary text-sm">Endpoint</span>
-                        <span className="text-text-primary text-sm font-mono">http://localhost:8000</span>
+                        <span className="text-text-primary text-sm font-mono">{process.env.NEXT_PUBLIC_DAWN_API_URL || "http://localhost:8000"}</span>
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-text-secondary text-sm">Version</span>
-                        <span className="text-text-primary text-sm font-mono">v2.1.0</span>
+                        <span className="text-text-primary text-sm font-mono">v3.0.0</span>
                       </div>
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* ── History ──────────────────────────────────────────────────────── */}
+              {/* History */}
               {activeTab === "history" && (
                 <div className="space-y-6">
                   <div className="flex items-center justify-between">
@@ -392,14 +512,19 @@ export default function SettingsPage() {
                     </div>
                     <button
                       onClick={handleClearAll}
-                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-error/70 hover:text-error hover:bg-error/8 text-xs font-medium transition-all border border-transparent hover:border-error/20"
+                      disabled={conversations.length === 0}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-error/70 hover:text-error hover:bg-error/8 text-xs font-medium transition-all border border-transparent hover:border-error/20 disabled:opacity-30"
                     >
                       <Trash2 size={12} />
                       Clear all
                     </button>
                   </div>
 
-                  {conversations.length === 0 ? (
+                  {historyLoading ? (
+                    <div className="flex items-center justify-center py-16">
+                      <div className="w-5 h-5 border-2 border-rim border-t-dawn rounded-full animate-spin" />
+                    </div>
+                  ) : conversations.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-16 gap-3 bg-surface border border-rim rounded-xl">
                       <History size={28} className="text-text-muted/30" />
                       <p className="text-text-muted text-sm">No conversation history</p>
@@ -415,13 +540,15 @@ export default function SettingsPage() {
                           >
                             <div className="min-w-0 flex-1">
                               <p className="text-text-primary text-sm font-medium truncate">{conv.title}</p>
-                              <p className="text-text-muted text-xs mt-0.5 truncate">{conv.preview}</p>
                               <div className="flex items-center gap-3 mt-1.5">
-                                <span className="text-text-muted text-2xs">{conv.messageCount} messages</span>
-                                <span className="text-text-muted text-2xs font-mono">{timeAgo(conv.timestamp)}</span>
+                                <span className="text-text-muted text-2xs">{conv.message_count} messages</span>
+                                <span className="text-text-muted text-2xs font-mono">{timeAgo(conv.updated_at)}</span>
                               </div>
                             </div>
-                            <button className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-text-muted hover:text-error hover:bg-error/8">
+                            <button
+                              onClick={() => handleDeleteSession(conv.id)}
+                              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-text-muted hover:text-error hover:bg-error/8"
+                            >
                               <Trash2 size={12} />
                             </button>
                           </div>
@@ -429,7 +556,10 @@ export default function SettingsPage() {
                       </div>
                       <div className="px-5 py-3 border-t border-rim bg-elevated/30 flex items-center justify-between">
                         <span className="text-text-muted text-xs">{conversations.length} conversations</span>
-                        <button className="flex items-center gap-1 text-dawn text-xs hover:underline transition-colors">
+                        <button
+                          onClick={loadHistory}
+                          className="flex items-center gap-1 text-dawn text-xs hover:underline transition-colors"
+                        >
                           <RefreshCw size={10} /> Refresh
                         </button>
                       </div>
@@ -438,7 +568,7 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              {/* ── Appearance ───────────────────────────────────────────────────── */}
+              {/* Appearance */}
               {activeTab === "appearance" && (
                 <div className="space-y-6">
                   <div>
@@ -452,14 +582,14 @@ export default function SettingsPage() {
                     </div>
                     <div className="p-5">
                       <div className="grid grid-cols-3 gap-2">
-                        {[
+                        {([
                           { id: "light" as const, icon: Sun, label: "Light" },
                           { id: "dark" as const, icon: Moon, label: "Dark" },
                           { id: "system" as const, icon: Monitor, label: "System" },
-                        ].map(({ id, icon: Icon, label }) => (
+                        ]).map(({ id, icon: Icon, label }) => (
                           <button
                             key={id}
-                            onClick={() => setTheme(id)}
+                            onClick={() => handleThemeChange(id)}
                             className={`flex flex-col items-center gap-2 px-4 py-4 rounded-xl border transition-all ${
                               theme === id
                                 ? "bg-dawn/8 border-dawn/30 text-dawn"
@@ -469,6 +599,9 @@ export default function SettingsPage() {
                             <Icon size={20} strokeWidth={1.5} />
                             <span className="text-xs font-medium">{label}</span>
                             {theme === id && <Check size={12} className="text-dawn" />}
+                            {saving === "theme" && (
+                              <div className="w-3 h-3 border-2 border-rim border-t-dawn rounded-full animate-spin" />
+                            )}
                           </button>
                         ))}
                       </div>
@@ -481,14 +614,14 @@ export default function SettingsPage() {
                     </div>
                     <div className="p-5">
                       <div className="flex gap-2">
-                        {[
+                        {([
                           { id: "s" as const, label: "S", desc: "Compact" },
                           { id: "m" as const, label: "M", desc: "Default" },
                           { id: "l" as const, label: "L", desc: "Large" },
-                        ].map(({ id, label, desc }) => (
+                        ]).map(({ id, label, desc }) => (
                           <button
                             key={id}
-                            onClick={() => setFontSize(id)}
+                            onClick={() => handleFontSizeChange(id)}
                             className={`flex-1 flex flex-col items-center gap-1 px-4 py-3 rounded-xl border transition-all ${
                               fontSize === id
                                 ? "bg-dawn/8 border-dawn/30 text-dawn"
@@ -497,6 +630,9 @@ export default function SettingsPage() {
                           >
                             <span className="text-sm font-medium">{label}</span>
                             <span className="text-2xs text-text-muted">{desc}</span>
+                            {saving === "font_size" && (
+                              <div className="w-3 h-3 border-2 border-rim border-t-dawn rounded-full animate-spin" />
+                            )}
                           </button>
                         ))}
                       </div>
@@ -512,7 +648,7 @@ export default function SettingsPage() {
                         <p className="text-text-primary text-sm font-medium">The quick brown fox jumps over the lazy dog</p>
                         <p className="text-text-secondary text-xs">DAWN responds with knowledge-grounded answers, tool calls, and agent traces — all rendered in your chosen font size.</p>
                         <code className="block text-xs font-mono bg-elevated/50 border border-rim rounded-lg px-3 py-2 text-dawn">
-                          {'const dawn = new DAWN({ theme: "{theme}", fontSize: "{fontSize}" });'}
+                          {'const dawn = new DAWN({ theme: "' + theme + '", fontSize: "' + fontSize + '" });'}
                         </code>
                       </div>
                     </div>
@@ -520,7 +656,7 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              {/* ── Notifications ────────────────────────────────────────────────── */}
+              {/* Notifications */}
               {activeTab === "notifications" && (
                 <div className="space-y-6">
                   <div>
@@ -533,12 +669,12 @@ export default function SettingsPage() {
                       <p className="text-text-secondary text-xs font-medium">Notification Preferences</p>
                     </div>
                     <div className="divide-y divide-rim">
-                      {[
-                        { key: "agentComplete" as const, label: "Agent task complete", desc: "When an agent finishes a multi-step task" },
-                        { key: "ingestionFinished" as const, label: "Ingestion finished", desc: "When a file or repo finishes ingesting" },
-                        { key: "graphUpdates" as const, label: "Knowledge graph updates", desc: "When new nodes are auto-extracted" },
-                        { key: "systemAlerts" as const, label: "System alerts", desc: "API downtime, high latency, errors" },
-                      ].map(({ key, label, desc }) => (
+                      {([
+                        { key: "agent_complete" as const, label: "Agent task complete", desc: "When an agent finishes a multi-step task" },
+                        { key: "ingestion_finished" as const, label: "Ingestion finished", desc: "When a file or repo finishes ingesting" },
+                        { key: "graph_updates" as const, label: "Knowledge graph updates", desc: "When new nodes are auto-extracted" },
+                        { key: "system_alerts" as const, label: "System alerts", desc: "API downtime, high latency, errors" },
+                      ]).map(({ key, label, desc }) => (
                         <div key={key} className="flex items-center justify-between px-5 py-4 hover:bg-elevated/20 transition-colors">
                           <div>
                             <p className="text-text-primary text-sm font-medium">{label}</p>
@@ -567,7 +703,7 @@ export default function SettingsPage() {
                       <div>
                         <p className="text-text-primary text-sm font-medium">Notification delivery</p>
                         <p className="text-text-muted text-xs mt-0.5">
-                          Notifications appear in-app. Browser notifications and email digests coming soon.
+                          Notifications appear in-app. Preferences are persisted to the database.
                         </p>
                       </div>
                     </div>

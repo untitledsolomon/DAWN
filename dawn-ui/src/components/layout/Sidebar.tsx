@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   MessageSquare,
   Database,
@@ -16,12 +16,24 @@ import {
   Crown,
   User,
   Activity,
-  FileText,
+  Plus,
+  Trash2,
+  Edit3,
+  Check,
+  X,
+  Terminal,
+  Search,
+  Shield,
+  Puzzle,
+  HeartPulse,
+  BookOpen,
+  ListTodo,
 } from "lucide-react";
 import clsx from "clsx";
+import { listSessions, createSession, deleteSession, updateSession } from "@/lib/api";
+import type { ChatSession } from "@/lib/types";
 
-// ── Navigation config ─────────────────────────────────────────────────────────────
-
+// Navigation config
 interface NavItem {
   href: string;
   icon: React.ElementType;
@@ -36,28 +48,19 @@ const PRIMARY_NAV: NavItem[] = [
   { href: "/agent-logs", icon: Activity, label: "Agent Logs" },
 ];
 
-const SECONDARY_NAV: NavItem[] = [
-  { href: "/settings", icon: Settings, label: "Settings" },
+const TOOLS_NAV: NavItem[] = [
+  { href: "/ssh", icon: Terminal, label: "SSH Hosts" },
+  { href: "/osint", icon: Search, label: "OSINT" },
+  { href: "/pentest", icon: Shield, label: "Pentesting" },
 ];
 
-// ── Mock conversation history ─────────────────────────────────────────────────────
-
-interface RecentConv {
-  id: string;
-  title: string;
-  timestamp: Date;
-}
-
-const MOCK_RECENT: RecentConv[] = [
-  { id: "1", title: "Sentinel bot status check", timestamp: new Date(Date.now() - 1000 * 60 * 30) },
-  { id: "2", title: "Axis PAYE compliance", timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2) },
-  { id: "3", title: "EconSim architecture review", timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24) },
-  { id: "4", title: "Mabruk Atelier inventory", timestamp: new Date(Date.now() - 1000 * 60 * 60 * 36) },
-  { id: "5", title: "Jarvis deployment notes", timestamp: new Date(Date.now() - 1000 * 60 * 60 * 48) },
+const BUSINESS_NAV: NavItem[] = [
+  { href: "/integrations", icon: Puzzle, label: "Integrations" },
+  { href: "/monitoring", icon: HeartPulse, label: "Monitoring" },
+  { href: "/books", icon: BookOpen, label: "Library" },
 ];
 
-// ── Component ─────────────────────────────────────────────────────────────────────
-
+// Component
 interface Props {
   collapsed: boolean;
   onToggle: () => void;
@@ -65,14 +68,149 @@ interface Props {
 
 export default function Sidebar({ collapsed, onToggle }: Props) {
   const path = usePathname();
+  const router = useRouter();
   const [recentOpen, setRecentOpen] = useState(true);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
 
-  const timeAgo = (date: Date) => {
+  // Fetch sessions
+  const fetchSessions = useCallback(async () => {
+    try {
+      const data = await listSessions();
+      setSessions(data);
+    } catch (err) {
+      console.error("[Sidebar] Failed to load sessions:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSessions();
+  }, [fetchSessions]);
+
+  // Poll for new sessions every 10s
+  useEffect(() => {
+    const interval = setInterval(fetchSessions, 10000);
+    return () => clearInterval(interval);
+  }, [fetchSessions]);
+
+  // Listen for custom event from ChatWindow
+  useEffect(() => {
+    const handler = () => fetchSessions();
+    window.addEventListener("dawn:session-changed", handler);
+    return () => window.removeEventListener("dawn:session-changed", handler);
+  }, [fetchSessions]);
+
+  const handleNewChat = async () => {
+    try {
+      const session = await createSession();
+      router.push(`/chat?id=${session.id}`);
+      setSessions((prev) => [{ ...session, message_count: 0 }, ...prev]);
+    } catch (err) {
+      console.error("[Sidebar] Failed to create session:", err);
+    }
+  };
+
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    try {
+      await deleteSession(id);
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("id") === id) {
+        router.push("/chat");
+      }
+    } catch (err) {
+      console.error("[Sidebar] Failed to delete session:", err);
+    }
+  };
+
+  const handleRenameStart = (e: React.MouseEvent, id: string, currentTitle: string) => {
+    e.stopPropagation();
+    setEditingId(id);
+    setEditTitle(currentTitle);
+  };
+
+  const handleRenameConfirm = async (e: React.MouseEvent | React.KeyboardEvent, id: string) => {
+    e.stopPropagation();
+    const title = editTitle.trim() || "New Chat";
+    try {
+      await updateSession(id, title);
+      setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
+    } catch (err) {
+      console.error("[Sidebar] Failed to rename session:", err);
+    }
+    setEditingId(null);
+    setEditTitle("");
+  };
+
+  const handleRenameCancel = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingId(null);
+    setEditTitle("");
+  };
+
+  const timeAgo = (dateStr: string) => {
+    const date = new Date(dateStr);
     const mins = Math.floor((Date.now() - date.getTime()) / 1000 / 60);
+    if (mins < 1) return "now";
     if (mins < 60) return `${mins}m`;
     const hours = Math.floor(mins / 60);
     if (hours < 24) return `${hours}h`;
-    return `${Math.floor(hours / 24)}d`;
+    const days = Math.floor(hours / 24);
+    if (days < 30) return `${days}d`;
+    return `${Math.floor(days / 30)}mo`;
+  };
+
+  const currentSessionId = typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("id")
+    : null;
+
+  const isActive = (href: string) => path.startsWith(href);
+
+  const NavLink = ({ href, icon: Icon, label, badge }: NavItem) => {
+    const active = isActive(href);
+    return (
+      <Link
+        href={href}
+        title={collapsed ? label : undefined}
+        className={clsx(
+          "flex items-center gap-2.5 rounded-lg transition-all duration-150 group relative",
+          collapsed ? "w-10 h-10 justify-center" : "px-2.5 py-2",
+          active ? "bg-dawn/10 text-dawn" : "text-text-muted hover:text-text-secondary hover:bg-elevated/60",
+        )}
+      >
+        <Icon size={16} strokeWidth={active ? 2 : 1.75} />
+        {!collapsed && (
+          <>
+            <span className="text-xs font-medium">{label}</span>
+            {badge && (
+              <span className="ml-auto text-2xs font-mono px-1.5 py-0.5 rounded-full bg-ember/15 text-ember">{badge}</span>
+            )}
+            {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-dawn rounded-r-full" />}
+          </>
+        )}
+        {collapsed && active && <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-dawn rounded-r-full" />}
+        {collapsed && (
+          <span className="absolute left-12 bg-surface border border-rim text-text-primary text-2xs px-2 py-1 rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity shadow-card z-50">
+            {label}
+          </span>
+        )}
+      </Link>
+    );
+  };
+
+  const NavSection = ({ label, items }: { label: string; items: NavItem[] }) => {
+    if (collapsed) return null;
+    return (
+      <div className="pt-3 px-2">
+        <p className="text-text-muted text-2xs font-medium uppercase tracking-wider px-2.5 pb-1">{label}</p>
+        {items.map((item) => <NavLink key={item.href} {...item} />)}
+      </div>
+    );
   };
 
   return (
@@ -82,7 +220,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
         collapsed ? "w-14" : "w-60",
       )}
     >
-      {/* ── Workspace header ──────────────────────────────────────────────────────── */}
+      {/* Workspace header */}
       <div className={clsx("flex items-center border-b border-rim flex-shrink-0", collapsed ? "justify-center px-2 py-3" : "px-3 py-2.5")}>
         {collapsed ? (
           <div className="w-8 h-8 rounded-lg bg-dawn/10 border border-dawn/25 flex items-center justify-center">
@@ -98,135 +236,101 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
                 <div className="flex items-center gap-1.5">
                   <span className="text-text-primary text-sm font-semibold tracking-tight">DAWN</span>
                   <span className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded bg-ember/10 text-ember text-[9px] font-mono font-medium uppercase tracking-wider">
-                    <Crown size={8} strokeWidth={2.5} />
-                    Owner
+                    <Crown size={8} strokeWidth={2.5} /> Owner
                   </span>
                 </div>
                 <p className="text-text-muted text-2xs leading-none mt-0.5">Regent Knowledge Layer</p>
               </div>
             </div>
-            <button
-              onClick={onToggle}
-              className="w-6 h-6 flex items-center justify-center rounded-md text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all"
-              title="Collapse sidebar"
-            >
+            <button onClick={onToggle} className="w-6 h-6 flex items-center justify-center rounded-md text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all" title="Collapse sidebar">
               <PanelLeftClose size={13} />
             </button>
           </div>
         )}
       </div>
 
-      {/* ── Primary navigation ────────────────────────────────────────────────────── */}
+      {/* Primary navigation */}
       <nav className={clsx("flex flex-col gap-0.5 pt-2 px-2", collapsed && "items-center")}>
-        {PRIMARY_NAV.map(({ href, icon: Icon, label, badge }) => {
-          const active = path.startsWith(href);
-          return (
-            <Link
-              key={href}
-              href={href}
-              title={collapsed ? label : undefined}
-              className={clsx(
-                "flex items-center gap-2.5 rounded-lg transition-all duration-150 group relative",
-                collapsed
-                  ? "w-10 h-10 justify-center"
-                  : "px-2.5 py-2",
-                active
-                  ? "bg-dawn/10 text-dawn"
-                  : "text-text-muted hover:text-text-secondary hover:bg-elevated/60",
-              )}
-            >
-              <Icon size={16} strokeWidth={active ? 2 : 1.75} />
-              {!collapsed && (
-                <>
-                  <span className="text-xs font-medium">{label}</span>
-                  {badge && (
-                    <span className="ml-auto text-2xs font-mono px-1.5 py-0.5 rounded-full bg-ember/15 text-ember">
-                      {badge}
-                    </span>
-                  )}
-                  {active && (
-                    <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-dawn rounded-r-full" />
-                  )}
-                </>
-              )}
-              {collapsed && active && (
-                <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-dawn rounded-r-full" />
-              )}
-              {/* Tooltip for collapsed state */}
-              {collapsed && (
-                <span className="absolute left-12 bg-surface border border-rim text-text-primary text-2xs px-2 py-1 rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity shadow-card z-50">
-                  {label}
-                </span>
-              )}
-            </Link>
-          );
-        })}
+        {PRIMARY_NAV.map((item) => <NavLink key={item.href} {...item} />)}
       </nav>
 
-      {/* ── Recent conversations ──────────────────────────────────────────────────── */}
+      {/* Tools section */}
+      <NavSection label="Tools" items={TOOLS_NAV} />
+
+      {/* Business section */}
+      <NavSection label="Business" items={BUSINESS_NAV} />
+
+      {/* Recent conversations */}
       {!collapsed && (
         <div className="flex-1 flex flex-col min-h-0 pt-3 px-2">
-          <button
-            onClick={() => setRecentOpen(!recentOpen)}
-            className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-text-muted hover:text-text-secondary hover:bg-elevated/40 transition-all text-2xs font-medium uppercase tracking-wider"
-          >
-            <ChevronDown
-              size={10}
-              className={clsx("transition-transform", recentOpen && "rotate-0", !recentOpen && "-rotate-90")}
-            />
-            <Clock size={10} />
-            Recent
-          </button>
+          <div className="flex items-center justify-between px-2 py-1.5">
+            <button onClick={() => setRecentOpen(!recentOpen)} className="flex items-center gap-1.5 rounded-md text-text-muted hover:text-text-secondary hover:bg-elevated/40 transition-all text-2xs font-medium uppercase tracking-wider">
+              <ChevronDown size={10} className={clsx("transition-transform", recentOpen && "rotate-0", !recentOpen && "-rotate-90")} />
+              <Clock size={10} /> Recent
+            </button>
+            <button onClick={handleNewChat} className="w-5 h-5 flex items-center justify-center rounded-md text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all" title="New chat">
+              <Plus size={12} />
+            </button>
+          </div>
 
           {recentOpen && (
             <div className="flex-1 overflow-y-auto sidebar-scroll mt-1 space-y-0.5">
-              {MOCK_RECENT.map((conv) => (
-                <button
-                  key={conv.id}
-                  className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-elevated/50 transition-colors group"
-                >
-                  <div className="flex items-start justify-between gap-1">
-                    <span className="text-text-secondary text-xs truncate flex-1 group-hover:text-text-primary transition-colors">
-                      {conv.title}
-                    </span>
-                    <span className="text-text-muted text-2xs font-mono flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                      {timeAgo(conv.timestamp)}
-                    </span>
+              {loading ? (
+                <div className="px-2.5 py-3 text-center text-text-muted text-2xs">Loading...</div>
+              ) : sessions.length === 0 ? (
+                <div className="px-2.5 py-3 text-center text-text-muted text-2xs">No conversations yet</div>
+              ) : (
+                sessions.map((session) => (
+                  <div key={session.id} className="group relative">
+                    <Link
+                      href={`/chat?id=${session.id}`}
+                      className={clsx(
+                        "w-full text-left px-2.5 py-1.5 rounded-lg transition-colors flex items-start justify-between gap-1",
+                        currentSessionId === session.id ? "bg-dawn/10 text-dawn" : "hover:bg-elevated/50 text-text-secondary hover:text-text-primary",
+                      )}
+                    >
+                      {editingId === session.id ? (
+                        <div className="flex items-center gap-1 flex-1 min-w-0" onClick={(e) => e.preventDefault()}>
+                          <input value={editTitle} onChange={(e) => setEditTitle(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter") handleRenameConfirm(e, session.id); if (e.key === "Escape") handleRenameCancel(e as unknown as React.MouseEvent); }}
+                            className="flex-1 bg-elevated border border-rim rounded px-1.5 py-0.5 text-xs text-text-primary outline-none" autoFocus onClick={(e) => e.stopPropagation()} />
+                          <button onClick={(e) => handleRenameConfirm(e, session.id)} className="w-4 h-4 flex items-center justify-center text-success hover:text-success/80"><Check size={10} /></button>
+                          <button onClick={handleRenameCancel} className="w-4 h-4 flex items-center justify-center text-text-muted hover:text-text-secondary"><X size={10} /></button>
+                        </div>
+                      ) : (
+                        <>
+                          <span className="text-xs truncate flex-1">{session.title}</span>
+                          <span className="text-2xs font-mono flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-text-muted">{timeAgo(session.updated_at)}</span>
+                        </>
+                      )}
+                    </Link>
+                    {editingId !== session.id && (
+                      <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={(e) => handleRenameStart(e, session.id, session.title)} className="w-5 h-5 flex items-center justify-center rounded text-text-muted hover:text-text-secondary hover:bg-elevated/60" title="Rename"><Edit3 size={10} /></button>
+                        <button onClick={(e) => handleDelete(e, session.id)} className="w-5 h-5 flex items-center justify-center rounded text-text-muted hover:text-ember hover:bg-ember/10" title="Delete"><Trash2 size={10} /></button>
+                      </div>
+                    )}
                   </div>
-                </button>
-              ))}
+                ))
+              )}
             </div>
           )}
         </div>
       )}
 
-      {/* ── Bottom section ────────────────────────────────────────────────────────── */}
+      {/* Bottom section */}
       <div className={clsx("border-t border-rim pt-1 pb-2 px-2 flex flex-col gap-0.5", collapsed && "items-center")}>
-        {/* Settings — now links to /settings page */}
-        <Link
-          href="/settings"
-          title={collapsed ? "Settings" : undefined}
-          className={clsx(
-            "flex items-center gap-2.5 rounded-lg transition-all duration-150 group relative",
-            collapsed ? "w-10 h-10 justify-center" : "px-2.5 py-2",
-            path === "/settings"
-              ? "bg-dawn/10 text-dawn"
-              : "text-text-muted hover:text-text-secondary hover:bg-elevated/60",
-          )}
-        >
+        <Link href="/settings" title={collapsed ? "Settings" : undefined}
+          className={clsx("flex items-center gap-2.5 rounded-lg transition-all duration-150 group relative", collapsed ? "w-10 h-10 justify-center" : "px-2.5 py-2",
+            path === "/settings" ? "bg-dawn/10 text-dawn" : "text-text-muted hover:text-text-secondary hover:bg-elevated/60")}>
           <Settings size={16} strokeWidth={path === "/settings" ? 2 : 1.75} />
           {!collapsed && <span className="text-xs font-medium">Settings</span>}
-          {!collapsed && path === "/settings" && (
-            <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-dawn rounded-r-full" />
-          )}
+          {!collapsed && path === "/settings" && <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-dawn rounded-r-full" />}
           {collapsed && (
-            <span className="absolute left-12 bg-surface border border-rim text-text-primary text-2xs px-2 py-1 rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity shadow-card z-50">
-              Settings
-            </span>
+            <span className="absolute left-12 bg-surface border border-rim text-text-primary text-2xs px-2 py-1 rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity shadow-card z-50">Settings</span>
           )}
         </Link>
 
-        {/* User badge */}
         {!collapsed && (
           <div className="flex items-center gap-2 px-2.5 py-2 mt-0.5">
             <div className="w-6 h-6 rounded-md bg-dawn/10 border border-dawn/20 flex items-center justify-center">

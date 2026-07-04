@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Activity,
   CheckCircle,
@@ -11,87 +11,12 @@ import {
   Search,
   Package,
   RefreshCw,
-  Filter,
   ChevronDown,
   Zap,
 } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
-
-// ── Mock data ─────────────────────────────────────────────────────────────────────
-
-interface AgentLogEntry {
-  id: string;
-  timestamp: Date;
-  status: "success" | "error" | "running";
-  task: string;
-  tools: string[];
-  duration: string;
-  tokens: number;
-  model?: string;
-}
-
-const MOCK_LOGS: AgentLogEntry[] = [
-  {
-    id: "1",
-    timestamp: new Date(Date.now() - 1000 * 60 * 5),
-    status: "success",
-    task: "Search web for latest DeepSeek model release",
-    tools: ["web_search"],
-    duration: "3.2s",
-    tokens: 1240,
-    model: "deepseek",
-  },
-  {
-    id: "2",
-    timestamp: new Date(Date.now() - 1000 * 60 * 15),
-    status: "success",
-    task: "List files in sandbox and show structure",
-    tools: ["filesystem"],
-    duration: "1.8s",
-    tokens: 890,
-    model: "deepseek",
-  },
-  {
-    id: "3",
-    timestamp: new Date(Date.now() - 1000 * 60 * 45),
-    status: "error",
-    task: "Clone repo and analyze dependencies",
-    tools: ["git", "filesystem"],
-    duration: "12.5s",
-    tokens: 3400,
-    model: "deepseek",
-  },
-  {
-    id: "4",
-    timestamp: new Date(Date.now() - 1000 * 60 * 120),
-    status: "success",
-    task: "Write README.md to sandbox",
-    tools: ["filesystem"],
-    duration: "2.1s",
-    tokens: 560,
-    model: "deepseek",
-  },
-  {
-    id: "5",
-    timestamp: new Date(Date.now() - 1000 * 60 * 180),
-    status: "running",
-    task: "Analyze EconSim codebase and generate docs",
-    tools: ["filesystem", "git", "web_search"],
-    duration: "—",
-    tokens: 0,
-    model: "deepseek",
-  },
-  {
-    id: "6",
-    timestamp: new Date(Date.now() - 1000 * 60 * 300),
-    status: "success",
-    task: "Check Jarvis agent status on Paperclip VPS",
-    tools: ["filesystem"],
-    duration: "0.9s",
-    tokens: 320,
-    model: "local",
-  },
-];
+import { getAgentLogs } from "@/lib/api";
+import type { AgentLogEntry } from "@/lib/types";
 
 const TOOL_ICONS: Record<string, React.ReactNode> = {
   filesystem: <FileText size={10} />,
@@ -100,22 +25,40 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
   install_skill: <Package size={10} />,
 };
 
-// ── Component ─────────────────────────────────────────────────────────────────────
-
 export default function AgentLogsPage() {
+  const [logs, setLogs] = useState<AgentLogEntry[]>([]);
+  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "success" | "error" | "running">("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const filtered = filter === "all"
-    ? MOCK_LOGS
-    : MOCK_LOGS.filter((l) => l.status === filter);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await getAgentLogs(50, filter === "all" ? undefined : filter);
+      setLogs(data);
+    } catch (e) {
+      console.error("[AgentLogs] Failed to load:", e);
+      setLogs([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [filter]);
 
-  const timeAgo = (date: Date) => {
+  useEffect(() => { load(); }, [load]);
+
+  const timeAgo = (dateStr: string) => {
+    const date = new Date(dateStr);
     const mins = Math.floor((Date.now() - date.getTime()) / 1000 / 60);
     if (mins < 60) return `${mins}m ago`;
     const hours = Math.floor(mins / 60);
     if (hours < 24) return `${hours}h ago`;
     return `${Math.floor(hours / 24)}d ago`;
+  };
+
+  const formatDuration = (ms?: number) => {
+    if (!ms) return "—";
+    if (ms < 1000) return `${ms}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
   };
 
   const STATUS_CONFIG = {
@@ -125,10 +68,10 @@ export default function AgentLogsPage() {
   };
 
   const FILTERS = [
-    { id: "all" as const, label: "All", count: MOCK_LOGS.length },
-    { id: "success" as const, label: "Success", count: MOCK_LOGS.filter((l) => l.status === "success").length },
-    { id: "error" as const, label: "Error", count: MOCK_LOGS.filter((l) => l.status === "error").length },
-    { id: "running" as const, label: "Running", count: MOCK_LOGS.filter((l) => l.status === "running").length },
+    { id: "all" as const, label: "All", count: logs.length },
+    { id: "success" as const, label: "Success", count: logs.filter((l) => l.status === "success").length },
+    { id: "error" as const, label: "Error", count: logs.filter((l) => l.status === "error").length },
+    { id: "running" as const, label: "Running", count: logs.filter((l) => l.status === "running").length },
   ];
 
   return (
@@ -142,10 +85,13 @@ export default function AgentLogsPage() {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-text-muted text-2xs font-mono bg-elevated/50 border border-rim px-2 py-1 rounded-lg">
-              {MOCK_LOGS.length} total
+              {logs.length} total
             </span>
-            <button className="w-8 h-8 flex items-center justify-center rounded-lg text-text-muted hover:text-dawn hover:bg-dawn/10 transition-all">
-              <RefreshCw size={14} />
+            <button
+              onClick={load}
+              className="w-8 h-8 flex items-center justify-center rounded-lg text-text-muted hover:text-dawn hover:bg-dawn/10 transition-all"
+            >
+              <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
             </button>
           </div>
         </header>
@@ -174,14 +120,19 @@ export default function AgentLogsPage() {
 
         {/* Log entries */}
         <div className="flex-1 overflow-y-auto px-6 py-4">
-          {filtered.length === 0 ? (
+          {loading ? (
+            <div className="flex items-center justify-center h-48">
+              <div className="w-5 h-5 border-2 border-rim border-t-dawn rounded-full animate-spin" />
+            </div>
+          ) : logs.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 gap-3">
               <Activity size={24} className="text-text-muted/30" />
-              <p className="text-text-muted text-sm">No agent logs match this filter</p>
+              <p className="text-text-muted text-sm">No agent logs yet</p>
+              <p className="text-text-muted text-xs">Run an agent task in Chat to see logs here</p>
             </div>
           ) : (
             <div className="space-y-2 max-w-3xl">
-              {filtered.map((entry) => {
+              {logs.map((entry) => {
                 const cfg = STATUS_CONFIG[entry.status];
                 const Icon = cfg.icon;
                 const isExpanded = expandedId === entry.id;
@@ -204,12 +155,12 @@ export default function AgentLogsPage() {
                         <div className="min-w-0 flex-1">
                           <p className="text-text-primary text-sm font-medium truncate">{entry.task}</p>
                           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                            {entry.tools.map((tool) => (
+                            {(entry.tools_used || []).map((tool) => (
                               <span
                                 key={tool}
                                 className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-elevated/50 border border-rim text-text-muted text-2xs font-mono"
                               >
-                                <span className="text-dawn">{TOOL_ICONS[tool]}</span>
+                                <span className="text-dawn">{TOOL_ICONS[tool] || null}</span>
                                 {tool}
                               </span>
                             ))}
@@ -225,11 +176,11 @@ export default function AgentLogsPage() {
 
                       <div className="flex items-center gap-3 flex-shrink-0">
                         <div className="text-right">
-                          <p className="text-text-muted text-2xs font-mono">{entry.duration}</p>
-                          <p className="text-text-muted text-2xs font-mono">{entry.tokens > 0 ? `${entry.tokens} tok` : "—"}</p>
+                          <p className="text-text-muted text-2xs font-mono">{formatDuration(entry.duration_ms)}</p>
+                          <p className="text-text-muted text-2xs font-mono">{entry.tokens_used > 0 ? `${entry.tokens_used} tok` : "—"}</p>
                         </div>
                         <span className="text-text-muted text-2xs font-mono opacity-0 group-hover:opacity-100 transition-opacity">
-                          {timeAgo(entry.timestamp)}
+                          {timeAgo(entry.created_at)}
                         </span>
                         <ChevronDown
                           size={12}
@@ -244,11 +195,11 @@ export default function AgentLogsPage() {
                         <div className="grid grid-cols-3 gap-4">
                           <div>
                             <p className="text-text-muted text-2xs font-medium uppercase tracking-wider">Duration</p>
-                            <p className="text-text-primary text-xs font-mono mt-0.5">{entry.duration}</p>
+                            <p className="text-text-primary text-xs font-mono mt-0.5">{formatDuration(entry.duration_ms)}</p>
                           </div>
                           <div>
                             <p className="text-text-muted text-2xs font-medium uppercase tracking-wider">Tokens</p>
-                            <p className="text-text-primary text-xs font-mono mt-0.5">{entry.tokens > 0 ? entry.tokens.toLocaleString() : "—"}</p>
+                            <p className="text-text-primary text-xs font-mono mt-0.5">{entry.tokens_used > 0 ? entry.tokens_used.toLocaleString() : "—"}</p>
                           </div>
                           <div>
                             <p className="text-text-muted text-2xs font-medium uppercase tracking-wider">Model</p>
@@ -256,9 +207,9 @@ export default function AgentLogsPage() {
                           </div>
                         </div>
 
-                        {entry.status === "error" && (
+                        {entry.status === "error" && entry.error_message && (
                           <div className="mt-2 px-3 py-2 rounded-lg bg-error/5 border border-error/15 text-error text-2xs font-mono">
-                            Git clone failed: repository not found or access denied
+                            {entry.error_message}
                           </div>
                         )}
 
@@ -266,6 +217,12 @@ export default function AgentLogsPage() {
                           <div className="mt-2 flex items-center gap-1.5">
                             <span className="w-1.5 h-1.5 rounded-full bg-dawn animate-pulse-slow" />
                             <span className="text-dawn text-2xs font-mono">Executing...</span>
+                          </div>
+                        )}
+
+                        {entry.completed_at && (
+                          <div className="mt-2 text-text-muted text-2xs font-mono">
+                            Completed: {new Date(entry.completed_at).toLocaleString()}
                           </div>
                         )}
                       </div>

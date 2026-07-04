@@ -36,8 +36,7 @@ class ToolRegistry:
         return list(self._tools.keys())
 
 
-# ── Singleton ────────────────────────────────────────────────────────────────
-
+# Singleton
 _registry: Optional[ToolRegistry] = None
 
 
@@ -50,12 +49,7 @@ def get_registry() -> ToolRegistry:
 
 
 def _register_default_tools(registry: ToolRegistry) -> None:
-    """
-    Wire up the built-in tools. Imported lazily inside this function (rather
-    than at module top) so that importing tools.registry never fails just
-    because e.g. GitPython isn't installed in some environment — each tool
-    module is responsible for its own optional dependencies.
-    """
+    """Wire up the built-in tools."""
     try:
         from tools.filesystem import FilesystemTool
         registry.register(FilesystemTool())
@@ -91,3 +85,31 @@ def _register_default_tools(registry: ToolRegistry) -> None:
         registry.register(TerminalTool())
     except Exception as e:
         logger.error(f"Failed to register TerminalTool: {e}")
+
+    # v3.0 — SSH
+    try:
+        from tools.ssh import SSHTool
+        registry.register(SSHTool())
+    except Exception as e:
+        logger.error(f"Failed to register SSHTool: {e}")
+
+    # v4.0 — MCP
+    try:
+        from tools.mcp_server import MCPTool
+        registry.register(MCPTool())
+    except Exception as e:
+        logger.error(f"Failed to register MCPTool: {e}")
+
+    # v5.0 — OSINT
+    try:
+        from tools.osint_tool import OSINTTool
+        registry.register(OSINTTool())
+    except Exception as e:
+        logger.error(f"Failed to register OSINTTool: {e}")
+
+    # v6.0 — Nmap
+    try:
+        from tools.nmap_tool import NmapTool
+        registry.register(NmapTool())
+    except Exception as e:
+        logger.error(f"Failed to register NmapTool: {e}")

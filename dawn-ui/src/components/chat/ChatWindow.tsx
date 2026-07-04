@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Send,
   RotateCcw,
@@ -12,9 +13,9 @@ import {
   Settings,
 } from "lucide-react";
 import Link from "next/link";
-import { streamChat } from "@/lib/api";
+import { streamChat, getSessionMessages, createSession } from "@/lib/api";
 import { streamAgent } from "@/lib/agent-api";
-import type { ChatMessage, ToolCall } from "@/lib/types";
+import type { ChatMessage, ToolCall, SessionMessage } from "@/lib/types";
 import type {
   AgentChatMessage,
   AgentTraceEntry,
@@ -28,7 +29,29 @@ import AgentTraceIndicator, {
 let messageId = 0;
 const nextId = () => String(++messageId);
 
+function sessionMessageToChatMessage(sm: SessionMessage): AgentChatMessage {
+  return {
+    id: sm.id,
+    role: sm.role,
+    content: sm.content,
+    tool_calls: sm.tool_calls ?? undefined,
+    node_ids: sm.node_ids ?? undefined,
+    node_titles: sm.node_titles ?? undefined,
+    timestamp: new Date(sm.created_at),
+  };
+}
+
+/** Dispatch a custom event so the Sidebar knows to refresh its session list */
+function notifySidebarRefresh() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("dawn:session-changed"));
+  }
+}
+
 export default function ChatWindow() {
+  const searchParams = useSearchParams();
+  const sessionIdFromUrl = searchParams.get("id");
+
   const [mode, setMode] = useState<ChatMode>("chat");
   const [messages, setMessages] = useState<AgentChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -45,9 +68,43 @@ export default function ChatWindow() {
   >(null);
   const [thinkingState, setThinkingState] = useState(false);
   const [thinkingLabel, setThinkingLabel] = useState("");
+  const [loadingSession, setLoadingSession] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const sessionId = useRef(crypto.randomUUID());
+  const sessionId = useRef<string | undefined>(undefined);
+  const prevSessionIdRef = useRef<string | null>(null);
+
+  // ── Load messages when session ID changes ──────────────────────────
+  useEffect(() => {
+    const sid = sessionIdFromUrl;
+
+    // If same session, don't reload
+    if (sid === prevSessionIdRef.current) return;
+    prevSessionIdRef.current = sid;
+
+    if (!sid) {
+      // No session — start fresh
+      sessionId.current = undefined;
+      setMessages([]);
+      return;
+    }
+
+    // Load messages for this session
+    setLoadingSession(true);
+    sessionId.current = sid;
+
+    getSessionMessages(sid)
+      .then((msgs) => {
+        setMessages(msgs.map(sessionMessageToChatMessage));
+      })
+      .catch((err) => {
+        console.error("[ChatWindow] Failed to load messages:", err);
+        setMessages([]);
+      })
+      .finally(() => {
+        setLoadingSession(false);
+      });
+  }, [sessionIdFromUrl]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -106,6 +163,15 @@ export default function ChatWindow() {
             case "done":
               finalNodeIds = event.node_ids;
               finalNodeTitles = event.node_titles;
+              // Capture session_id from backend if provided
+              if (event.session_id && !sessionId.current) {
+                sessionId.current = event.session_id;
+                const url = new URL(window.location.href);
+                url.searchParams.set("id", event.session_id);
+                window.history.replaceState({}, "", url.toString());
+                prevSessionIdRef.current = event.session_id;
+                notifySidebarRefresh();
+              }
               break;
             case "error":
               fullContent = `⚠️ Error: ${event.message}`;
@@ -227,6 +293,23 @@ export default function ChatWindow() {
     const text = input.trim();
     if (!text || isStreaming) return;
 
+    // If no session exists yet, create one
+    if (!sessionId.current) {
+      try {
+        const session = await createSession();
+        sessionId.current = session.id;
+        // Update URL without full navigation
+        const url = new URL(window.location.href);
+        url.searchParams.set("id", session.id);
+        window.history.replaceState({}, "", url.toString());
+        prevSessionIdRef.current = session.id;
+        notifySidebarRefresh();
+      } catch (err) {
+        console.error("[ChatWindow] Failed to create session:", err);
+        return;
+      }
+    }
+
     const userMsg: AgentChatMessage = {
       id: nextId(),
       role: "user",
@@ -266,60 +349,81 @@ export default function ChatWindow() {
     }
   };
 
+  const handleNewChat = async () => {
+    try {
+      const session = await createSession();
+      const url = new URL(window.location.href);
+      url.searchParams.set("id", session.id);
+      window.history.replaceState({}, "", url.toString());
+      prevSessionIdRef.current = session.id;
+      sessionId.current = session.id;
+      setMessages([]);
+      notifySidebarRefresh();
+    } catch (err) {
+      console.error("[ChatWindow] Failed to create session:", err);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full">
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
-        {messages.length === 0 && !isStreaming && (
+        {loadingSession ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-text-muted text-sm">Loading conversation...</div>
+          </div>
+        ) : messages.length === 0 && !isStreaming ? (
           <EmptyState mode={mode} />
-        )}
-
-        {messages.map((msg) => (
-          <div key={msg.id}>
-            {msg.trace && msg.trace.length > 0 && (
-              <div className="ml-12 mb-1">
-                <AgentTraceIndicator trace={msg.trace} />
-              </div>
-            )}
-            {msg.warning && (
-              <div className="ml-12 mb-1">
-                <AgentWarningBanner warning={msg.warning} />
-              </div>
-            )}
-            <Message message={msg} />
-          </div>
-        ))}
-
-        {/* Streaming message */}
-        {isStreaming && (
-          <div>
-            {mode === "agent" && (
-              <div className="ml-12 mb-1">
-                <AgentTraceIndicator
-                  trace={streamingTrace}
-                  thinking={thinkingState}
-                  thinkingLabel={thinkingLabel}
-                />
-                {streamingWarning && (
-                  <AgentWarningBanner warning={streamingWarning} />
+        ) : (
+          <>
+            {messages.map((msg) => (
+              <div key={msg.id}>
+                {msg.trace && msg.trace.length > 0 && (
+                  <div className="ml-12 mb-1">
+                    <AgentTraceIndicator trace={msg.trace} />
+                  </div>
                 )}
+                {msg.warning && (
+                  <div className="ml-12 mb-1">
+                    <AgentWarningBanner warning={msg.warning} />
+                  </div>
+                )}
+                <Message message={msg} />
+              </div>
+            ))}
+
+            {/* Streaming message */}
+            {isStreaming && (
+              <div>
+                {mode === "agent" && (
+                  <div className="ml-12 mb-1">
+                    <AgentTraceIndicator
+                      trace={streamingTrace}
+                      thinking={thinkingState}
+                      thinkingLabel={thinkingLabel}
+                    />
+                    {streamingWarning && (
+                      <AgentWarningBanner warning={streamingWarning} />
+                    )}
+                  </div>
+                )}
+                <Message
+                  message={{
+                    id: "streaming",
+                    role: "assistant",
+                    content: streamingContent,
+                    timestamp: new Date(),
+                  }}
+                  isStreaming
+                  streamingToolCalls={
+                    mode === "chat" && !thinkingState
+                      ? streamingToolCalls
+                      : []
+                  }
+                />
               </div>
             )}
-            <Message
-              message={{
-                id: "streaming",
-                role: "assistant",
-                content: streamingContent,
-                timestamp: new Date(),
-              }}
-              isStreaming
-              streamingToolCalls={
-                mode === "chat" && !thinkingState
-                  ? streamingToolCalls
-                  : []
-              }
-            />
-          </div>
+          </>
         )}
 
         <div ref={bottomRef} />
@@ -327,7 +431,7 @@ export default function ChatWindow() {
 
       {/* Input bar */}
       <div className="border-t border-rim px-4 pb-4 pt-3">
-        {/* Mode toggle — inline, subtle */}
+        {/* Mode toggle + actions */}
         <div className="flex items-center justify-between mb-3">
           <div className="inline-flex items-center gap-0.5 p-0.5 rounded-lg bg-elevated/60 border border-rim">
             <button
@@ -357,6 +461,14 @@ export default function ChatWindow() {
           </div>
 
           <div className="flex items-center gap-1">
+            <button
+              onClick={handleNewChat}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all text-xs"
+              title="New chat"
+            >
+              <Plus size={12} />
+              New
+            </button>
             {messages.length > 0 && (
               <button
                 onClick={() => setMessages([])}

@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # Tools
     filesystem_sandbox_root: str = "./sandbox"
     skills_install_root: str = "./installed_skills"
-    tools_enabled: str = "filesystem,git,websearch,install_skill,terminal,web_fetch"
+    tools_enabled: str = "filesystem,git,websearch,install_skill,terminal,web_fetch,ssh,nmap,osint,mcp"
 
     # Web search
     brave_search_api_key: Optional[str] = None
@@ -34,13 +34,10 @@ class Settings(BaseSettings):
     # Auth tiers
     dawn_api_keys: Optional[str] = None  # JSON: {"sk-owner-xxx": "owner", "sk-app-yyy": "service"}
 
-    # OCR — optional explicit path to the tesseract binary. Leave unset on
-    # Linux (VPS deploy) where `apt-get install tesseract-ocr` puts it on
-    # PATH already. On Windows dev machines, PATH resolution is often
-    # session/shell-dependent (PowerShell vs cmd, User vs Machine scope,
-    # requires a fresh terminal after install) — setting this explicitly
-    # sidesteps all of that.
-    # e.g. in .env: TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
+    # v5.0 — OSINT
+    shodan_api_key: Optional[str] = None
+
+    # OCR
     tesseract_cmd: Optional[str] = None
 
     # CORS

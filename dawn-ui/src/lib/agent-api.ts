@@ -5,7 +5,7 @@ const KEY = process.env.NEXT_PUBLIC_DAWN_API_KEY || "";
 
 const headers = () => ({
   "Content-Type": "application/json",
-  "X-API-Key": KEY,
+  "x-api-key": KEY,
 });
 
 export async function* streamAgent(

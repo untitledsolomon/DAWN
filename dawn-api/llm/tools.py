@@ -232,3 +232,38 @@ Conversation:
         return facts if isinstance(facts, list) else []
     except Exception:
         return []
+
+
+async def extract_error_pattern(
+    user_message: str,
+    assistant_response: str,
+    llm_complete_fn,
+) -> Optional[dict]:
+    """
+    After a chat exchange, check if DAWN made a mistake worth learning from.
+    Returns a dict with pattern, context, and resolution if an error is detected.
+    """
+    prompt = f"""Analyze this conversation exchange and determine if DAWN (the AI assistant) made a mistake, gave incorrect information, or could have answered better.
+
+If a mistake or error pattern is detected, return a JSON object describing it.
+If no error was made, return an empty JSON object.
+
+Rules:
+- Be honest — only flag real errors, not minor phrasing differences
+- Focus on factual errors, incorrect code, wrong assumptions
+- Return JSON: {{"pattern": "short description of the error pattern", "context": "what the user was asking about", "resolution": "how to correctly answer this"}}
+- Return ONLY the JSON object, no other text
+
+User message: {user_message[:1000]}
+DAWN response: {assistant_response[:2000]}"""
+
+    try:
+        raw = await llm_complete_fn([{"role": "user", "content": prompt}])
+        raw = raw.strip().strip("```json").strip("```").strip()
+        import json
+        result = json.loads(raw)
+        if result and result.get("pattern"):
+            return result
+        return None
+    except Exception:
+        return None
