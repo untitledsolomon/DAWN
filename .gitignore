@@ -11,4 +11,4 @@ dawn-api/routers/__pycache__/
 dawn-api/ingestion/__pycache__/
 *__pycache__/
 node_modules/
-dawn-api/sandbox
+dawn-api/sandbox.github_pat
