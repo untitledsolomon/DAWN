@@ -8,7 +8,7 @@ import NodeForm from "@/components/nodes/NodeForm";
 import { listNodes, searchNodes, listTags, createNode, updateNode, deleteNode } from "@/lib/api";
 import type { DawnNode, Tag } from "@/lib/types";
 
-import { NodeType, NodeTypeFilter } from "@/types"; // adjust path
+import { NodeType, NodeTypeFilter } from "@/lib/types"; // adjust path
 
 const NODE_TYPES: NodeType[] = ["concept", "entity", "process", "fact", "memory", "document"];
 

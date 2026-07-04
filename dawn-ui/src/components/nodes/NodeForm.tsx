@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { X, Plus } from "lucide-react";
 import type { DawnNode, Tag } from "@/lib/types";
 
-import { NodeType, NodeTypeFilter } from "@/types"; // adjust path
+import { NodeType, NodeTypeFilter } from "@/lib/types"; // adjust path
 
 const NODE_TYPES: NodeType[] = ["concept", "entity", "process", "fact", "memory", "document"];
 
