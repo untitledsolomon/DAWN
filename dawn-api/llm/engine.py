@@ -5,7 +5,6 @@ Switch via LLM_MODE env var: "deepseek" | "local"
 from typing import AsyncGenerator, Optional
 from dataclasses import dataclass, field
 
-from pymupdf import message
 from config import settings
 import logging
 import json
