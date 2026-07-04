@@ -36,7 +36,8 @@ class ToolRegistry:
         return list(self._tools.keys())
 
 
-# Singleton
+# ── Singleton ─────────────────────────────────────────────────────────
+
 _registry: Optional[ToolRegistry] = None
 
 
@@ -49,7 +50,12 @@ def get_registry() -> ToolRegistry:
 
 
 def _register_default_tools(registry: ToolRegistry) -> None:
-    """Wire up the built-in tools."""
+    """
+    Wire up the built-in tools. Imported lazily inside this function (rather
+    than at module top) so that importing tools.registry never fails just
+    because e.g. GitPython isn't installed in some environment — each tool
+    module is responsible for its own optional dependencies.
+    """
     try:
         from tools.filesystem import FilesystemTool
         registry.register(FilesystemTool())
@@ -79,53 +85,16 @@ def _register_default_tools(registry: ToolRegistry) -> None:
         registry.register(WebFetchTool())
     except Exception as e:
         logger.error(f"Failed to register WebFetchTool: {e}")
-    
+
     try:
         from tools.terminal import TerminalTool
         registry.register(TerminalTool())
     except Exception as e:
         logger.error(f"Failed to register TerminalTool: {e}")
 
-    # v3.0 — SSH
+    # OMNI geospatial dashboard tool
     try:
-        from tools.ssh import SSHTool
-        registry.register(SSHTool())
+        from tools.omni import OmniTool
+        registry.register(OmniTool())
     except Exception as e:
-        logger.error(f"Failed to register SSHTool: {e}")
-
-    # v4.0 — MCP
-    try:
-        from tools.mcp_server import MCPTool
-        registry.register(MCPTool())
-    except Exception as e:
-        logger.error(f"Failed to register MCPTool: {e}")
-
-    # v5.0 — OSINT
-    try:
-        from tools.osint_tool import OSINTTool
-        registry.register(OSINTTool())
-    except Exception as e:
-        logger.error(f"Failed to register OSINTTool: {e}")
-
-    # v6.0 — Nmap
-    try:
-        from tools.nmap_tool import NmapTool
-        registry.register(NmapTool())
-    except Exception as e:
-        logger.error(f"Failed to register NmapTool: {e}")
-
-    # v7.0 — Database (full Supabase table access, OWNER tier only —
-    # see TIER_TOOL_ACCESS in llm/identity.py)
-    try:
-        from tools.database import DatabaseTool
-        registry.register(DatabaseTool())
-    except Exception as e:
-        logger.error(f"Failed to register DatabaseTool: {e}")
-
-    # v7.1 — Knowledge graph (read-only context/memory retrieval for Agent
-    # mode — gives it what Chat mode already gets automatically, on demand)
-    try:
-        from tools.knowledge_graph import KnowledgeGraphTool
-        registry.register(KnowledgeGraphTool())
-    except Exception as e:
-        logger.error(f"Failed to register KnowledgeGraphTool: {e}")
+        logger.error(f"Failed to register OmniTool: {e}")
