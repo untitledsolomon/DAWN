@@ -1,11 +1,20 @@
 import json
-from fastapi import APIRouter, Depends, Header, HTTPException
+import logging
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 from config import settings
 from llm.agent import run_agent_loop, DEFAULT_MAX_ITERATIONS
 from llm.identity import resolve_identity, Identity, TrustTier
+from llm.engine import get_engine
+import db.client as db
+
+# Reuse the exact same persistence + title helpers routers/chat.py uses, so
+# Chat mode and Agent mode sessions/messages/titles behave identically.
+from routers.chat import _save_message_sync, _ensure_session_sync, _generate_title
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -27,6 +36,7 @@ def get_identity(x_api_key: Optional[str] = Header(None)) -> Identity:
 class AgentRequest(BaseModel):
     message: str
     history: list[dict] = []
+    session_id: Optional[str] = None
     max_iterations: int = DEFAULT_MAX_ITERATIONS
 
 
@@ -44,9 +54,32 @@ def sse(event_type: str, payload: dict) -> str:
 @router.post("/")
 async def agent(
     req: AgentRequest,
+    background_tasks: BackgroundTasks,
     identity: Identity = Depends(get_identity),
 ):
+    engine = get_engine()
+
+    # Ensure we have a session, exactly like /chat/ does.
+    session_id = _ensure_session_sync(req.session_id)
+    is_new_session = not req.session_id
+
+    tool_calls_list: list[dict] = []
+    full_response: list[str] = []
+
     async def generate():
+        nonlocal full_response, tool_calls_list
+
+        # 1. Save user message immediately
+        _save_message_sync(session_id, "user", req.message)
+
+        # 2. Auto-title on first message (using AI) — same as chat mode
+        if is_new_session:
+            background_tasks.add_task(
+                _generate_title, session_id, req.message, engine.complete
+            )
+
+        pending_calls: dict[str, dict] = {}
+
         async for event in run_agent_loop(
             user_message=req.message,
             identity=identity,
@@ -54,7 +87,38 @@ async def agent(
             max_iterations=req.max_iterations,
         ):
             event_type = event.pop("type")
+
+            if event_type == "tool_call":
+                tc_dict = {"name": event.get("name"), "args": event.get("args")}
+                tool_calls_list.append(tc_dict)
+                pending_calls[event.get("name")] = tc_dict
+            elif event_type == "tool_result":
+                tc_dict = pending_calls.get(event.get("name"))
+                if tc_dict is not None:
+                    tc_dict["success"] = event.get("success")
+                    tc_dict["output"] = event.get("output")
+                    tc_dict["error"] = event.get("error")
+            elif event_type == "token":
+                full_response.append(event.get("content", ""))
+            elif event_type == "done":
+                # Prefer the fully assembled content if we captured tokens;
+                # fall back to whatever run_agent_loop reports as final content.
+                event["content"] = "".join(full_response) or event.get("content", "")
+                # Let the frontend know which session this landed in, same
+                # contract as /chat/'s "done" event.
+                event["session_id"] = session_id
+
             yield sse(event_type, event)
+
+        # 3. Save assistant message to DB once the stream is complete
+        assistant_content = "".join(full_response)
+        if assistant_content:
+            _save_message_sync(
+                session_id,
+                "assistant",
+                assistant_content,
+                tool_calls=tool_calls_list if tool_calls_list else None,
+            )
 
     return StreamingResponse(
         generate(),

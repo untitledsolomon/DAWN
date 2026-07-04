@@ -11,6 +11,7 @@ const headers = () => ({
 export async function* streamAgent(
   message: string,
   history: { role: string; content: string }[],
+  sessionId?: string,
   maxIterations?: number,
 ): AsyncGenerator<AgentSSEEvent> {
   const res = await fetch(`${BASE}/agent/`, {
@@ -19,6 +20,7 @@ export async function* streamAgent(
     body: JSON.stringify({
       message,
       history,
+      ...(sessionId ? { session_id: sessionId } : {}),
       ...(maxIterations ? { max_iterations: maxIterations } : {}),
     }),
   });

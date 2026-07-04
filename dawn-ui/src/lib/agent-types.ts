@@ -37,7 +37,9 @@ export type AgentSSEEvent =
   | { type: "tool_result"; name: string; success: boolean; output: unknown; error: string | null }
   | { type: "warning"; content: string }
   | { type: "token"; content: string }
-  | { type: "done"; content: string; iterations: number }
+  // session_id is now included so the frontend can pick up the session that
+  // was created/reused server-side, exactly like chat mode's "done" event.
+  | { type: "done"; content: string; iterations: number; session_id?: string }
   | { type: "iteration_limit"; content: string }
   | { type: "error"; content: string };
 

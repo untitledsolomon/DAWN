@@ -125,6 +125,19 @@ export default function ChatWindow() {
     [messages],
   );
 
+  /** Shared by both sendChat and sendAgent: adopt a session_id the backend
+   * created/confirmed, sync it into the URL, and tell the sidebar to refresh
+   * so the new/renamed session shows up in the list. */
+  const adoptSessionId = useCallback((newSessionId: string) => {
+    if (sessionId.current === newSessionId) return;
+    sessionId.current = newSessionId;
+    const url = new URL(window.location.href);
+    url.searchParams.set("id", newSessionId);
+    window.history.replaceState({}, "", url.toString());
+    prevSessionIdRef.current = newSessionId;
+    notifySidebarRefresh();
+  }, []);
+
   const sendChat = useCallback(
     async (text: string) => {
       let fullContent = "";
@@ -164,13 +177,8 @@ export default function ChatWindow() {
               finalNodeIds = event.node_ids;
               finalNodeTitles = event.node_titles;
               // Capture session_id from backend if provided
-              if (event.session_id && !sessionId.current) {
-                sessionId.current = event.session_id;
-                const url = new URL(window.location.href);
-                url.searchParams.set("id", event.session_id);
-                window.history.replaceState({}, "", url.toString());
-                prevSessionIdRef.current = event.session_id;
-                notifySidebarRefresh();
+              if (event.session_id) {
+                adoptSessionId(event.session_id);
               }
               break;
             case "error":
@@ -196,7 +204,7 @@ export default function ChatWindow() {
       };
       setMessages((prev) => [...prev, assistantMsg]);
     },
-    [buildHistory],
+    [buildHistory, adoptSessionId],
   );
 
   const sendAgent = useCallback(
@@ -206,7 +214,11 @@ export default function ChatWindow() {
       let warning: string | undefined;
 
       try {
-        for await (const event of streamAgent(text, buildHistory())) {
+        for await (const event of streamAgent(
+          text,
+          buildHistory(),
+          sessionId.current,
+        )) {
           switch (event.type) {
             case "thinking":
               setThinkingLabel(event.content);
@@ -256,6 +268,11 @@ export default function ChatWindow() {
 
             case "done":
               fullContent = event.content;
+              // Capture session_id from backend, same as sendChat — this is
+              // what makes Agent mode sessions persist and get titled.
+              if (event.session_id) {
+                adoptSessionId(event.session_id);
+              }
               break;
 
             case "iteration_limit":
@@ -286,7 +303,7 @@ export default function ChatWindow() {
       };
       setMessages((prev) => [...prev, assistantMsg]);
     },
-    [buildHistory],
+    [buildHistory, adoptSessionId],
   );
 
   const send = useCallback(async () => {
@@ -297,13 +314,7 @@ export default function ChatWindow() {
     if (!sessionId.current) {
       try {
         const session = await createSession();
-        sessionId.current = session.id;
-        // Update URL without full navigation
-        const url = new URL(window.location.href);
-        url.searchParams.set("id", session.id);
-        window.history.replaceState({}, "", url.toString());
-        prevSessionIdRef.current = session.id;
-        notifySidebarRefresh();
+        adoptSessionId(session.id);
       } catch (err) {
         console.error("[ChatWindow] Failed to create session:", err);
         return;
@@ -338,7 +349,7 @@ export default function ChatWindow() {
     setStreamingTrace([]);
     setStreamingWarning(null);
     setThinkingState(false);
-  }, [input, isStreaming, mode, sendAgent, sendChat]);
+  }, [input, isStreaming, mode, sendAgent, sendChat, adoptSessionId]);
 
   const handleKeyDown = (
     e: React.KeyboardEvent<HTMLTextAreaElement>,
