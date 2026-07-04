@@ -4,7 +4,9 @@ import { useState, useEffect } from "react";
 import { X, Plus } from "lucide-react";
 import type { DawnNode, Tag } from "@/lib/types";
 
-const NODE_TYPES = ["concept", "entity", "process", "fact", "memory", "document"];
+import { NodeType, NodeTypeFilter } from "@/types"; // adjust path
+
+const NODE_TYPES: NodeType[] = ["concept", "entity", "process", "fact", "memory", "document"];
 
 interface Props {
   node?: DawnNode | null;

@@ -5,6 +5,10 @@ export type EdgeRelation =
   | "causes" | "requires" | "see_also" | "precedes"
   | "owned_by" | "related_to" | "contradicts" | "derived_from";
 
+// types.ts
+export type NodeType = "concept" | "entity" | "process" | "fact" | "memory" | "document";
+export type NodeTypeFilter = "all" | NodeType;
+
 export interface DawnNode {
   id: string;
   title: string;

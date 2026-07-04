@@ -8,7 +8,9 @@ import NodeForm from "@/components/nodes/NodeForm";
 import { listNodes, searchNodes, listTags, createNode, updateNode, deleteNode } from "@/lib/api";
 import type { DawnNode, Tag } from "@/lib/types";
 
-const NODE_TYPES = ["all", "concept", "entity", "process", "fact", "memory", "document"];
+import { NodeType, NodeTypeFilter } from "@/types"; // adjust path
+
+const NODE_TYPES: NodeType[] = ["concept", "entity", "process", "fact", "memory", "document"];
 
 export default function NodesPage() {
   const [nodes, setNodes] = useState<DawnNode[]>([]);
