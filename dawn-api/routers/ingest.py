@@ -48,6 +48,9 @@ SUPPORTED_EXTENSIONS = {
     ".svg": "SVG", ".docx": "Word", ".txt": "Text",
     ".epub": "EPUB", ".html": "HTML", ".htm": "HTML",
     ".rtf": "RTF", ".json": "JSON",
+    ".odt": "Word", ".ods": "Spreadsheet", ".pptx": "PowerPoint", ".odp": "Presentation",
+    ".xml": "XML", ".yaml": "YAML", ".yml": "YAML",
+    ".log": "Text", ".ini": "Text", ".cfg": "Text", ".conf": "Text",
 }
 
 _STREAMING_THRESHOLD_BYTES = 50 * 1024 * 1024
@@ -213,6 +216,15 @@ class IngestionQueue:
             result = await ingest_document_stream(title, gen, source_ref, tags)
         elif file_type == "Word":
             sections = _parse_docx(file_bytes)
+            result = await ingest_sections(title, sections, source_ref, tags)
+        elif file_type == "PowerPoint":
+            sections = _parse_pptx(file_bytes)
+            result = await ingest_sections(title, sections, source_ref, tags)
+        elif file_type == "Presentation":
+            sections = _parse_odp(file_bytes)
+            result = await ingest_sections(title, sections, source_ref, tags)
+        elif file_type == "Spreadsheet":
+            sections = _parse_ods(file_bytes)
             result = await ingest_sections(title, sections, source_ref, tags)
         elif file_type == "EPUB":
             sections = _parse_epub(file_bytes)
@@ -416,8 +428,12 @@ def _quick_sanity_check(file_bytes: bytes, file_type: str) -> bool:
     try:
         if file_type == "PDF":
             return file_bytes[:5] == b"%PDF-"
-        if file_type in ("Word", "EPUB", "Excel"):
+        if file_type in ("Word", "EPUB", "Excel", "PowerPoint", "Presentation"):
             return file_bytes[:2] == b"PK"
+        if file_type == "XML":
+            return file_bytes[:5].lstrip()[:1] == b"<" or file_bytes[:5] == b"<?xml"
+        if file_type == "SVG":
+            return file_bytes[:5].lstrip()[:1] == b"<"
         return True
     except Exception:
         return False
@@ -438,6 +454,12 @@ def _extract_content(file_bytes: bytes, file_type: str, filename: str, doc_title
             return {"text": _parse_svg(file_bytes), "sections": []}
         elif file_type == "Word":
             return {"text": "", "sections": _parse_docx(file_bytes)}
+        elif file_type == "PowerPoint":
+            return {"text": "", "sections": _parse_pptx(file_bytes)}
+        elif file_type == "Presentation":
+            return {"text": "", "sections": _parse_odp(file_bytes)}
+        elif file_type == "Spreadsheet":
+            return {"text": "", "sections": _parse_ods(file_bytes)}
         elif file_type == "Text":
             return {"text": _parse_txt(file_bytes), "sections": []}
         elif file_type == "EPUB":
@@ -448,6 +470,10 @@ def _extract_content(file_bytes: bytes, file_type: str, filename: str, doc_title
             return {"text": _parse_rtf(file_bytes), "sections": []}
         elif file_type == "JSON":
             return {"text": _parse_json(file_bytes), "sections": []}
+        elif file_type == "XML":
+            return {"text": _parse_xml(file_bytes), "sections": []}
+        elif file_type == "YAML":
+            return {"text": _parse_yaml(file_bytes), "sections": []}
     except Exception as e:
         logger.error(f"Extraction failed for {file_type} ({filename}): {e}")
     return {"text": "", "sections": []}
@@ -605,7 +631,200 @@ def _parse_docx(file_bytes: bytes) -> list[dict]:
                 rows_text.append(" | ".join(cells))
         if rows_text:
             sections.append({"title": f"Table {i}", "body": "\n".join(rows_text)})
+    # Extract image alt-text and inline shape descriptions
+    for para in document.paragraphs:
+        for run in para.runs:
+            if run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing'):
+                for drawing in run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing'):
+                    desc = drawing.find('.//{http://schemas.openxmlformats.org/drawingml/2006/main}desc')
+                    if desc is not None and desc.text and desc.text.strip():
+                        current_lines.append(f"[Image: {desc.text.strip()}]")
     return [s for s in sections if s["body"].strip()]
+
+
+def _parse_pptx(file_bytes: bytes) -> list[dict]:
+    """Parse PowerPoint (.pptx) into sections, one per slide."""
+    try:
+        from pptx import Presentation
+        from pptx.util import Inches, Pt
+    except ImportError:
+        logger.warning("python-pptx not available - PPTX parsing disabled.")
+        return []
+    try:
+        prs = Presentation(io.BytesIO(file_bytes))
+    except Exception as e:
+        logger.warning(f"Failed to open PPTX: {e}")
+        return []
+    sections = []
+    for i, slide in enumerate(prs.slides, start=1):
+        slide_lines = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    text = para.text.strip()
+                    if text:
+                        slide_lines.append(text)
+            if shape.has_table:
+                table = shape.table
+                for row in table.rows:
+                    cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if cells:
+                        slide_lines.append(" | ".join(cells))
+        body = "\n".join(slide_lines).strip()
+        if body:
+            title = f"Slide {i}"
+            for shape in slide.shapes:
+                if shape.has_text_frame and shape == slide.shapes[0]:
+                    first_text = shape.text_frame.paragraphs[0].text.strip() if shape.text_frame.paragraphs else ""
+                    if first_text:
+                        title = first_text
+                        break
+            sections.append({"title": title, "body": body})
+    return sections
+
+
+def _parse_odp(file_bytes: bytes) -> list[dict]:
+    """Parse LibreOffice Impress (.odp) into sections."""
+    try:
+        from pptx import Presentation
+        prs = Presentation(io.BytesIO(file_bytes))
+        sections = []
+        for i, slide in enumerate(prs.slides, start=1):
+            slide_lines = []
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    for para in shape.text_frame.paragraphs:
+                        text = para.text.strip()
+                        if text:
+                            slide_lines.append(text)
+            body = "\n".join(slide_lines).strip()
+            if body:
+                sections.append({"title": f"Slide {i}", "body": body})
+        if sections:
+            return sections
+    except Exception:
+        pass
+    return _parse_zip_xml_text(file_bytes, "content.xml")
+
+
+def _parse_ods(file_bytes: bytes) -> list[dict]:
+    """Parse LibreOffice Calc (.ods) spreadsheet into table sections."""
+    return _parse_zip_xml_table(file_bytes, "content.xml")
+
+
+def _parse_zip_xml_text(file_bytes: bytes, xml_path: str = "content.xml") -> list[dict]:
+    """Generic parser for zip-based XML formats."""
+    try:
+        import zipfile
+        import xml.etree.ElementTree as ET
+    except ImportError:
+        return []
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(file_bytes))
+        if xml_path not in zf.namelist():
+            return []
+        xml_content = zf.read(xml_path)
+        zf.close()
+    except Exception:
+        return []
+    try:
+        root = ET.fromstring(xml_content)
+    except Exception:
+        return []
+    texts = []
+    for elem in root.iter():
+        if elem.text and elem.text.strip():
+            texts.append(elem.text.strip())
+    if texts:
+        return [{"title": "Content", "body": "\n".join(texts)}]
+    return []
+
+
+def _parse_zip_xml_table(file_bytes: bytes, xml_path: str = "content.xml") -> list[dict]:
+    """Parse table data from a zip-based XML spreadsheet (ODS)."""
+    try:
+        import zipfile
+        import xml.etree.ElementTree as ET
+    except ImportError:
+        return []
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(file_bytes))
+        if xml_path not in zf.namelist():
+            return []
+        xml_content = zf.read(xml_path)
+        zf.close()
+    except Exception:
+        return []
+    try:
+        root = ET.fromstring(xml_content)
+    except Exception:
+        return []
+    sections = []
+    for table_elem in root.iter("{urn:oasis:names:tc:opendocument:xmlns:table:1.0}table"):
+        table_name = table_elem.get("{urn:oasis:names:tc:opendocument:xmlns:table:1.0}name", "Sheet")
+        rows = []
+        for row_elem in table_elem.iter("{urn:oasis:names:tc:opendocument:xmlns:table:1.0}table-row"):
+            cells = []
+            for cell_elem in row_elem.iter("{urn:oasis:names:tc:opendocument:xmlns:table:1.0}table-cell"):
+                cell_texts = []
+                for p in cell_elem.iter("{urn:oasis:names:tc:opendocument:xmlns:text:1.0}p"):
+                    if p.text:
+                        cell_texts.append(p.text)
+                cells.append(" ".join(cell_texts))
+            if any(c.strip() for c in cells):
+                rows.append(cells)
+        if not rows:
+            continue
+        headers = rows[0]
+        data_rows = rows[1:]
+        md_rows = [[str(c) if c else "" for c in row] for row in data_rows]
+        table_md = _table_to_markdown(headers, md_rows)
+        summary = _generate_table_summary(table_name, headers, len(data_rows), table_name)
+        sections.append({"title": f"{table_name}", "body": summary, "type": "table_summary"})
+        sections.append({"title": f"{table_name} - Data", "body": table_md, "type": "table_data"})
+    return sections
+
+
+def _parse_xml(file_bytes: bytes) -> str:
+    """Parse XML into a readable tree structure."""
+    try:
+        import xml.etree.ElementTree as ET
+    except ImportError:
+        return file_bytes.decode("utf-8", errors="ignore")
+    try:
+        root = ET.fromstring(file_bytes)
+    except Exception:
+        return file_bytes.decode("utf-8", errors="ignore")
+    lines = []
+    def _walk(elem, depth=0):
+        indent = "  " * depth
+        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        text = (elem.text or "").strip()
+        if text:
+            lines.append(f"{indent}{tag}: {text}")
+        else:
+            lines.append(f"{indent}{tag}")
+        for child in elem:
+            _walk(child, depth + 1)
+        tail = (elem.tail or "").strip()
+        if tail:
+            lines.append(f"{indent}  [tail]: {tail}")
+    _walk(root)
+    return "\n".join(lines)
+
+
+def _parse_yaml(file_bytes: bytes) -> str:
+    """Parse YAML into pretty-printed JSON."""
+    import json as _json
+    try:
+        import yaml
+    except ImportError:
+        return file_bytes.decode("utf-8", errors="ignore")
+    try:
+        data = yaml.safe_load(file_bytes)
+        return _json.dumps(data, indent=2, ensure_ascii=False, default=str)
+    except Exception:
+        return file_bytes.decode("utf-8", errors="ignore")
 
 
 def _parse_txt(file_bytes: bytes) -> str:
