@@ -142,23 +142,23 @@ export default function MemoryPage() {
   return (
     <AppShell>
       <div className="flex flex-col h-full">
-        <header className="flex items-center justify-between px-6 py-3 border-b border-rim flex-shrink-0">
-          <div>
+        <header className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-rim flex-shrink-0">
+          <div className="min-w-0">
             <h1 className="text-text-primary font-semibold text-sm tracking-tight">Memory</h1>
             <p className="text-text-muted text-2xs">Review auto-extracted facts · Upload files · Ingest data</p>
           </div>
-          <button onClick={load} className="w-8 h-8 flex items-center justify-center rounded-lg text-text-muted hover:text-dawn hover:bg-dawn/10 transition-all">
+          <button onClick={load} className="w-8 h-8 flex items-center justify-center rounded-lg text-text-muted hover:text-dawn hover:bg-dawn/10 transition-all flex-shrink-0">
             <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
           </button>
         </header>
 
-        {/* Tabs */}
-        <div className="flex border-b border-rim px-6 flex-shrink-0">
+        {/* Tabs — scrollable on mobile */}
+        <div className="flex border-b border-rim px-4 sm:px-6 flex-shrink-0 overflow-x-auto">
           {TABS.map(({ id, label, count }) => (
             <button
               key={id}
               onClick={() => setTab(id)}
-              className={`px-4 py-2.5 text-xs font-medium border-b-2 transition-all -mb-px ${
+              className={`px-3 sm:px-4 py-2.5 text-xs font-medium border-b-2 transition-all -mb-px whitespace-nowrap ${
                 tab === id ? "border-dawn text-dawn" : "border-transparent text-text-muted hover:text-text-secondary"
               }`}
             >
@@ -170,7 +170,7 @@ export default function MemoryPage() {
           ))}
         </div>
 
-        <div className="flex-1 overflow-y-auto px-6 py-4">
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4">
           {tab === "review" && (
             <>
               {loading ? (
@@ -187,7 +187,7 @@ export default function MemoryPage() {
                   <p className="text-text-secondary text-xs mb-4">
                     These facts were auto-extracted from conversations. Approve to add to the knowledge graph, reject to discard.
                   </p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {pending.map((node) => (
                       <NodeCard key={node.id} node={node} showReviewActions onApprove={handleApprove} onReject={handleReject} />
                     ))}
@@ -217,7 +217,7 @@ export default function MemoryPage() {
                 onClick={() => fileInputRef.current?.click()}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={handleFileDrop}
-                className={`border-2 border-dashed rounded-xl px-6 py-10 text-center cursor-pointer transition-all ${
+                className={`border-2 border-dashed rounded-xl px-4 sm:px-6 py-8 sm:py-10 text-center cursor-pointer transition-all ${
                   file && detectedType
                     ? `${detectedType.border.replace("border-", "border-")} ${detectedType.bg}`
                     : "border-rim hover:border-dawn/30 hover:bg-elevated/30"
@@ -239,15 +239,15 @@ export default function MemoryPage() {
 
                 {file && detectedType ? (
                   <div className="flex flex-col items-center gap-3">
-                    <FileText size={28} className={detectedType.color} />
+                    <FileText size={24} className={detectedType.color} />
                     <div className="text-center">
-                      <p className="text-text-primary text-sm font-medium">{file.name}</p>
+                      <p className="text-text-primary text-sm font-medium break-all">{file.name}</p>
                       <p className="text-text-muted text-xs mt-0.5">{(file.size / 1024).toFixed(0)} KB</p>
                     </div>
                     <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-mono ${detectedType.color} ${detectedType.bg} ${detectedType.border}`}>
                       <span className="font-semibold">{detectedType.label} detected</span>
                       <span className="text-2xs opacity-70">·</span>
-                      <span className="text-2xs opacity-70">{detectedType.desc}</span>
+                      <span className="text-2xs opacity-70 hidden sm:inline">{detectedType.desc}</span>
                     </div>
                     <button
                       onClick={(e) => { e.stopPropagation(); setFile(null); setFileTitle(""); setUploadMsg(null); }}
@@ -258,7 +258,7 @@ export default function MemoryPage() {
                   </div>
                 ) : (
                   <div className="flex flex-col items-center gap-2">
-                    <FileUp size={28} className="text-text-muted" />
+                    <FileUp size={24} className="text-text-muted" />
                     <p className="text-text-secondary text-sm">Drop a file here or click to browse</p>
                     <p className="text-text-muted text-xs">PDF · MD · CSV · XLSX · SVG</p>
                   </div>
@@ -300,7 +300,7 @@ export default function MemoryPage() {
               <button
                 onClick={handleFileUpload}
                 disabled={!file || uploading}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-dawn/90 hover:bg-dawn text-white text-sm font-medium disabled:opacity-40 transition-all"
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-dawn/90 hover:bg-dawn text-white text-sm font-medium disabled:opacity-40 transition-all w-full sm:w-auto justify-center"
               >
                 <Upload size={14} />
                 {uploading ? "Uploading..." : "Ingest File"}
@@ -315,7 +315,7 @@ export default function MemoryPage() {
                   <button
                     key={t}
                     onClick={() => setIngestType(t)}
-                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-sm transition-all ${
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-sm transition-all flex-1 sm:flex-none justify-center ${
                       ingestType === t
                         ? "bg-dawn/10 border-dawn/40 text-dawn"
                         : "bg-surface border-rim text-text-muted hover:text-text-secondary"
@@ -377,7 +377,7 @@ export default function MemoryPage() {
               <button
                 onClick={handleIngest}
                 disabled={ingesting || (ingestType === "repo" ? !repoPath || !repoName : !docTitle || !docContent)}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-dawn/90 hover:bg-dawn text-white text-sm font-medium disabled:opacity-40 transition-all"
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-dawn/90 hover:bg-dawn text-white text-sm font-medium disabled:opacity-40 transition-all w-full sm:w-auto justify-center"
               >
                 <Upload size={14} />
                 {ingesting ? "Queuing..." : "Start Ingestion"}
@@ -393,15 +393,15 @@ export default function MemoryPage() {
                 log.map((entry) => (
                   <div key={entry.id} className={`bg-surface border rounded-xl px-4 py-3 ${entry.status === "success" ? "border-rim" : "border-ember/30"}`}>
                     <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-2xs font-mono px-1.5 py-0.5 rounded border ${
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className={`text-2xs font-mono px-1.5 py-0.5 rounded border flex-shrink-0 ${
                           entry.status === "success"
                             ? "text-success bg-success/10 border-success/20"
                             : "text-ember bg-ember/10 border-ember/20"
                         }`}>{entry.status}</span>
-                        <span className="text-text-secondary text-xs font-mono">{entry.source}</span>
+                        <span className="text-text-secondary text-xs font-mono truncate">{entry.source}</span>
                       </div>
-                      <span className="text-text-muted text-2xs font-mono">{new Date(entry.ingested_at).toLocaleString()}</span>
+                      <span className="text-text-muted text-2xs font-mono flex-shrink-0">{new Date(entry.ingested_at).toLocaleString()}</span>
                     </div>
                     <p className="text-text-muted text-xs font-mono mt-1 truncate">{entry.source_ref}</p>
                     {entry.status === "success" && (

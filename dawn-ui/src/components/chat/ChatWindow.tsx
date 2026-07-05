@@ -74,7 +74,7 @@ export default function ChatWindow() {
   const sessionId = useRef<string | undefined>(undefined);
   const prevSessionIdRef = useRef<string | null>(null);
 
-  // ── Load messages when session ID changes ──────────────────────────
+  // ── Load messages when session ID changes ──────────────────────────────
   useEffect(() => {
     const sid = sessionIdFromUrl;
 
@@ -378,7 +378,7 @@ export default function ChatWindow() {
   return (
     <div className="flex flex-col h-full">
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+      <div className="flex-1 overflow-y-auto px-3 sm:px-4 md:px-6 py-4 sm:py-6 space-y-4 sm:space-y-5">
         {loadingSession ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-text-muted text-sm">Loading conversation...</div>
@@ -390,12 +390,12 @@ export default function ChatWindow() {
             {messages.map((msg) => (
               <div key={msg.id}>
                 {msg.trace && msg.trace.length > 0 && (
-                  <div className="ml-12 mb-1">
+                  <div className="ml-0 sm:ml-12 mb-1">
                     <AgentTraceIndicator trace={msg.trace} />
                   </div>
                 )}
                 {msg.warning && (
-                  <div className="ml-12 mb-1">
+                  <div className="ml-0 sm:ml-12 mb-1">
                     <AgentWarningBanner warning={msg.warning} />
                   </div>
                 )}
@@ -407,7 +407,7 @@ export default function ChatWindow() {
             {isStreaming && (
               <div>
                 {mode === "agent" && (
-                  <div className="ml-12 mb-1">
+                  <div className="ml-0 sm:ml-12 mb-1">
                     <AgentTraceIndicator
                       trace={streamingTrace}
                       thinking={thinkingState}
@@ -441,64 +441,64 @@ export default function ChatWindow() {
       </div>
 
       {/* Input bar */}
-      <div className="border-t border-rim px-4 pb-4 pt-3">
+      <div className="border-t border-rim px-3 sm:px-4 pb-3 sm:pb-4 pt-2 sm:pt-3">
         {/* Mode toggle + actions */}
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-2 sm:mb-3">
           <div className="inline-flex items-center gap-0.5 p-0.5 rounded-lg bg-elevated/60 border border-rim">
             <button
               onClick={() => !isStreaming && setMode("chat")}
               disabled={isStreaming}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all disabled:opacity-50 ${
+              className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-md text-xs font-medium transition-all disabled:opacity-50 ${
                 mode === "chat"
                   ? "bg-dawn/90 text-white shadow-soft"
                   : "text-text-muted hover:text-text-secondary"
               }`}
             >
               <MessageSquare size={12} />
-              Chat
+              <span className="hidden xs:inline">Chat</span>
             </button>
             <button
               onClick={() => !isStreaming && setMode("agent")}
               disabled={isStreaming}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all disabled:opacity-50 ${
+              className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-md text-xs font-medium transition-all disabled:opacity-50 ${
                 mode === "agent"
                   ? "bg-dawn/90 text-white shadow-soft"
                   : "text-text-muted hover:text-text-secondary"
               }`}
             >
               <Bot size={12} />
-              Agent
+              <span className="hidden xs:inline">Agent</span>
             </button>
           </div>
 
           <div className="flex items-center gap-1">
             <button
               onClick={handleNewChat}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all text-xs"
+              className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all text-xs"
               title="New chat"
             >
               <Plus size={12} />
-              New
+              <span className="hidden xs:inline">New</span>
             </button>
             {messages.length > 0 && (
               <button
                 onClick={() => setMessages([])}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all text-xs"
+                className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all text-xs"
               >
                 <RotateCcw size={12} />
-                Clear
+                <span className="hidden xs:inline">Clear</span>
               </button>
             )}
             <Link
               href="/settings"
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all text-xs"
+              className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all text-xs"
             >
               <Settings size={12} />
             </Link>
           </div>
         </div>
 
-        <div className="flex items-end gap-2 bg-surface border border-rim rounded-xl px-4 py-2.5 input-glow transition-all shadow-soft">
+        <div className="flex items-end gap-2 bg-surface border border-rim rounded-xl px-3 sm:px-4 py-2 sm:py-2.5 input-glow transition-all shadow-soft">
           <textarea
             ref={textareaRef}
             value={input}
@@ -521,7 +521,7 @@ export default function ChatWindow() {
             <Send size={13} />
           </button>
         </div>
-        <p className="text-text-muted text-2xs mt-1.5 px-1">
+        <p className="text-text-muted text-2xs mt-1.5 px-1 hidden sm:block">
           {mode === "agent"
             ? "Shift+Enter for new line · Agent mode can read/write files, use git, and search the web"
             : "Shift+Enter for new line · DAWN searches your knowledge graph before answering"}
@@ -550,18 +550,18 @@ function EmptyState({ mode }: { mode: ChatMode }) {
     mode === "agent" ? agentSuggestions : chatSuggestions;
 
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-8 py-16">
+    <div className="flex flex-col items-center justify-center h-full gap-6 sm:gap-8 py-8 sm:py-16 px-3 sm:px-0">
       <div className="text-center">
         {/* Logo mark — larger, more polished */}
-        <div className="relative mx-auto mb-5">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-dawn/15 to-ember/10 border border-dawn/25 flex items-center justify-center shadow-dawn">
-            <Zap size={26} className="text-dawn" strokeWidth={1.5} />
+        <div className="relative mx-auto mb-4 sm:mb-5">
+          <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gradient-to-br from-dawn/15 to-ember/10 border border-dawn/25 flex items-center justify-center shadow-dawn">
+            <Zap size={22} className="text-dawn" strokeWidth={1.5} />
           </div>
-          <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-surface border border-rim flex items-center justify-center">
-            <span className="w-2 h-2 rounded-full bg-success" />
+          <div className="absolute -bottom-1 -right-1 w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-surface border border-rim flex items-center justify-center">
+            <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-success" />
           </div>
         </div>
-        <h2 className="text-text-primary font-semibold text-xl tracking-tight">
+        <h2 className="text-text-primary font-semibold text-lg sm:text-xl tracking-tight">
           DAWN
         </h2>
         <p className="text-text-muted text-sm mt-1">
@@ -593,7 +593,7 @@ function EmptyState({ mode }: { mode: ChatMode }) {
                 );
               }
             }}
-            className="text-left px-4 py-3 rounded-xl bg-surface border border-rim hover:border-dawn/30 text-text-secondary text-sm transition-all hover:text-text-primary hover:shadow-soft hover:bg-surface-hover"
+            className="text-left px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl bg-surface border border-rim hover:border-dawn/30 text-text-secondary text-sm transition-all hover:text-text-primary hover:shadow-soft hover:bg-surface-hover"
           >
             {s}
           </button>
@@ -601,7 +601,7 @@ function EmptyState({ mode }: { mode: ChatMode }) {
       </div>
 
       {/* Horizon decorative line */}
-      <div className="w-32 dawn-line opacity-30" />
+      <div className="w-24 sm:w-32 dawn-line opacity-30" />
     </div>
   );
 }

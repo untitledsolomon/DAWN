@@ -77,12 +77,12 @@ export default function NodesPage() {
     <AppShell>
       <div className="flex flex-col h-full">
         {/* Header */}
-        <header className="flex items-center justify-between px-6 py-3 border-b border-rim flex-shrink-0">
-          <div>
+        <header className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-rim flex-shrink-0">
+          <div className="min-w-0">
             <h1 className="text-text-primary font-semibold text-sm tracking-tight">Knowledge Base</h1>
             <p className="text-text-muted text-2xs">{nodes.length} nodes</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-shrink-0">
             <button
               onClick={load}
               className="w-8 h-8 flex items-center justify-center rounded-lg text-text-muted hover:text-dawn hover:bg-dawn/10 transition-all"
@@ -93,14 +93,14 @@ export default function NodesPage() {
               onClick={() => { setEditingNode(null); setShowForm(true); }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-dawn/90 hover:bg-dawn text-white text-xs font-medium transition-all"
             >
-              <Plus size={13} /> New Node
+              <Plus size={13} /> <span className="hidden xs:inline">New Node</span>
             </button>
           </div>
         </header>
 
         {/* Filters */}
-        <div className="px-6 py-2.5 border-b border-rim flex items-center gap-3 flex-shrink-0 flex-wrap">
-          <div className="flex items-center gap-2 bg-surface border border-rim rounded-lg px-3 py-1.5 flex-1 min-w-48 max-w-sm focus-within:border-dawn/50 transition-colors">
+        <div className="px-4 sm:px-6 py-2.5 border-b border-rim flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-3 flex-shrink-0">
+          <div className="flex items-center gap-2 bg-surface border border-rim rounded-lg px-3 py-1.5 w-full sm:w-auto sm:flex-1 sm:min-w-48 sm:max-w-sm focus-within:border-dawn/50 transition-colors">
             <Search size={13} className="text-text-muted flex-shrink-0" />
             <input
               value={query}
@@ -115,7 +115,7 @@ export default function NodesPage() {
               <button
                 key={t}
                 onClick={() => setTypeFilter(t)}
-                className={`px-2.5 py-1 rounded-lg text-2xs font-mono border transition-all ${
+                className={`px-2 py-1 rounded-lg text-2xs font-mono border transition-all ${
                   typeFilter === t
                     ? "bg-dawn/15 border-dawn/40 text-dawn"
                     : "bg-surface border-rim text-text-muted hover:text-text-secondary"
@@ -129,7 +129,7 @@ export default function NodesPage() {
           <select
             value={tagFilter}
             onChange={(e) => setTagFilter(e.target.value)}
-            className="bg-surface border border-rim rounded-lg px-2.5 py-1.5 text-text-secondary text-xs outline-none focus:border-dawn/50 transition-colors"
+            className="bg-surface border border-rim rounded-lg px-2.5 py-1.5 text-text-secondary text-xs outline-none focus:border-dawn/50 transition-colors w-full sm:w-auto"
           >
             <option value="">All tags</option>
             {tags.map((t) => (
@@ -139,7 +139,7 @@ export default function NodesPage() {
         </div>
 
         {/* Node grid */}
-        <div className="flex-1 overflow-y-auto px-6 py-4">
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4">
           {loading ? (
             <div className="flex items-center justify-center h-48">
               <div className="w-5 h-5 border-2 border-rim border-t-dawn rounded-full animate-spin" />
@@ -155,7 +155,7 @@ export default function NodesPage() {
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
               {nodes.map((node) => (
                 <NodeCard
                   key={node.id}
