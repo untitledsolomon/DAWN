@@ -186,16 +186,27 @@ class IngestionQueue:
     async def _process_memory_file(self, file_bytes, file_type, title, source_ref, tags):
         from ingestion.repo import ingest_document_stream, ingest_sections
         if file_type == "PDF":
-            sample_text = "".join(_peek_pdf_pages(file_bytes, sample_pages=5))
+            # Peek first 5 pages to detect scanned vs text PDF
+            peek_gen = _peek_pdf_pages(file_bytes, sample_pages=5)
+            if peek_gen is None:
+                sample_text = ""
+            else:
+                sample_text = "".join(peek_gen)
+
             if len(sample_text.strip()) < 20:
                 logger.warning(f"PDF '{source_ref}' looks scanned - using OCR.")
-                result = await ingest_document_stream(
-                    title, _iter_ocr_pdf_pages(file_bytes), source_ref, tags,
-                )
+                ocr_gen = _iter_ocr_pdf_pages(file_bytes)
+                if ocr_gen is None:
+                    logger.warning(f"OCR unavailable for '{source_ref}' - falling back to text layer.")
+                    pdf_gen = iter_pdf_pages(file_bytes)
+                    gen = pdf_gen if pdf_gen is not None else iter([])
+                else:
+                    gen = ocr_gen
             else:
-                result = await ingest_document_stream(
-                    title, iter_pdf_pages(file_bytes), source_ref, tags,
-                )
+                pdf_gen = iter_pdf_pages(file_bytes)
+                gen = pdf_gen if pdf_gen is not None else iter([])
+
+            result = await ingest_document_stream(title, gen, source_ref, tags)
         elif file_type == "Word":
             sections = _parse_docx(file_bytes)
             result = await ingest_sections(title, sections, source_ref, tags)
@@ -438,7 +449,12 @@ def _extract_content(file_bytes: bytes, file_type: str, filename: str) -> dict:
 
 
 def _parse_pdf(file_bytes: bytes) -> str:
-    result = "\n\n".join(iter_pdf_pages(file_bytes))
+    pdf_gen = iter_pdf_pages(file_bytes)
+    if pdf_gen is None:
+        logger.warning("PDF text layer unavailable - trying OCR.")
+        ocr_result = _ocr_pdf(file_bytes)
+        return ocr_result
+    result = "\n\n".join(pdf_gen)
     if len(result.strip()) < 20:
         logger.warning(f"PDF text layer near-empty ({len(result.strip())} chars) - trying OCR.")
         ocr_result = _ocr_pdf(file_bytes)
@@ -481,6 +497,11 @@ def _ocr_pdf(file_bytes: bytes, max_pages: int = 300) -> str:
 
 
 def iter_pdf_pages(file_bytes: bytes):
+    try:
+        import fitz
+    except ImportError:
+        logger.warning("fitz (pymupdf) not available - PDF text extraction disabled.")
+        return None
     import fitz
     try:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
@@ -500,12 +521,17 @@ def iter_pdf_pages(file_bytes: bytes):
 
 
 def _peek_pdf_pages(file_bytes: bytes, sample_pages: int = 5):
-    import fitz
+    """Peek at first few pages of a PDF. Returns None if fitz is unavailable or file is corrupt."""
+    try:
+        import fitz
+    except ImportError:
+        logger.warning("fitz (pymupdf) not available - PDF peek disabled.")
+        return None
     try:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
     except Exception:
         logger.warning("Failed to open PDF for peek - file may be corrupt.")
-        return
+        return None
     try:
         for i in range(min(sample_pages, len(doc))):
             text = doc[i].get_text("text")
@@ -516,18 +542,19 @@ def _peek_pdf_pages(file_bytes: bytes, sample_pages: int = 5):
 
 
 def _iter_ocr_pdf_pages(file_bytes: bytes, max_pages: int = 5000):
+    """OCR a PDF page-by-page. Returns None if OCR deps are unavailable or file is corrupt."""
     try:
         import fitz, pytesseract
         from PIL import Image
     except ImportError:
         logger.warning("OCR fallback unavailable.")
-        return
+        return None
     _ensure_tesseract_configured()
     try:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
     except Exception:
         logger.warning("Failed to open PDF for OCR streaming - file may be corrupt.")
-        return
+        return None
     total_pages = len(doc)
     pages_to_process = min(total_pages, max_pages)
     try:
