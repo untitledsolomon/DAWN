@@ -21,16 +21,26 @@ TEXT_EXTENSIONS = {
     ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".c", ".cpp",
     ".h", ".hpp", ".rb", ".php", ".sh", ".md", ".txt", ".json", ".yaml", ".yml",
     ".toml", ".cfg", ".ini", ".sql", ".html", ".css", ".scss",
+    ".pl", ".pm", ".lua", ".r", ".swift", ".kt", ".scala", ".elm", ".hs",
+    ".vue", ".svelte", ".astro", ".ejs", ".hbs", ".pug",
+    ".env", ".properties", ".graphql", ".proto",
+    ".mdx", ".rst", ".adoc", ".tex", ".bib",
+    ".bat", ".ps1", ".psm1", ".fish", ".zsh", ".bash",
+    ".cmake", ".mk", "Makefile", "Dockerfile", ".gradle", ".sbt",
+    ".xml", ".svg", ".tex", ".sty", ".cls",
 }
 
 CODE_EXTENSIONS = {
     ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".c", ".cpp",
     ".h", ".hpp", ".rb", ".php", ".sh", ".sql",
+    ".ps1", ".psm1", ".bash", ".zsh", ".fish",
+    ".graphql", ".proto",
 }
 
 SKIP_DIRS = {
     "node_modules", "__pycache__", ".git", "venv", "env", ".venv",
     "dist", "build", ".next", "target", ".idea", ".vscode", "coverage",
+    ".terraform", ".serverless", ".cache", ".npm", ".yarn",
 }
 
 MAX_FILE_BYTES = 500_000

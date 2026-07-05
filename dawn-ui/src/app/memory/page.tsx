@@ -232,7 +232,7 @@ export default function MemoryPage() {
                     const f = e.target.files?.[0];
                     if (f) {
                       if (detectType(f.name)) setFileAndTitle(f);
-                      else setUploadMsg({ ok: false, text: `Unsupported file type. Supported: PDF, MD, CSV, XLSX, SVG` });
+                      else setUploadMsg({ ok: false, text: `Unsupported file type. Supported: PDF, MD, CSV, XLSX, DOCX, PPTX, XML, YAML, ODS, ODT, ODP, HTML, RTF, JSON, EPUB, TXT, LOG, INI, CFG` });
                     }
                   }}
                 />
