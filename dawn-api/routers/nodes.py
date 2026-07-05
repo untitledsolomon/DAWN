@@ -12,7 +12,7 @@ def verify_key(x_api_key: Optional[str] = Header(None)):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
-# ── Schema ────────────────────────────────────────────────────────────────────
+# ── Schema ──────────────────────────────────────────────────────────────────
 
 class NodeCreate(BaseModel):
     title: str
@@ -40,7 +40,7 @@ class EdgeCreate(BaseModel):
     note: Optional[str] = None
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+# ── Endpoints ───────────────────────────────────────────────────────────────
 
 @router.get("/")
 async def list_nodes(
@@ -52,6 +52,18 @@ async def list_nodes(
     _: None = Depends(verify_key),
 ):
     return await db.list_nodes(status=status, node_type=type, tag=tag, limit=limit, offset=offset)
+
+
+@router.get("/count")
+async def count_nodes(
+    status: str = Query("active"),
+    type: Optional[str] = Query(None),
+    tag: Optional[str] = Query(None),
+    _: None = Depends(verify_key),
+):
+    """Return the total number of nodes matching the given filters."""
+    total = await db.count_nodes(status=status, node_type=type, tag=tag)
+    return {"total": total}
 
 
 @router.post("/")
@@ -128,7 +140,7 @@ async def delete_node(node_id: str, _: None = Depends(verify_key)):
     return {"deleted": node_id}
 
 
-# ── Edges ─────────────────────────────────────────────────────────────────────
+# ── Edges ───────────────────────────────────────────────────────────────────
 
 @router.post("/edges/")
 async def create_edge(payload: EdgeCreate, _: None = Depends(verify_key)):
@@ -141,7 +153,7 @@ async def delete_edge(edge_id: str, _: None = Depends(verify_key)):
     return {"deleted": edge_id}
 
 
-# ── Memory review ─────────────────────────────────────────────────────────────
+# ── Memory review ───────────────────────────────────────────────────────────
 
 @router.get("/memory/pending")
 async def get_pending(_: None = Depends(verify_key)):

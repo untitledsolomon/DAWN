@@ -155,3 +155,10 @@ body {
   transform: translateY(0);
   transition: opacity 0.15s ease-out, transform 0.15s ease-out;
 }
+
+/* ── dvh fallback for Android Chrome ─────────────────────────────────────── */
+@supports (height: 100dvh) {
+  .h-dvh-fallback {
+    height: 100dvh;
+  }
+}

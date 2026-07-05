@@ -34,7 +34,7 @@ export default function AppShell({ children }: Props) {
   }, []);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-abyss">
+    <div className="flex h-dvh overflow-hidden bg-abyss">
       {/* Mobile sidebar overlay */}
       {mobileSidebarOpen && (
         <div

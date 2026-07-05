@@ -305,9 +305,41 @@ async def get_failed_ingestions_since(since_timestamp: float) -> list[dict]:
     return res.data or []
 
 
-async def count_nodes(status: str = "active") -> int:
+async def count_nodes(status: str = "active", node_type: Optional[str] = None,
+                       tag: Optional[str] = None) -> int:
+    """Count nodes matching the given filters.
+
+    Uses Supabase count='exact' for accurate counts. Falls back to
+    client-side filtering for tag-based counts (Supabase REST limitation).
+    """
     db = get_db()
-    res = await _async_execute(lambda: db.table("nodes").select("id", count="exact").eq("status", status).execute())
+    q = db.table("nodes").select("id", count="exact").eq("status", status)
+    if node_type:
+        q = q.eq("type", node_type)
+    if tag:
+        # Tag filtering requires a join — fetch IDs and filter client-side
+        res = await _async_execute(lambda: q.execute())
+        total = res.count or 0
+        if total == 0:
+            return 0
+        # Get all matching IDs to filter by tag
+        ids_res = await _async_execute(lambda: (
+            db.table("nodes").select("id").eq("status", status)
+            .execute()
+        ))
+        all_ids = [n["id"] for n in (ids_res.data or [])]
+        if not all_ids:
+            return 0
+        # Get node IDs that have the given tag
+        tag_res = await _async_execute(lambda: (
+            db.table("node_tags")
+            .select("node_id, tags!inner(name)")
+            .eq("tags.name", tag)
+            .in_("node_id", all_ids)
+            .execute()
+        ))
+        return len(tag_res.data or [])
+    res = await _async_execute(lambda: q.execute())
     return res.count or 0
 
 

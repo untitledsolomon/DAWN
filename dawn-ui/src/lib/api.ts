@@ -9,7 +9,7 @@ const headers = () => ({
   "x-api-key": KEY,
 });
 
-// ── Nodes ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── Nodes ──────────────────────────────────────────────────────────────────
 
 export async function listNodes(params?: {
   status?: string;
@@ -28,6 +28,22 @@ export async function listNodes(params?: {
   const res = await fetch(`${BASE}/nodes/?${qs}`, { headers: headers() });
   if (!res.ok) throw new Error(`Failed to list nodes: ${res.status}`);
   return res.json();
+}
+
+export async function countNodes(params?: {
+  status?: string;
+  type?: string;
+  tag?: string;
+}): Promise<number> {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.type) qs.set("type", params.type);
+  if (params?.tag) qs.set("tag", params.tag);
+
+  const res = await fetch(`${BASE}/nodes/count?${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to count nodes: ${res.status}`);
+  const data = await res.json();
+  return data.total ?? 0;
 }
 
 export async function getNode(id: string) {
@@ -75,7 +91,7 @@ export async function getPendingNodes(): Promise<DawnNode[]> {
   return res.json();
 }
 
-// ── Tags ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── Tags ───────────────────────────────────────────────────────────────────
 
 export async function listTags(): Promise<Tag[]> {
   const res = await fetch(`${BASE}/nodes/tags`, { headers: headers() });
@@ -91,7 +107,7 @@ export async function createTag(name: string, description?: string) {
   return res.json();
 }
 
-// ── Edges ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── Edges ──────────────────────────────────────────────────────────────────
 
 export async function createEdge(data: {
   from_node: string;
@@ -108,7 +124,7 @@ export async function createEdge(data: {
   return res.json();
 }
 
-// ── Search ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── Search ─────────────────────────────────────────────────────────────────
 
 export async function searchNodes(q: string, limit = 10): Promise<DawnNode[]> {
   const res = await fetch(`${BASE}/search/?q=${encodeURIComponent(q)}&limit=${limit}`, { headers: headers() });
@@ -120,7 +136,7 @@ export async function traverseNode(nodeId: string, depth = 2) {
   return res.json();
 }
 
-// ── Chat (streaming) ──────────────────────────────────────────────────────────────────────────────────────────────────
+// ── Chat (streaming) ───────────────────────────────────────────────────────
 
 export async function* streamChat(
   message: string,
@@ -163,7 +179,7 @@ export async function* streamChat(
   }
 }
 
-// ── Chat Sessions ─────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── Chat Sessions ──────────────────────────────────────────────────────────
 
 export async function listSessions(): Promise<ChatSession[]> {
   const res = await fetch(`${BASE}/chat/sessions`, { headers: headers() });
@@ -207,7 +223,7 @@ export async function getSessionMessages(sessionId: string): Promise<SessionMess
   return res.json();
 }
 
-// ── Settings ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── Settings ───────────────────────────────────────────────────────────────
 
 export async function getSettings(): Promise<AppSettings> {
   const res = await fetch(`${BASE}/settings`, { headers: headers() });
@@ -224,7 +240,7 @@ export async function updateSetting(key: string, value: unknown): Promise<void> 
   if (!res.ok) throw new Error(`Failed to update setting: ${res.status}`);
 }
 
-// ── Notifications ─────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── Notifications ──────────────────────────────────────────────────────────
 
 export async function getNotificationPrefs(): Promise<NotificationPrefs> {
   const res = await fetch(`${BASE}/notifications`, { headers: headers() });
@@ -241,7 +257,7 @@ export async function updateNotificationPrefs(prefs: Partial<NotificationPrefs>)
   if (!res.ok) throw new Error(`Failed to update notification prefs: ${res.status}`);
 }
 
-// ── Agent Logs ────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── Agent Logs ─────────────────────────────────────────────────────────────
 
 export async function getAgentLogs(limit = 50, statusFilter?: string): Promise<AgentLogEntry[]> {
   const qs = new URLSearchParams();
@@ -258,7 +274,7 @@ export async function getAgentLog(logId: string): Promise<AgentLogEntry> {
   return res.json();
 }
 
-// ── Ingestion ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── Ingestion ──────────────────────────────────────────────────────────────
 
 export async function ingestRepo(repoPath: string, repoName: string, tags: string[] = []) {
   const res = await fetch(`${BASE}/ingest/repo`, {
@@ -302,7 +318,7 @@ export async function getIngestionLog(): Promise<IngestionLog[]> {
   return res.json();
 }
 
-// ── Health ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── Health ─────────────────────────────────────────────────────────────────
 
 export async function checkHealth() {
   try {
@@ -313,7 +329,7 @@ export async function checkHealth() {
   }
 }
 
-// ── v3.0: SSH Hosts ───────────────────────────────────────────────────────────────────────────────────────────────────
+// ── v3.0: SSH Hosts ────────────────────────────────────────────────────────
 
 export async function listSSHHosts() {
   const res = await fetch(`${BASE}/ssh/hosts`, { headers: headers() });
@@ -331,7 +347,7 @@ export async function deleteSSHHost(id: string) {
   await fetch(`${BASE}/ssh/hosts/${id}`, { method: "DELETE", headers: headers() });
 }
 
-// ── v5.0: OSINT ───────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── v5.0: OSINT ────────────────────────────────────────────────────────────
 
 export async function listOSINTTargets() {
   const res = await fetch(`${BASE}/osint/targets`, { headers: headers() });
@@ -349,7 +365,7 @@ export async function deleteOSINTTarget(id: string) {
   await fetch(`${BASE}/osint/targets/${id}`, { method: "DELETE", headers: headers() });
 }
 
-// ── v6.0: Pentesting ──────────────────────────────────────────────────────────────────────────────────────────────────
+// ── v6.0: Pentesting ───────────────────────────────────────────────────────
 
 export async function listPentestTargets() {
   const res = await fetch(`${BASE}/pentest/targets`, { headers: headers() });
@@ -364,7 +380,7 @@ export async function listVulnerabilities(severity?: string, status?: string) {
   return res.json();
 }
 
-// ── v10.0: Integrations ───────────────────────────────────────────────────────────────────────────────────────────────
+// ── v10.0: Integrations ────────────────────────────────────────────────────
 
 export async function listIntegrations() {
   const res = await fetch(`${BASE}/integrations`, { headers: headers() });
@@ -376,7 +392,7 @@ export async function syncIntegration(serviceName: string) {
   return res.json();
 }
 
-// ── v13.0: Monitoring ─────────────────────────────────────────────────────────────────────────────────────────────────
+// ── v13.0: Monitoring ──────────────────────────────────────────────────────
 
 export async function getMonitorStatus() {
   const res = await fetch(`${BASE}/monitor/status`, { headers: headers() });
@@ -392,7 +408,7 @@ export async function acknowledgeAlert(eventId: string) {
   await fetch(`${BASE}/alerts/events/${eventId}/acknowledge`, { method: "POST", headers: headers() });
 }
 
-// ── v7.0: Books ───────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── v7.0: Books ────────────────────────────────────────────────────────────
 
 export async function listBooks(category?: string) {
   const qs = category ? `?category=${category}` : "";
@@ -412,7 +428,7 @@ export async function ingestBook(bookId: string) {
   return res.json();
 }
 
-// ── v16.0: Agent Tasks ────────────────────────────────────────────────────────────────────────────────────────────────
+// ── v16.0: Agent Tasks ─────────────────────────────────────────────────────
 
 export async function listAgentTasks(status?: string) {
   const qs = status ? `?status=${status}` : "";
