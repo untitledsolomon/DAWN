@@ -17,7 +17,7 @@ from routers import (
     mcp, audit, bi,
     multimodal, data_analysis, documents, email, blockchain,
     security, performance, disaster_recovery, ai_models, dev_experience,
-    community, edge_iot, agi,
+    community, edge_iot, agi, self_diagnosis,
 )
 
 app = FastAPI(
@@ -111,6 +111,9 @@ app.include_router(edge_iot.router, prefix="", tags=["edge-iot"])
 
 # ─── v29.0 — AGI Foundations ─────────────────────────────────────────────────
 app.include_router(agi.router, prefix="", tags=["agi"])
+
+# ─── v30.0 — Self-Diagnosis & Improvement Engine ─────────────────────────────
+app.include_router(self_diagnosis.router, prefix="", tags=["diagnosis"])
 
 
 @app.get("/health")
