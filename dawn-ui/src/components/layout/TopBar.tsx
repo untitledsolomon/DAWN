@@ -22,17 +22,18 @@ export default function TopBar({ onToggleSidebar, onToggleMobileSidebar, mobileS
   const page = PAGE_TITLES[path] || { title: "DAWN", subtitle: "Digital AI Working Network" };
 
   return (
-    <header className="flex-shrink-0 bg-surface border-b border-rim">
+    <header className="flex-shrink-0 bg-surface border-b border-rim relative z-50">
       <div className="dawn-line" />
       <div className="flex items-center justify-between px-3 sm:px-4 py-2">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           {/* Mobile hamburger */}
           <button
             onClick={onToggleMobileSidebar}
-            className="md:hidden w-7 h-7 flex items-center justify-center rounded-lg text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all flex-shrink-0"
+            className="md:hidden w-8 h-8 flex items-center justify-center rounded-lg text-text-primary hover:text-dawn hover:bg-dawn/10 transition-all active:scale-95 flex-shrink-0"
             title={mobileSidebarOpen ? "Close sidebar" : "Open sidebar"}
+            aria-label={mobileSidebarOpen ? "Close sidebar" : "Open sidebar"}
           >
-            {mobileSidebarOpen ? <X size={14} /> : <Menu size={14} />}
+            {mobileSidebarOpen ? <X size={15} /> : <Menu size={15} />}
           </button>
 
           {/* Desktop collapse button */}
