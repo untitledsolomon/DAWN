@@ -7,6 +7,8 @@ and a persistent job queue with status tracking.
 Supports streaming ingestion for files up to 20GB+ - files are processed
 in chunks rather than loaded entirely into memory. Scanned PDFs are OCR'd
 page-by-page with configurable page limits.
+
+v2.0 — Added auto-tagging (sentence-transformers) and multi-file/zip upload.
 """
 from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Form
 from pydantic import BaseModel
@@ -193,7 +195,6 @@ class IngestionQueue:
     async def _process_memory_file(self, file_bytes, file_type, title, source_ref, tags):
         from ingestion.repo import ingest_document_stream, ingest_sections
         if file_type == "PDF":
-            # Peek first 5 pages to detect scanned vs text PDF
             peek_gen = _peek_pdf_pages(file_bytes, sample_pages=5)
             if peek_gen is None:
                 sample_text = ""
@@ -307,6 +308,120 @@ async def get_job_status(job_id: str, _: None = Depends(verify_key)):
     }
 
 
+# ─── Auto-Tagging ──────────────────────────────────────────────────────────────
+# Uses the same sentence-transformers model (all-MiniLM-L6-v2) already loaded
+# by llm/embeddings.py to classify document content against known tags.
+# No extra dependencies, no API calls, runs on CPU.
+
+_AUTO_TAG_CACHE = {"model": None, "tag_embeddings": {}, "tag_defs": {}}
+
+# Built-in tag descriptions used when no description exists in the DB yet.
+# These help the model distinguish between tags semantically.
+_TAG_DESCRIPTIONS = {
+    "crm": "Customer relationship management, sales, leads, contacts, deals",
+    "payroll": "Payroll processing, salary, employee payments, PAYE, NSSF",
+    "tax": "Tax compliance, VAT, income tax, URA, filing, deductions",
+    "trading": "Financial trading, forex, stocks, algorithmic trading, MT5",
+    "code": "Source code, programming, software development, scripts",
+    "fashion": "Fashion, clothing, apparel, design, luxury brand, atelier",
+    "business": "Business operations, strategy, SME, company management",
+    "finance": "Finance, accounting, budgeting, financial reporting",
+    "legal": "Legal, compliance, contracts, regulations, policy",
+    "education": "Education, training, learning, documentation, guide",
+    "health": "Health, medical, wellness, safety",
+    "technology": "Technology, IT, infrastructure, systems, software",
+    "marketing": "Marketing, advertising, social media, campaigns, branding",
+    "hr": "Human resources, recruitment, employee management, staffing",
+    "operations": "Operations, logistics, supply chain, processes",
+}
+
+
+async def _auto_tag_content(content: str, title: str = "", top_n: int = 3, threshold: float = 0.35) -> list[str]:
+    """Auto-tag document content using semantic similarity against known tags.
+
+    Uses the existing sentence-transformers model. Returns up to `top_n` tag
+    names whose embedding cosine similarity exceeds `threshold`. Falls back
+    to ["uncategorized"] if nothing clears the bar.
+    """
+    global _AUTO_TAG_CACHE
+
+    # Build the text to classify
+    text = f"{title}\n\n{content}" if title else content
+    text = text.strip()
+    if not text:
+        return ["uncategorized"]
+
+    # Lazy-load the model (reuses the singleton from llm/embeddings)
+    if _AUTO_TAG_CACHE["model"] is None:
+        try:
+            from llm.embeddings import get_embedding_model
+            _AUTO_TAG_CACHE["model"] = get_embedding_model()
+        except Exception as e:
+            logger.warning(f"Auto-tagging unavailable (model load failed): {e}")
+            return ["uncategorized"]
+
+    model = _AUTO_TAG_CACHE["model"]
+
+    # Refresh tag definitions from DB (cached per call, not per document)
+    try:
+        all_tags = await db.get_all_tags()
+    except Exception:
+        all_tags = []
+
+    # Build tag -> description map
+    tag_defs = {}
+    for t in all_tags:
+        name = t.get("name", "").lower().strip()
+        desc = t.get("description") or _TAG_DESCRIPTIONS.get(name, "")
+        if name:
+            tag_defs[name] = desc
+
+    # If no tags exist yet, create a basic set
+    if not tag_defs:
+        tag_defs = {k: v for k, v in _TAG_DESCRIPTIONS.items()}
+
+    # Compute tag embeddings (cached globally, refreshed if new tags appear)
+    cache_key = frozenset(tag_defs.keys())
+    if _AUTO_TAG_CACHE.get("cache_key") != cache_key:
+        tag_texts = [f"{name}: {desc}" if desc else name for name, desc in tag_defs.items()]
+        try:
+            tag_vecs = model.encode(tag_texts, show_progress_bar=False)
+            _AUTO_TAG_CACHE["tag_embeddings"] = {
+                name: vec for name, vec in zip(tag_defs.keys(), tag_vecs)
+            }
+            _AUTO_TAG_CACHE["cache_key"] = cache_key
+        except Exception as e:
+            logger.error(f"Auto-tag embedding failed: {e}")
+            return ["uncategorized"]
+
+    # Embed the document content
+    try:
+        doc_vec = model.encode(text[:2000], show_progress_bar=False)
+    except Exception as e:
+        logger.error(f"Auto-tag encoding failed: {e}")
+        return ["uncategorized"]
+
+    # Compute cosine similarities
+    import numpy as np
+    doc_norm = doc_vec / (np.linalg.norm(doc_vec) + 1e-10)
+    scores = []
+    for tag_name, tag_vec in _AUTO_TAG_CACHE["tag_embeddings"].items():
+        tag_norm = tag_vec / (np.linalg.norm(tag_vec) + 1e-10)
+        sim = float(np.dot(doc_norm, tag_norm))
+        scores.append((sim, tag_name))
+
+    # Sort descending, filter by threshold
+    scores.sort(key=lambda x: -x[0])
+    matched = [name for score, name in scores if score >= threshold][:top_n]
+
+    if not matched:
+        return ["uncategorized"]
+
+    return matched
+
+
+# ─── Single File Upload ────────────────────────────────────────────────────────
+
 @router.post("/file")
 async def ingest_file(
     file: UploadFile = File(...),
@@ -342,11 +457,9 @@ async def ingest_file(
         zip_error = _check_zip_safety(full_check_bytes)
         if zip_error:
             raise HTTPException(status_code=422, detail=zip_error)
-        # Reconstruct full bytes
         file_bytes = full_check_bytes
         total_size = len(file_bytes)
     else:
-        # Read remaining
         remaining = await file.read()
         file_bytes = header_bytes + remaining
         total_size = len(file_bytes)
@@ -354,6 +467,13 @@ async def ingest_file(
     if total_size > _MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413,
             detail=f"File is {total_size / 1e9:.2f}GB, exceeds {_MAX_UPLOAD_BYTES // (1024*1024*1024)}GB limit.")
+
+    # ── Auto-tag if no tags provided ──
+    if not tag_list:
+        # Extract a preview of the content for classification
+        preview = _extract_preview(file_bytes, file_type, filename)
+        tag_list = await _auto_tag_content(preview, doc_title)
+        logger.info(f"Auto-tagged '{filename}' as: {tag_list}")
 
     # For files > streaming threshold, write to temp file
     temp_path = None
@@ -374,10 +494,287 @@ async def ingest_file(
     return {
         "status": "queued", "job_id": job.id, "title": doc_title,
         "file_type": file_type, "filename": filename,
+        "tags": tag_list,
         "size_mb": total_size / 1e6,
         "note": f"File ({total_size / 1e6:.1f}MB) queued for ingestion." if total_size > _STREAMING_THRESHOLD_BYTES else None,
     }
 
+
+# ─── Multi-File / Zip Upload ───────────────────────────────────────────────────
+
+@router.post("/files")
+async def ingest_files(
+    files: list[UploadFile] = File(...),
+    tags: str = Form(""),
+    x_api_key: Optional[str] = Header(None),
+):
+    """Upload multiple files and/or zip archives at once.
+
+    Accepts:
+    - Multiple individual files (any supported type)
+    - .zip archives (extracted automatically, each supported file ingested)
+    - A mix of both
+
+    Returns a summary with job IDs for each file.
+    """
+    if x_api_key != settings.dawn_api_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    global_tags = [t.strip() for t in tags.split(",") if t.strip()]
+    jobs = []
+    errors = []
+
+    for file in files:
+        filename = file.filename or ""
+        if not filename:
+            continue
+
+        ext = os.path.splitext(filename.lower())[1]
+
+        # ── Zip archive handling ──
+        if ext == ".zip":
+            try:
+                raw_bytes = await file.read()
+                if not raw_bytes:
+                    errors.append({"file": filename, "error": "Empty zip file"})
+                    continue
+                zip_jobs, zip_errors = await _process_zip_upload(
+                    raw_bytes, filename, global_tags
+                )
+                jobs.extend(zip_jobs)
+                errors.extend(zip_errors)
+            except Exception as e:
+                errors.append({"file": filename, "error": f"Zip processing failed: {str(e)}"})
+            continue
+
+        # ── Individual file handling ──
+        file_type = detect_file_type(filename)
+        if not file_type:
+            errors.append({"file": filename, "error": f"Unsupported file type '{ext}'"})
+            continue
+
+        doc_title = os.path.splitext(filename)[0]
+        tag_list = list(global_tags)  # copy
+
+        # Read the file
+        file_bytes = await file.read()
+        if not file_bytes:
+            errors.append({"file": filename, "error": "Empty file"})
+            continue
+
+        total_size = len(file_bytes)
+        if total_size > _MAX_UPLOAD_BYTES:
+            errors.append({"file": filename, "error": f"File exceeds size limit"})
+            continue
+
+        # Quick sanity check
+        if not _quick_sanity_check(file_bytes[:8192], file_type):
+            errors.append({"file": filename, "error": f"File does not look like a valid {file_type}"})
+            continue
+
+        # Auto-tag if no global tags provided
+        if not tag_list:
+            preview = _extract_preview(file_bytes, file_type, filename)
+            tag_list = await _auto_tag_content(preview, doc_title)
+            logger.info(f"Auto-tagged '{filename}' as: {tag_list}")
+
+        # Queue the job
+        job = IngestionJob(id=str(uuid.uuid4()), type="file",
+            params={"title": doc_title, "source_ref": filename, "file_type": file_type,
+                    "file_bytes": file_bytes, "tags": tag_list})
+        await ingestion_queue.enqueue(job)
+        jobs.append({
+            "job_id": job.id, "filename": filename, "file_type": file_type,
+            "tags": tag_list, "size_mb": total_size / 1e6,
+        })
+
+    return {
+        "status": "complete",
+        "total_files": len(jobs) + len(errors),
+        "queued": len(jobs),
+        "errors": len(errors),
+        "jobs": jobs,
+        "error_details": errors if errors else None,
+    }
+
+
+async def _process_zip_upload(
+    zip_bytes: bytes, zip_filename: str, global_tags: list[str]
+) -> tuple[list[dict], list[dict]]:
+    """Extract a zip archive and queue ingestion jobs for each supported file.
+
+    Returns (jobs_list, errors_list).
+    """
+    jobs = []
+    errors = []
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+    except zipfile.BadZipFile:
+        errors.append({"file": zip_filename, "error": "Invalid zip file"})
+        return jobs, errors
+
+    # Safety checks
+    total_uncompressed = 0
+    for info in zf.infolist():
+        total_uncompressed += info.file_size
+        if info.file_size > _MAX_ZIP_UNCOMPRESSED_BYTES:
+            errors.append({"file": info.filename, "error": "File too large in zip"})
+            continue
+        if info.compress_size > 0:
+            ratio = info.file_size / max(info.compress_size, 1)
+            if ratio > _MAX_ZIP_COMPRESSION_RATIO and info.file_size > 10_000_000:
+                errors.append({"file": info.filename, "error": "Suspicious compression ratio"})
+                continue
+
+    if total_uncompressed > _MAX_ZIP_UNCOMPRESSED_BYTES:
+        errors.append({"file": zip_filename, "error": "Zip expands to over 500MB"})
+        zf.close()
+        return jobs, errors
+
+    # Extract and process each file
+    for info in zf.infolist():
+        fname = info.filename
+
+        # Skip directories, macOS metadata, hidden files
+        if fname.endswith("/"):
+            continue
+        if fname.startswith("__MACOSX/") or fname.startswith("."):
+            continue
+        if os.path.basename(fname).startswith("."):
+            continue
+
+        ext = os.path.splitext(fname.lower())[1]
+        file_type = SUPPORTED_EXTENSIONS.get(ext)
+        if not file_type:
+            continue
+
+        try:
+            file_bytes = zf.read(info.filename)
+        except Exception as e:
+            errors.append({"file": f"{zip_filename}/{fname}", "error": f"Read failed: {str(e)}"})
+            continue
+
+        if not file_bytes:
+            continue
+
+        doc_title = os.path.splitext(os.path.basename(fname))[0]
+        tag_list = list(global_tags)
+
+        # Auto-tag if no global tags
+        if not tag_list:
+            preview = _extract_preview(file_bytes, file_type, fname)
+            tag_list = await _auto_tag_content(preview, doc_title)
+
+        source_ref = f"{zip_filename}/{fname}"
+        job = IngestionJob(id=str(uuid.uuid4()), type="file",
+            params={"title": doc_title, "source_ref": source_ref, "file_type": file_type,
+                    "file_bytes": file_bytes, "tags": tag_list})
+        await ingestion_queue.enqueue(job)
+        jobs.append({
+            "job_id": job.id, "filename": source_ref, "file_type": file_type,
+            "tags": tag_list, "size_mb": len(file_bytes) / 1e6,
+        })
+
+    zf.close()
+    return jobs, errors
+
+
+# ─── Content Preview Extraction (for auto-tagging) ────────────────────────────
+
+def _extract_preview(file_bytes: bytes, file_type: str, filename: str, max_chars: int = 1000) -> str:
+    """Extract a text preview from a file for auto-tagging classification.
+
+    Uses the same parsers as the full ingestion pipeline but only reads
+    enough to classify the content. Returns plain text (first ~1000 chars).
+    """
+    try:
+        if file_type == "PDF":
+            gen = iter_pdf_pages(file_bytes)
+            if gen:
+                text = " ".join(gen)
+                return text[:max_chars] if text else ""
+            # Try OCR preview
+            ocr = _iter_ocr_pdf_pages(file_bytes, max_pages=3)
+            if ocr:
+                text = " ".join(ocr)
+                return text[:max_chars] if text else ""
+            return ""
+        elif file_type == "Word":
+            sections = _parse_docx(file_bytes)
+            if sections:
+                return (sections[0].get("body", "") or "")[:max_chars]
+            return ""
+        elif file_type == "Markdown":
+            text = file_bytes.decode("utf-8", errors="ignore")
+            return text[:max_chars]
+        elif file_type == "CSV":
+            text = file_bytes.decode("utf-8", errors="replace")
+            return text[:max_chars]
+        elif file_type == "Excel":
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+            texts = []
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                for row in ws.iter_rows(values_only=True, max_row=5):
+                    texts.append(" ".join(str(c) for c in row if c is not None))
+                if texts:
+                    break
+            wb.close()
+            return " ".join(texts)[:max_chars]
+        elif file_type == "PowerPoint":
+            sections = _parse_pptx(file_bytes)
+            if sections:
+                return (sections[0].get("body", "") or "")[:max_chars]
+            return ""
+        elif file_type == "Text":
+            return file_bytes.decode("utf-8", errors="ignore")[:max_chars]
+        elif file_type == "HTML":
+            from html.parser import HTMLParser
+            class _Extractor(HTMLParser):
+                def __init__(self):
+                    super().__init__()
+                    self.parts = []
+                    self._skip = False
+                def handle_starttag(self, tag, attrs):
+                    if tag in ("script", "style"):
+                        self._skip = True
+                def handle_endtag(self, tag):
+                    if tag in ("script", "style"):
+                        self._skip = False
+                def handle_data(self, data):
+                    if not self._skip and data.strip():
+                        self.parts.append(data.strip())
+            parser = _Extractor()
+            parser.feed(file_bytes.decode("utf-8", errors="ignore"))
+            return " ".join(parser.parts)[:max_chars]
+        elif file_type == "JSON":
+            return file_bytes.decode("utf-8", errors="ignore")[:max_chars]
+        elif file_type == "XML":
+            return file_bytes.decode("utf-8", errors="ignore")[:max_chars]
+        elif file_type == "YAML":
+            return file_bytes.decode("utf-8", errors="ignore")[:max_chars]
+        elif file_type == "EPUB":
+            sections = _parse_epub(file_bytes)
+            if sections:
+                return (sections[0].get("body", "") or "")[:max_chars]
+            return ""
+        elif file_type == "SVG":
+            return _parse_svg(file_bytes)[:max_chars]
+        elif file_type == "RTF":
+            from striprtf.striprtf import rtf_to_text
+            return rtf_to_text(file_bytes.decode("utf-8", errors="ignore"))[:max_chars]
+        elif file_type in ("Spreadsheet", "Presentation"):
+            return f"[{file_type} file: {filename}]"[:max_chars]
+    except Exception as e:
+        logger.debug(f"Preview extraction failed for {filename}: {e}")
+        return f"[{file_type} file: {filename}]"
+
+    return f"[{file_type} file: {filename}]"
+
+
+# ─── Stats & Log Endpoints ─────────────────────────────────────────────────────
 
 @router.get("/stats")
 async def ingestion_stats(_: None = Depends(verify_key)):
@@ -399,6 +796,8 @@ async def ingestion_stats(_: None = Depends(verify_key)):
 async def get_log(_: None = Depends(verify_key)):
     return await db.get_ingestion_log()
 
+
+# ─── File Type Detection ───────────────────────────────────────────────────────
 
 def detect_file_type(filename: str) -> Optional[str]:
     ext = os.path.splitext(filename.lower())[1]
@@ -478,6 +877,8 @@ def _extract_content(file_bytes: bytes, file_type: str, filename: str, doc_title
         logger.error(f"Extraction failed for {file_type} ({filename}): {e}")
     return {"text": "", "sections": []}
 
+
+# ─── PDF Parsing ───────────────────────────────────────────────────────────────
 
 def _parse_pdf(file_bytes: bytes) -> str:
     pdf_gen = iter_pdf_pages(file_bytes)
@@ -606,6 +1007,8 @@ def _iter_ocr_pdf_pages(file_bytes: bytes, max_pages: int = 5000):
         yield f"[OCR truncated: {total_pages} pages, only first {max_pages} OCR'd.]"
 
 
+# ─── DOCX Parsing ──────────────────────────────────────────────────────────────
+
 def _parse_docx(file_bytes: bytes) -> list[dict]:
     import docx
     document = docx.Document(io.BytesIO(file_bytes))
@@ -631,7 +1034,6 @@ def _parse_docx(file_bytes: bytes) -> list[dict]:
                 rows_text.append(" | ".join(cells))
         if rows_text:
             sections.append({"title": f"Table {i}", "body": "\n".join(rows_text)})
-    # Extract image alt-text and inline shape descriptions
     for para in document.paragraphs:
         for run in para.runs:
             if run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing'):
@@ -641,6 +1043,8 @@ def _parse_docx(file_bytes: bytes) -> list[dict]:
                         current_lines.append(f"[Image: {desc.text.strip()}]")
     return [s for s in sections if s["body"].strip()]
 
+
+# ─── PPTX Parsing ──────────────────────────────────────────────────────────────
 
 def _parse_pptx(file_bytes: bytes) -> list[dict]:
     """Parse PowerPoint (.pptx) into sections, one per slide."""
@@ -682,6 +1086,8 @@ def _parse_pptx(file_bytes: bytes) -> list[dict]:
             sections.append({"title": title, "body": body})
     return sections
 
+
+# ─── ODP / ODS Parsing ─────────────────────────────────────────────────────────
 
 def _parse_odp(file_bytes: bytes) -> list[dict]:
     """Parse LibreOffice Impress (.odp) into sections."""
@@ -785,6 +1191,8 @@ def _parse_zip_xml_table(file_bytes: bytes, xml_path: str = "content.xml") -> li
     return sections
 
 
+# ─── XML / YAML / TXT / EPUB / HTML / RTF / JSON / MD / SVG Parsing ───────────
+
 def _parse_xml(file_bytes: bytes) -> str:
     """Parse XML into a readable tree structure."""
     try:
@@ -843,7 +1251,6 @@ def _parse_epub(file_bytes: bytes) -> list[dict]:
         def handle_data(self, data):
             if data.strip():
                 self.parts.append(data.strip())
-    # Write to temp file because some ebooklib versions don't support BytesIO
     fd, tmp_path = tempfile.mkstemp(suffix=".epub")
     try:
         with os.fdopen(fd, "wb") as f:
@@ -933,27 +1340,26 @@ def _flush(title: str, lines: list[str], out: list[dict]):
 
 def _table_to_markdown(headers: list[str], rows: list[list], max_rows: int = 100) -> str:
     """Convert tabular data to a markdown table string.
-    
+
     For very large tables, only the first max_rows are included and a
     summary note is appended.
     """
     if not headers or not rows:
         return ""
-    
-    # Build header row
+
     md = "| " + " | ".join(headers) + " |\n"
     md += "| " + " | ".join("---" for _ in headers) + " |\n"
-    
+
     truncated = len(rows) > max_rows
     display_rows = rows[:max_rows]
-    
+
     for row in display_rows:
         cells = [str(c) if c is not None else "" for c in row]
         md += "| " + " | ".join(cells) + " |\n"
-    
+
     if truncated:
         md += f"\n*[Table truncated: {len(rows)} total rows, showing first {max_rows}]*\n"
-    
+
     return md
 
 
@@ -972,25 +1378,23 @@ def _parse_csv(file_bytes: bytes, doc_title: str = "Untitled") -> list[dict]:
     import csv, io as _io
     text = file_bytes.decode("utf-8", errors="replace")
     reader = csv.DictReader(_io.StringIO(text))
-    
+
     rows = list(reader)
     if not rows:
         return []
-    
+
     headers = list(rows[0].keys())
     total_rows = len(rows)
-    
+
     if total_rows > _MAX_SPREADSHEET_ROWS:
         rows = rows[:_MAX_SPREADSHEET_ROWS]
         logger.warning(f"CSV truncated at {_MAX_SPREADSHEET_ROWS} rows")
-    
-    # Build markdown table
+
     md_rows = [[row.get(h, "") for h in headers] for row in rows]
     table_md = _table_to_markdown(headers, md_rows)
-    
-    # Generate summary
+
     summary = _generate_table_summary(doc_title, headers, total_rows)
-    
+
     return [
         {"title": doc_title, "body": summary, "type": "table_summary"},
         {"title": f"{doc_title} - Data", "body": table_md, "type": "table_data"},
@@ -1002,28 +1406,26 @@ def _parse_xlsx(file_bytes: bytes, doc_title: str = "Untitled") -> list[dict]:
     import openpyxl
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
     sections = []
-    
+
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
             continue
-        
+
         headers = [str(h) if h is not None else f"col{i}" for i, h in enumerate(rows[0])]
         data_rows = rows[1:]
         total_rows = len(data_rows)
-        
+
         if total_rows > _MAX_SPREADSHEET_ROWS:
             data_rows = data_rows[:_MAX_SPREADSHEET_ROWS]
             logger.warning(f"XLSX sheet '{sheet_name}' truncated at {_MAX_SPREADSHEET_ROWS} rows")
-        
-        # Build markdown table
+
         md_rows = [[str(c) if c is not None else "" for c in row] for row in data_rows]
         table_md = _table_to_markdown(headers, md_rows)
-        
-        # Generate summary
+
         summary = _generate_table_summary(doc_title, headers, total_rows, sheet_name)
-        
+
         sections.append({
             "title": f"{doc_title} - {sheet_name}",
             "body": summary,
@@ -1034,7 +1436,7 @@ def _parse_xlsx(file_bytes: bytes, doc_title: str = "Untitled") -> list[dict]:
             "body": table_md,
             "type": "table_data",
         })
-    
+
     wb.close()
     return sections
 
