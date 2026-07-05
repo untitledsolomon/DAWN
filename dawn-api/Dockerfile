@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y \
     tesseract-ocr-eng \
     libgl1 \
     libglib2.0-0t64 \
+    nmap \
+    arp-scan \
     && rm -rf /var/lib/apt/lists/*
 
 # Install llama-cpp-python with CPU-only build (no CUDA needed)
