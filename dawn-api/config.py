@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     supabase_service_key: str
 
     # LLM
-    llm_mode: str = "deepseek"  # "deepseek" | "local"
+    llm_mode: str = "deepseek"
 
     # DeepSeek
     deepseek_api_key: Optional[str] = None
@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     # Auth
     dawn_api_key: str = "dev-key"
-    
+
     # Tools
     filesystem_sandbox_root: str = "./sandbox"
     skills_install_root: str = "./installed_skills"
@@ -32,9 +32,9 @@ class Settings(BaseSettings):
     brave_search_api_key: Optional[str] = None
 
     # Auth tiers
-    dawn_api_keys: Optional[str] = None  # JSON: {"sk-owner-xxx": "owner", "sk-app-yyy": "service"}
+    dawn_api_keys: Optional[str] = None
 
-    # v5.0 — OSINT
+    # v5.0 - OSINT
     shodan_api_key: Optional[str] = None
 
     # OCR
@@ -42,6 +42,13 @@ class Settings(BaseSettings):
 
     # CORS
     allowed_origins: str = "http://localhost:3000"
+
+    # Ingestion streaming config
+    max_upload_gb: int = 30
+    streaming_threshold_mb: int = 50
+    max_ocr_pages: int = 5000
+    max_pdf_pages: int = 10000
+    max_spreadsheet_rows: int = 100000
 
     @property
     def origins_list(self) -> list[str]:

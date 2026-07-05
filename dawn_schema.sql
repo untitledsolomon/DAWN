@@ -139,7 +139,9 @@ CREATE TABLE ingestion_log (
 -- ============================================================
 
 -- Fast exact title lookup (entity resolution step 1)
-CREATE UNIQUE INDEX idx_nodes_title_lower ON nodes (LOWER(title));
+-- Per-source_ref unique index so two files with the same name
+-- in different repos don't collide (e.g. two README.md files)
+CREATE UNIQUE INDEX idx_nodes_title_source ON nodes (LOWER(title), COALESCE(source_ref, ''));
 
 -- Trigram index for fuzzy title matching (entity resolution step 2)
 CREATE INDEX idx_nodes_title_trgm ON nodes USING GIN (title gin_trgm_ops);

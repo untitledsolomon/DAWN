@@ -1,23 +1,41 @@
 """
 Memory ingestion: extracts durable facts from a conversation transcript
 and stores them as draft memory nodes for review.
+
+LLM calls are optional — if the LLM is unavailable, memory ingestion
+gracefully degrades to creating a session with no facts rather than
+failing entirely.
 """
 import db.client as db
 from llm.engine import get_engine
 from llm.tools import extract_memory_facts
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 async def ingest_memory(conversation: str, session_source: str = "manual") -> dict:
-    engine = get_engine()
     nodes_created = 0
 
-    facts = await extract_memory_facts(conversation, engine.complete)
+    # Try to extract facts via LLM, but don't fail if LLM is down
+    facts = []
+    try:
+        engine = get_engine()
+        facts = await extract_memory_facts(conversation, engine.complete)
+    except Exception as e:
+        logger.warning(f"Memory fact extraction skipped (LLM unavailable): {e}")
+
     if not facts:
-        return {"nodes_created": 0}
+        # Still create a session record so we know the conversation happened
+        session = await db.create_memory_session(
+            source=session_source,
+            summary=conversation[:200],
+        )
+        return {"nodes_created": 0, "session_id": session.get("id")}
 
     session = await db.create_memory_session(
         source=session_source,
-        summary=conversation[:100],
+        summary=conversation[:200],
     )
 
     all_tags = await db.get_all_tags()
@@ -45,4 +63,4 @@ async def ingest_memory(conversation: str, session_source: str = "manual") -> di
                     all_tags.append(tag)
                 await db.attach_tag(node["id"], tag["id"])
 
-    return {"nodes_created": nodes_created}
+    return {"nodes_created": nodes_created, "session_id": session.get("id")}

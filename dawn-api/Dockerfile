@@ -2,11 +2,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System deps
+# System deps — includes tesseract-ocr for PDF OCR fallback
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     git \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install llama-cpp-python with CPU-only build (no CUDA needed)
