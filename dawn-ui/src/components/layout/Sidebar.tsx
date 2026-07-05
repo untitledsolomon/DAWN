@@ -28,6 +28,7 @@ import {
   HeartPulse,
   BookOpen,
   ListTodo,
+  X as XIcon,
 } from "lucide-react";
 import clsx from "clsx";
 import { listSessions, createSession, deleteSession, updateSession } from "@/lib/api";
@@ -64,9 +65,10 @@ const BUSINESS_NAV: NavItem[] = [
 interface Props {
   collapsed: boolean;
   onToggle: () => void;
+  onMobileClose?: () => void;
 }
 
-export default function Sidebar({ collapsed, onToggle }: Props) {
+export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
   const path = usePathname();
   const router = useRouter();
   const [recentOpen, setRecentOpen] = useState(true);
@@ -109,6 +111,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
       const session = await createSession();
       router.push(`/chat?id=${session.id}`);
       setSessions((prev) => [{ ...session, message_count: 0 }, ...prev]);
+      onMobileClose?.();
     } catch (err) {
       console.error("[Sidebar] Failed to create session:", err);
     }
@@ -171,11 +174,16 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
 
   const isActive = (href: string) => path.startsWith(href);
 
+  const handleNavClick = () => {
+    onMobileClose?.();
+  };
+
   const NavLink = ({ href, icon: Icon, label, badge }: NavItem) => {
     const active = isActive(href);
     return (
       <Link
         href={href}
+        onClick={handleNavClick}
         title={collapsed ? label : undefined}
         className={clsx(
           "flex items-center gap-2.5 rounded-lg transition-all duration-150 group relative",
@@ -242,9 +250,23 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
                 <p className="text-text-muted text-2xs leading-none mt-0.5">Regent Knowledge Layer</p>
               </div>
             </div>
-            <button onClick={onToggle} className="w-6 h-6 flex items-center justify-center rounded-md text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all" title="Collapse sidebar">
-              <PanelLeftClose size={13} />
-            </button>
+            <div className="flex items-center gap-1">
+              {/* Mobile close button */}
+              <button
+                onClick={onMobileClose}
+                className="md:hidden w-6 h-6 flex items-center justify-center rounded-md text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all"
+                title="Close sidebar"
+              >
+                <XIcon size={13} />
+              </button>
+              <button
+                onClick={onToggle}
+                className="hidden md:flex w-6 h-6 items-center justify-center rounded-md text-text-muted hover:text-text-secondary hover:bg-elevated/60 transition-all"
+                title="Collapse sidebar"
+              >
+                <PanelLeftClose size={13} />
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -286,6 +308,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
                   <div key={session.id} className="group relative">
                     <Link
                       href={`/chat?id=${session.id}`}
+                      onClick={handleNavClick}
                       className={clsx(
                         "w-full text-left px-2.5 py-1.5 rounded-lg transition-colors flex items-start justify-between gap-1",
                         currentSessionId === session.id ? "bg-dawn/10 text-dawn" : "hover:bg-elevated/50 text-text-secondary hover:text-text-primary",
@@ -324,7 +347,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
 
       {/* Bottom section */}
       <div className={clsx("border-t border-rim pt-1 pb-2 px-2 flex flex-col gap-0.5 flex-shrink-0", collapsed && "items-center")}>
-        <Link href="/settings" title={collapsed ? "Settings" : undefined}
+        <Link href="/settings" onClick={handleNavClick} title={collapsed ? "Settings" : undefined}
           className={clsx("flex items-center gap-2.5 rounded-lg transition-all duration-150 group relative", collapsed ? "w-10 h-10 justify-center" : "px-2.5 py-2",
             path === "/settings" ? "bg-dawn/10 text-dawn" : "text-text-muted hover:text-text-secondary hover:bg-elevated/60")}>
           <Settings size={16} strokeWidth={path === "/settings" ? 2 : 1.75} />

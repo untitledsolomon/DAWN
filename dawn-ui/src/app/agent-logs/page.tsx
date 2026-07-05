@@ -78,13 +78,13 @@ export default function AgentLogsPage() {
     <AppShell>
       <div className="flex flex-col h-full">
         {/* Header */}
-        <header className="flex items-center justify-between px-6 py-3 border-b border-rim flex-shrink-0">
-          <div>
+        <header className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-rim flex-shrink-0">
+          <div className="min-w-0">
             <h1 className="text-text-primary font-semibold text-sm tracking-tight">Agent Logs</h1>
-            <p className="text-text-muted text-2xs">Monitor agent task executions and tool calls</p>
+            <p className="text-text-muted text-2xs hidden sm:block">Monitor agent task executions and tool calls</p>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-text-muted text-2xs font-mono bg-elevated/50 border border-rim px-2 py-1 rounded-lg">
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <span className="text-text-muted text-2xs font-mono bg-elevated/50 border border-rim px-2 py-1 rounded-lg hidden xs:inline">
               {logs.length} total
             </span>
             <button
@@ -97,12 +97,12 @@ export default function AgentLogsPage() {
         </header>
 
         {/* Filters */}
-        <div className="flex items-center gap-2 px-6 py-2.5 border-b border-rim flex-shrink-0">
+        <div className="flex items-center gap-2 px-4 sm:px-6 py-2.5 border-b border-rim flex-shrink-0 overflow-x-auto">
           {FILTERS.map(({ id, label, count }) => (
             <button
               key={id}
               onClick={() => setFilter(id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all whitespace-nowrap ${
                 filter === id
                   ? "bg-dawn/10 border-dawn/30 text-dawn"
                   : "bg-surface border-rim text-text-muted hover:text-text-secondary"
@@ -119,7 +119,7 @@ export default function AgentLogsPage() {
         </div>
 
         {/* Log entries */}
-        <div className="flex-1 overflow-y-auto px-6 py-4">
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4">
           {loading ? (
             <div className="flex items-center justify-center h-48">
               <div className="w-5 h-5 border-2 border-rim border-t-dawn rounded-full animate-spin" />
@@ -175,16 +175,16 @@ export default function AgentLogsPage() {
                       </div>
 
                       <div className="flex items-center gap-3 flex-shrink-0">
-                        <div className="text-right">
+                        <div className="text-right hidden xs:block">
                           <p className="text-text-muted text-2xs font-mono">{formatDuration(entry.duration_ms)}</p>
                           <p className="text-text-muted text-2xs font-mono">{entry.tokens_used > 0 ? `${entry.tokens_used} tok` : "—"}</p>
                         </div>
-                        <span className="text-text-muted text-2xs font-mono opacity-0 group-hover:opacity-100 transition-opacity">
+                        <span className="text-text-muted text-2xs font-mono opacity-0 group-hover:opacity-100 transition-opacity hidden sm:block">
                           {timeAgo(entry.created_at)}
                         </span>
                         <ChevronDown
                           size={12}
-                          className={`text-text-muted transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                          className={`text-text-muted transition-transform flex-shrink-0 ${isExpanded ? "rotate-180" : ""}`}
                         />
                       </div>
                     </button>
@@ -192,7 +192,7 @@ export default function AgentLogsPage() {
                     {/* Expanded details */}
                     {isExpanded && (
                       <div className="border-t border-rim px-4 py-3 bg-elevated/20 space-y-2">
-                        <div className="grid grid-cols-3 gap-4">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                           <div>
                             <p className="text-text-muted text-2xs font-medium uppercase tracking-wider">Duration</p>
                             <p className="text-text-primary text-xs font-mono mt-0.5">{formatDuration(entry.duration_ms)}</p>
@@ -201,14 +201,14 @@ export default function AgentLogsPage() {
                             <p className="text-text-muted text-2xs font-medium uppercase tracking-wider">Tokens</p>
                             <p className="text-text-primary text-xs font-mono mt-0.5">{entry.tokens_used > 0 ? entry.tokens_used.toLocaleString() : "—"}</p>
                           </div>
-                          <div>
+                          <div className="col-span-2 sm:col-span-1">
                             <p className="text-text-muted text-2xs font-medium uppercase tracking-wider">Model</p>
                             <p className="text-text-primary text-xs font-mono mt-0.5 capitalize">{entry.model || "—"}</p>
                           </div>
                         </div>
 
                         {entry.status === "error" && entry.error_message && (
-                          <div className="mt-2 px-3 py-2 rounded-lg bg-error/5 border border-error/15 text-error text-2xs font-mono">
+                          <div className="mt-2 px-3 py-2 rounded-lg bg-error/5 border border-error/15 text-error text-2xs font-mono break-words">
                             {entry.error_message}
                           </div>
                         )}
