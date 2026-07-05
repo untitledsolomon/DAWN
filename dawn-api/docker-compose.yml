@@ -12,6 +12,16 @@ services:
     volumes:
       # Mount your models directory so the container can access the .gguf file
       - /home/solomon/models:/models:ro
+      # Persistent storage — without these, every redeploy wipes cloned repos,
+      # installed skills, and the scheduler DB since the container filesystem
+      # is ephemeral and gets rebuilt from the image on each deploy.
+      - dawn-sandbox:/app/sandbox
+      - dawn-skills:/app/installed_skills
+      - dawn-lib:/var/lib/dawn
+    cap_add:
+      # arp-scan needs raw socket access to send/receive ARP frames
+      - NET_RAW
+      - NET_ADMIN
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -28,3 +38,8 @@ networks:
   default:
     name: coolify
     external: true
+
+volumes:
+  dawn-sandbox:
+  dawn-skills:
+  dawn-lib:
