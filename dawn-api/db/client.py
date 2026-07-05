@@ -201,11 +201,17 @@ async def rpc_fuzzy_search(query: str, limit: int = 5, threshold: float = 0.2,
                             exclude_types: Optional[list[str]] = None,
                             exclude_tags: Optional[list[str]] = None) -> list[dict]:
     db = get_db()
-    params = {"p_query": query, "p_limit": limit, "p_threshold": threshold}
-    if exclude_types:
-        params["p_exclude_types"] = exclude_types
-    if exclude_tags:
-        params["p_exclude_tags"] = exclude_tags
+    # Always send p_exclude_types explicitly (even as None) so the call
+    # unambiguously matches the 5-arg fuzzy_search signature in Postgres.
+    # Omitting it lets PostgREST match both the legacy 4-arg overload and
+    # the 5-arg one, causing PGRST203 "could not choose the best candidate".
+    params = {
+        "p_query": query,
+        "p_limit": limit,
+        "p_threshold": threshold,
+        "p_exclude_types": exclude_types,
+        "p_exclude_tags": exclude_tags,
+    }
     try:
         res = await _async_execute(lambda: db.rpc("fuzzy_search", params).execute())
         return res.data or []
