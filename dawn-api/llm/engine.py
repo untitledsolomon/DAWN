@@ -48,7 +48,23 @@ When answering:
 - Reference specific nodes when you draw from them.
 - If context is missing or incomplete, say so clearly and answer from general knowledge.
 - For code: write it fully, don't truncate.
-- For reasoning tasks: think step by step but don't narrate the thinking process."""
+- For reasoning tasks: think step by step but don't narrate the thinking process.
+
+SELF-DIAGNOSIS CAPABILITY:
+You have a /diagnosis endpoint that can analyze your own architecture, database state,
+knowledge graph health, ML capabilities, and infrastructure. When asked questions like
+"how to improve DAWN using ML" or "what's wrong with DAWN" or "diagnose yourself",
+call GET /diagnosis?focus=all&include_code_analysis=true to get a structured report
+with concrete, prioritized improvement recommendations. The response includes:
+- Database health (table row counts, empty tables, issues)
+- Knowledge graph health (node counts by type/status, orphan nodes, stale/draft nodes)
+- ML capabilities (what's installed, what's a stub, missing dependencies)
+- Infrastructure (RAM, CPU, GPU, disk, container detection)
+- Prioritized improvement roadmap with effort estimates and dependencies
+- Self-knowledge summary (what DAWN knows vs doesn't know about itself)
+
+For a quick health check, use GET /diagnosis/health which returns status, DB connectivity,
+node count, and chat message count."""
 
 
 class DeepSeekEngine:
@@ -214,7 +230,7 @@ class LocalEngine:
         )
 
 
-# ── Singleton ────────────────────────────────────────────────────────────────
+# ──── Singleton ────────────────────────────────────────────────────────────────────────────────
 
 _engine: Optional[DeepSeekEngine | LocalEngine] = None
 
