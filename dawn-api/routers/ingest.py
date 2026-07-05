@@ -58,6 +58,10 @@ _MAX_SPREADSHEET_ROWS = 100_000
 _MAX_OCR_PAGES = 5000
 _MAX_PDF_PAGES = 10000
 
+# Maximum body size for a single table-data child node.
+# Tables larger than this get split into multiple child nodes.
+_MAX_TABLE_BODY_CHARS = 50_000
+
 
 class IngestionStatus(str, Enum):
     QUEUED = "queued"
@@ -214,7 +218,7 @@ class IngestionQueue:
             sections = _parse_epub(file_bytes)
             result = await ingest_sections(title, sections, source_ref, tags)
         else:
-            extraction = _extract_content(file_bytes, file_type, source_ref)
+            extraction = _extract_content(file_bytes, file_type, source_ref, title)
             if extraction.get("sections"):
                 result = await ingest_sections(title, extraction["sections"], source_ref, tags)
             else:
@@ -419,16 +423,17 @@ def _quick_sanity_check(file_bytes: bytes, file_type: str) -> bool:
         return False
 
 
-def _extract_content(file_bytes: bytes, file_type: str, filename: str) -> dict:
+def _extract_content(file_bytes: bytes, file_type: str, filename: str, doc_title: str = "") -> dict:
+    """Extract content from a file. doc_title is used for table summaries."""
     try:
         if file_type == "PDF":
             return {"text": _parse_pdf(file_bytes), "sections": []}
         elif file_type == "Markdown":
             return {"text": "", "sections": _parse_md(file_bytes.decode("utf-8", errors="ignore"))}
         elif file_type == "CSV":
-            return {"text": "", "sections": _parse_csv(file_bytes)}
+            return {"text": "", "sections": _parse_csv(file_bytes, doc_title or os.path.splitext(filename)[0])}
         elif file_type == "Excel":
-            return {"text": "", "sections": _parse_xlsx(file_bytes)}
+            return {"text": "", "sections": _parse_xlsx(file_bytes, doc_title or os.path.splitext(filename)[0])}
         elif file_type == "SVG":
             return {"text": _parse_svg(file_bytes), "sections": []}
         elif file_type == "Word":
@@ -707,50 +712,110 @@ def _flush(title: str, lines: list[str], out: list[dict]):
         out.append({"title": title, "body": body})
 
 
-def _parse_csv(file_bytes: bytes) -> list[dict]:
+def _table_to_markdown(headers: list[str], rows: list[list], max_rows: int = 100) -> str:
+    """Convert tabular data to a markdown table string.
+    
+    For very large tables, only the first max_rows are included and a
+    summary note is appended.
+    """
+    if not headers or not rows:
+        return ""
+    
+    # Build header row
+    md = "| " + " | ".join(headers) + " |\n"
+    md += "| " + " | ".join("---" for _ in headers) + " |\n"
+    
+    truncated = len(rows) > max_rows
+    display_rows = rows[:max_rows]
+    
+    for row in display_rows:
+        cells = [str(c) if c is not None else "" for c in row]
+        md += "| " + " | ".join(cells) + " |\n"
+    
+    if truncated:
+        md += f"\n*[Table truncated: {len(rows)} total rows, showing first {max_rows}]*\n"
+    
+    return md
+
+
+def _generate_table_summary(title: str, headers: list[str], row_count: int, sheet_name: str = None) -> str:
+    """Generate a natural-language summary of a table for the parent node body."""
+    parts = [f"Spreadsheet: {title}"]
+    if sheet_name:
+        parts.append(f"Sheet: {sheet_name}")
+    parts.append(f"Rows: {row_count}")
+    parts.append(f"Columns: {', '.join(headers)}")
+    return " | ".join(parts)
+
+
+def _parse_csv(file_bytes: bytes, doc_title: str = "Untitled") -> list[dict]:
+    """Parse CSV into a single table section + summary, not one node per row."""
     import csv, io as _io
     text = file_bytes.decode("utf-8", errors="replace")
     reader = csv.DictReader(_io.StringIO(text))
-    sections = []
-    for i, row in enumerate(reader):
-        if i >= _MAX_SPREADSHEET_ROWS:
-            sections.append({"title": "Truncation notice",
-                "body": f"CSV had more than {_MAX_SPREADSHEET_ROWS} rows. Only first {_MAX_SPREADSHEET_ROWS} ingested."})
-            logger.warning(f"CSV truncated at {_MAX_SPREADSHEET_ROWS} rows")
-            break
-        if not any(row.values()):
-            continue
-        first_val = next((v for v in row.values() if v), f"Row {i+1}")
-        title = str(first_val)[:80]
-        body = " | ".join(f"{k}: {v}" for k, v in row.items() if v)
-        sections.append({"title": title, "body": body})
-    return sections
+    
+    rows = list(reader)
+    if not rows:
+        return []
+    
+    headers = list(rows[0].keys())
+    total_rows = len(rows)
+    
+    if total_rows > _MAX_SPREADSHEET_ROWS:
+        rows = rows[:_MAX_SPREADSHEET_ROWS]
+        logger.warning(f"CSV truncated at {_MAX_SPREADSHEET_ROWS} rows")
+    
+    # Build markdown table
+    md_rows = [[row.get(h, "") for h in headers] for row in rows]
+    table_md = _table_to_markdown(headers, md_rows)
+    
+    # Generate summary
+    summary = _generate_table_summary(doc_title, headers, total_rows)
+    
+    return [
+        {"title": doc_title, "body": summary, "type": "table_summary"},
+        {"title": f"{doc_title} - Data", "body": table_md, "type": "table_data"},
+    ]
 
 
-def _parse_xlsx(file_bytes: bytes) -> list[dict]:
+def _parse_xlsx(file_bytes: bytes, doc_title: str = "Untitled") -> list[dict]:
+    """Parse Excel into one section per sheet (summary + data), not one node per row."""
     import openpyxl
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
     sections = []
+    
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
             continue
+        
         headers = [str(h) if h is not None else f"col{i}" for i, h in enumerate(rows[0])]
-        sections.append({"title": f"Sheet: {sheet_name}",
-            "body": f"Excel sheet '{sheet_name}' with {len(rows)-1} rows, columns: {', '.join(headers)}"})
-        for i, row in enumerate(rows[1:], start=1):
-            if i > _MAX_SPREADSHEET_ROWS:
-                sections.append({"title": f"{sheet_name} - truncation",
-                    "body": f"Sheet had more than {_MAX_SPREADSHEET_ROWS} rows. Only first {_MAX_SPREADSHEET_ROWS} ingested."})
-                logger.warning(f"XLSX sheet '{sheet_name}' truncated at {_MAX_SPREADSHEET_ROWS} rows")
-                break
-            if not any(r is not None for r in row):
-                continue
-            first_val = next((str(v) for v in row if v is not None), f"Row {i}")
-            title = f"{sheet_name} - {first_val[:60]}"
-            body = " | ".join(f"{h}: {v}" for h, v in zip(headers, row) if v is not None)
-            sections.append({"title": title, "body": body})
+        data_rows = rows[1:]
+        total_rows = len(data_rows)
+        
+        if total_rows > _MAX_SPREADSHEET_ROWS:
+            data_rows = data_rows[:_MAX_SPREADSHEET_ROWS]
+            logger.warning(f"XLSX sheet '{sheet_name}' truncated at {_MAX_SPREADSHEET_ROWS} rows")
+        
+        # Build markdown table
+        md_rows = [[str(c) if c is not None else "" for c in row] for row in data_rows]
+        table_md = _table_to_markdown(headers, md_rows)
+        
+        # Generate summary
+        summary = _generate_table_summary(doc_title, headers, total_rows, sheet_name)
+        
+        sections.append({
+            "title": f"{doc_title} - {sheet_name}",
+            "body": summary,
+            "type": "table_summary",
+        })
+        sections.append({
+            "title": f"{doc_title} - {sheet_name} - Data",
+            "body": table_md,
+            "type": "table_data",
+        })
+    
     wb.close()
     return sections
 

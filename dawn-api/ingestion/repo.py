@@ -326,15 +326,25 @@ async def _ingest_chunk_stream(title: str, chunk_iter, source_ref: str, tags: li
 
 async def ingest_sections(title: str, sections: list[dict], source_ref: str = "",
                            tags: list[str] = [], node_type: str = "document") -> dict:
+    """Ingest sections from a parsed document.
+    
+    For table-type documents (CSV/XLSX), the sections come in pairs:
+    - table_summary: a natural-language summary (becomes the parent node body)
+    - table_data: the full markdown table (becomes child node(s))
+    
+    For regular documents, each section becomes a child node linked to a parent.
+    """
     nodes_created = 0
     edges_created = 0
     nodes_archived = 0
     _WRITE_BATCH = 200
+    
     if source_ref:
         prior = await db.get_nodes_by_source_ref_prefix(source_ref)
         if prior:
             await db.archive_nodes_batch([(n["id"], n["title"]) for n in prior])
             nodes_archived = len(prior)
+    
     all_tags = await db.get_all_tags()
     tag_ids = []
     for tag_name in tags:
@@ -343,46 +353,131 @@ async def ingest_sections(title: str, sections: list[dict], source_ref: str = ""
             tag = await db.create_tag(tag_name)
             all_tags.append(tag)
         tag_ids.append(tag["id"])
-    parent = await db.create_node({
-        "title": title, "type": node_type,
-        "body": f"{len(sections)} sections from {source_ref or title}",
-        "status": "active", "source": "document", "source_ref": source_ref, "confidence": 0.85,
-    })
-    nodes_created += 1
-    if tag_ids:
-        await db.attach_tags_batch([parent["id"]], tag_ids)
-    pending_rows = []
-
-    async def flush():
-        nonlocal nodes_created, edges_created, pending_rows
-        if not pending_rows:
-            return
-        created = await db.create_nodes_batch(pending_rows)
-        nodes_created += len(created)
-        node_ids = [n["id"] for n in created if n.get("id")]
-        edge_rows = [{"from_node": nid, "to_node": parent["id"], "relation": "part_of", "source": "document"}
-                     for nid in node_ids]
-        if edge_rows:
-            created_edges = await db.create_edges_batch(edge_rows)
-            edges_created += len(created_edges)
-        if tag_ids and node_ids:
-            await db.attach_tags_batch(node_ids, tag_ids)
-        if node_ids:
-            await _embed_and_store(created)
-        pending_rows = []
-
-    for section in sections:
-        body = (section.get("body") or "").strip()
-        if not body:
-            continue
-        raw_title = f"{title} - {section['title']}"[:200]
-        pending_rows.append({
-            "title": raw_title, "type": node_type, "body": body[:1000],
-            "status": "active", "source": "document", "source_ref": source_ref, "confidence": 0.85,
+    
+    # Detect if this is a table-type document (has table_summary sections)
+    is_table_doc = any(s.get("type") == "table_summary" for s in sections)
+    
+    if is_table_doc:
+        # ── Table document handling ──
+        # Group sections by type
+        summary_sections = [s for s in sections if s.get("type") == "table_summary"]
+        data_sections = [s for s in sections if s.get("type") == "table_data"]
+        
+        # Build combined summary for the parent node
+        summary_parts = []
+        for s in summary_sections:
+            body = (s.get("body") or "").strip()
+            if body:
+                summary_parts.append(body)
+        
+        parent_body = "\n".join(summary_parts) if summary_parts else f"{len(data_sections)} table(s) from {source_ref or title}"
+        
+        # Create parent node with type "table"
+        parent = await db.create_node({
+            "title": title,
+            "type": "table",
+            "body": parent_body,
+            "status": "active",
+            "source": "document",
+            "source_ref": source_ref,
+            "confidence": 0.85,
         })
-        if len(pending_rows) >= _WRITE_BATCH:
-            await flush()
-    await flush()
+        nodes_created += 1
+        if tag_ids:
+            await db.attach_tags_batch([parent["id"]], tag_ids)
+        
+        # Create child nodes for each data section (full markdown table)
+        pending_rows = []
+        
+        async def flush():
+            nonlocal nodes_created, edges_created, pending_rows
+            if not pending_rows:
+                return
+            created = await db.create_nodes_batch(pending_rows)
+            nodes_created += len(created)
+            node_ids = [n["id"] for n in created if n.get("id")]
+            edge_rows = [{"from_node": nid, "to_node": parent["id"], "relation": "part_of", "source": "document"}
+                         for nid in node_ids]
+            if edge_rows:
+                created_edges = await db.create_edges_batch(edge_rows)
+                edges_created += len(created_edges)
+            if tag_ids and node_ids:
+                await db.attach_tags_batch(node_ids, tag_ids)
+            if node_ids:
+                await _embed_and_store(created)
+            pending_rows = []
+        
+        for section in data_sections:
+            body = (section.get("body") or "").strip()
+            if not body:
+                continue
+            raw_title = (section.get("title") or f"{title} - Data")[:200]
+            pending_rows.append({
+                "title": raw_title,
+                "type": "table",
+                "body": body,  # No truncation — full markdown table
+                "status": "active",
+                "source": "document",
+                "source_ref": source_ref,
+                "confidence": 0.85,
+            })
+            if len(pending_rows) >= _WRITE_BATCH:
+                await flush()
+        await flush()
+        
+    else:
+        # ── Regular document handling (existing behavior, improved) ──
+        parent = await db.create_node({
+            "title": title,
+            "type": node_type,
+            "body": f"{len(sections)} sections from {source_ref or title}",
+            "status": "active",
+            "source": "document",
+            "source_ref": source_ref,
+            "confidence": 0.85,
+        })
+        nodes_created += 1
+        if tag_ids:
+            await db.attach_tags_batch([parent["id"]], tag_ids)
+        
+        pending_rows = []
+        
+        async def flush():
+            nonlocal nodes_created, edges_created, pending_rows
+            if not pending_rows:
+                return
+            created = await db.create_nodes_batch(pending_rows)
+            nodes_created += len(created)
+            node_ids = [n["id"] for n in created if n.get("id")]
+            edge_rows = [{"from_node": nid, "to_node": parent["id"], "relation": "part_of", "source": "document"}
+                         for nid in node_ids]
+            if edge_rows:
+                created_edges = await db.create_edges_batch(edge_rows)
+                edges_created += len(created_edges)
+            if tag_ids and node_ids:
+                await db.attach_tags_batch(node_ids, tag_ids)
+            if node_ids:
+                await _embed_and_store(created)
+            pending_rows = []
+        
+        for section in sections:
+            body = (section.get("body") or "").strip()
+            if not body:
+                continue
+            raw_title = f"{title} - {section['title']}"[:200]
+            pending_rows.append({
+                "title": raw_title,
+                "type": node_type,
+                "body": body[:1000],  # Keep existing truncation for non-table docs
+                "status": "active",
+                "source": "document",
+                "source_ref": source_ref,
+                "confidence": 0.85,
+            })
+            if len(pending_rows) >= _WRITE_BATCH:
+                await flush()
+        await flush()
+    
     return {"nodes_created": nodes_created, "edges_created": edges_created, "nodes_archived": nodes_archived}
 
 

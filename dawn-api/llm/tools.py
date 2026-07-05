@@ -64,7 +64,9 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
     2. If fuzzy search finds nothing, fall back to semantic (embedding)
        search on the raw query
     3. Traverse from best-matching entry nodes
-    4. Return assembled context string + metadata
+    4. For table-type nodes, automatically include their full-data children
+       regardless of max_nodes limit
+    5. Return assembled context string + metadata
 
     include_code=False by default: once repo ingestion has been used a
     few times, code-chunk nodes vastly outnumber concept/entity/fact
@@ -82,7 +84,7 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
 
     exclude_tags = None if include_code else ["code"]
 
-    # ── Stage 1: Find entry nodes via fuzzy search ───────────────────────────
+    # ── Stage 1: Find entry nodes via fuzzy search ──────────────────────────
     candidates = extract_key_terms(query)
     entry_nodes: list[dict] = []
 
@@ -99,7 +101,7 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
         if len(entry_nodes) >= 3:
             break  # Good enough entry points found
 
-    # ── Stage 1b: Semantic fallback if fuzzy search found nothing ───────────
+    # ── Stage 1b: Semantic fallback if fuzzy search found nothing ────────────
     # Trigram similarity misses paraphrases and conceptually-related but
     # differently-worded content ("bot keeps losing money" vs a node
     # titled "Sharpe ratio degradation") — this is exactly what
@@ -123,14 +125,24 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
             node_titles=[],
         )
 
-    # ── Stage 2: Traverse from entry nodes ───────────────────────────────────
+    # ── Stage 2: Traverse from entry nodes ──────────────────────────────────
+    # Track how many nodes we've added so we can dynamically increase the limit
+    # for table-type parents
+    nodes_added = 0
+    # Dynamic max_nodes: start with the default, increase for table nodes
+    effective_max = max_nodes
+
     for entry in entry_nodes[:3]:  # Top 3 entry points
         node_id = entry["id"]
         node_ids.append(node_id)
         node_titles.append(entry["title"])
+        nodes_added += 1
 
         if entry.get("body"):
             context_parts.append(f"**{entry['title']}** ({entry.get('type', 'node')}):\n{entry['body']}")
+
+        # Check if this is a table-type node — if so, we need its children
+        is_table_node = entry.get("type") == "table"
 
         # Traverse outward
         traversal = await db.rpc_traverse(node_id, max_depth=2)
@@ -141,11 +153,22 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
         )
         tool_calls.append(tc)
 
+        # For table nodes, we want ALL children — dynamically increase limit
+        if is_table_node:
+            # Count how many children we'll need
+            child_count = sum(1 for t in traversal if t.get("via_relation") == "part_of"
+                              and t.get("parent_id") == node_id)
+            # Ensure we have room for all children + some margin
+            needed = nodes_added + child_count + 2  # +2 for other entry nodes
+            if needed > effective_max:
+                effective_max = needed
+
         for t_node in traversal:
-            if t_node["id"] not in seen_ids and len(node_ids) < max_nodes:
+            if t_node["id"] not in seen_ids and nodes_added < effective_max:
                 seen_ids.add(t_node["id"])
                 node_ids.append(t_node["id"])
                 node_titles.append(t_node["title"])
+                nodes_added += 1
 
                 if t_node.get("body"):
                     depth_indent = "  " * t_node.get("depth", 1)
