@@ -741,6 +741,8 @@ NEW_TAGS_FOR_BACKTAG = [
     {"name": "politics", "description": "Politics, governance, political theory, international relations, policy, power"},
     {"name": "biography", "description": "Biography, memoir, autobiography, personal stories, life narratives, historical figures"},
     {"name": "uncategorized", "description": "Default fallback tag for content that doesn't match any other category"},
+    {"name": "robert greene", "description": "Robert Greene, author of The 48 Laws of Power, The Art of Seduction, Mastery, power dynamics, strategy, historical examples, manipulation, human nature"},
+    {"name": "books", "description": "Books, reading, literature, authors, publishing, book summaries, literary analysis"},
 ]
 
 
@@ -821,8 +823,9 @@ async def admin_backtag(x_api_key: Optional[str] = Header(None)):
     if not nodes_to_tag:
         return {**results, "message": "No uncategorized or untagged nodes found."}
 
-    # Step 3: Load the HybridTagger
     tagger = await _get_tagger()
+    # Force refresh to pick up any new/updated tag descriptions from DB
+    await tagger.refresh()
 
     # Step 4: Back-tag each node using the hybrid strategy
     for i, node in enumerate(nodes_to_tag):
