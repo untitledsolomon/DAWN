@@ -9,6 +9,7 @@ in chunks rather than loaded entirely into memory. Scanned PDFs are OCR'd
 page-by-page with configurable page limits.
 
 v2.0 — Added auto-tagging (sentence-transformers) and multi-file/zip upload.
+v2.1 — Hybrid semantic tagger: Top-K + adaptive floor + dynamic per-tag thresholds.
 """
 from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Form
 from pydantic import BaseModel
@@ -308,130 +309,43 @@ async def get_job_status(job_id: str, _: None = Depends(verify_key)):
     }
 
 
-# ─── Auto-Tagging ──────────────────────────────────────────────────────────────
-# Uses the same sentence-transformers model (all-MiniLM-L6-v2) already loaded
-# by llm/embeddings.py to classify document content against known tags.
+# ─── Auto-Tagging (v2.1 — Hybrid Tagger) ─────────────────────────────────
+# Uses the HybridTagger from ingestion/tagger.py which implements:
+#   1. Top-K (always returns top 2 tags)
+#   2. Adaptive floor (0.1 minimum — garbage detection)
+#   3. Dynamic per-tag thresholds (learned from historical matches)
 # No extra dependencies, no API calls, runs on CPU.
 
-_AUTO_TAG_CACHE = {"model": None, "tag_embeddings": {}, "tag_defs": {}}
-
-# Built-in tag descriptions used when no description exists in the DB yet.
-# These help the model distinguish between tags semantically.
-_TAG_DESCRIPTIONS = {
-    "crm": "Customer relationship management, sales, leads, contacts, deals",
-    "payroll": "Payroll processing, salary, employee payments, PAYE, NSSF",
-    "tax": "Tax compliance, VAT, income tax, URA, filing, deductions",
-    "trading": "Financial trading, forex, stocks, algorithmic trading, MT5",
-    "code": "Source code, programming, software development, scripts",
-    "fashion": "Fashion, clothing, apparel, design, luxury brand, atelier",
-    "business": "Business operations, strategy, SME, company management",
-    "finance": "Finance, accounting, budgeting, financial reporting",
-    "legal": "Legal, compliance, contracts, regulations, policy",
-    "education": "Education, training, learning, documentation, guide",
-    "health": "Health, medical, wellness, safety",
-    "technology": "Technology, IT, infrastructure, systems, software",
-    "marketing": "Marketing, advertising, social media, campaigns, branding",
-    "hr": "Human resources, recruitment, employee management, staffing",
-    "operations": "Operations, logistics, supply chain, processes",
-    "self-help": "Self-help, personal development, psychology, philosophy, life strategy, success principles, motivation",
-    "philosophy": "Philosophy, ethics, political theory, historical analysis, critical thinking, logic, morality",
-    "psychology": "Psychology, human behavior, cognitive science, persuasion, influence, mental models",
-    "history": "History, historical events, biographies, historical analysis, ancient civilizations, world history",
-    "strategy": "Strategy, tactics, game theory, military strategy, business strategy, competitive analysis, power dynamics",
-    "leadership": "Leadership, management, executive skills, team building, organizational behavior, decision making",
-    "communication": "Communication, negotiation, persuasion, public speaking, rhetoric, writing, storytelling",
-    "economics": "Economics, macroeconomics, microeconomics, economic theory, market analysis, trade",
-    "politics": "Politics, governance, political theory, international relations, policy, power",
-    "biography": "Biography, memoir, autobiography, personal stories, life narratives, historical figures",
-    "uncategorized": "Default fallback tag for content that doesn't match any other category",
-}
+_tagger_instance = None
 
 
-async def _auto_tag_content(content: str, title: str = "", top_n: int = 3, threshold: float = 0.35) -> list[str]:
-    """Auto-tag document content using semantic similarity against known tags.
+async def _get_tagger():
+    """Lazy-load and return the singleton HybridTagger instance."""
+    global _tagger_instance
+    if _tagger_instance is None:
+        from ingestion.tagger import HybridTagger
+        _tagger_instance = HybridTagger()
+        await _tagger_instance.refresh()
+    return _tagger_instance
 
-    Uses the existing sentence-transformers model. Returns up to `top_n` tag
-    names whose embedding cosine similarity exceeds `threshold`. Falls back
-    to ["uncategorized"] if nothing clears the bar.
+
+async def _auto_tag_content(content: str, title: str = "", top_n: int = 2, threshold: float = 0.1) -> list[str]:
+    """Auto-tag document content using the hybrid semantic tagger.
+
+    Uses Top-K (top_n) + adaptive floor (threshold) + dynamic per-tag thresholds.
+    Falls back to ["uncategorized"] if nothing clears the bar.
     """
-    global _AUTO_TAG_CACHE
-
-    # Build the text to classify
-    text = f"{title}\n\n{content}" if title else content
-    text = text.strip()
-    if not text:
-        return ["uncategorized"]
-
-    # Lazy-load the model (reuses the singleton from llm/embeddings)
-    if _AUTO_TAG_CACHE["model"] is None:
-        try:
-            from llm.embeddings import get_embedding_model
-            _AUTO_TAG_CACHE["model"] = get_embedding_model()
-        except Exception as e:
-            logger.warning(f"Auto-tagging unavailable (model load failed): {e}")
-            return ["uncategorized"]
-
-    model = _AUTO_TAG_CACHE["model"]
-
-    # Refresh tag definitions from DB (cached per call, not per document)
-    try:
-        all_tags = await db.get_all_tags()
-    except Exception:
-        all_tags = []
-
-    # Build tag -> description map
-    tag_defs = {}
-    for t in all_tags:
-        name = t.get("name", "").lower().strip()
-        desc = t.get("description") or _TAG_DESCRIPTIONS.get(name, "")
-        if name:
-            tag_defs[name] = desc
-
-    # If no tags exist yet, create a basic set
-    if not tag_defs:
-        tag_defs = {k: v for k, v in _TAG_DESCRIPTIONS.items()}
-
-    # Compute tag embeddings (cached globally, refreshed if new tags appear)
-    cache_key = frozenset(tag_defs.keys())
-    if _AUTO_TAG_CACHE.get("cache_key") != cache_key:
-        tag_texts = [f"{name}: {desc}" if desc else name for name, desc in tag_defs.items()]
-        try:
-            tag_vecs = model.encode(tag_texts, show_progress_bar=False)
-            _AUTO_TAG_CACHE["tag_embeddings"] = {
-                name: vec for name, vec in zip(tag_defs.keys(), tag_vecs)
-            }
-            _AUTO_TAG_CACHE["cache_key"] = cache_key
-        except Exception as e:
-            logger.error(f"Auto-tag embedding failed: {e}")
-            return ["uncategorized"]
-
-    # Embed the document content
-    try:
-        doc_vec = model.encode(text[:2000], show_progress_bar=False)
-    except Exception as e:
-        logger.error(f"Auto-tag encoding failed: {e}")
-        return ["uncategorized"]
-
-    # Compute cosine similarities
-    import numpy as np
-    doc_norm = doc_vec / (np.linalg.norm(doc_vec) + 1e-10)
-    scores = []
-    for tag_name, tag_vec in _AUTO_TAG_CACHE["tag_embeddings"].items():
-        tag_norm = tag_vec / (np.linalg.norm(tag_vec) + 1e-10)
-        sim = float(np.dot(doc_norm, tag_norm))
-        scores.append((sim, tag_name))
-
-    # Sort descending, filter by threshold
-    scores.sort(key=lambda x: -x[0])
-    matched = [name for score, name in scores if score >= threshold][:top_n]
-
-    if not matched:
-        return ["uncategorized"]
-
-    return matched
+    tagger = await _get_tagger()
+    return await tagger.tag(
+        text=content,
+        title=title,
+        top_k=top_n,
+        min_similarity=threshold,
+        use_dynamic_thresholds=True,
+    )
 
 
-# ─── Single File Upload ────────────────────────────────────────────────────────
+# ─── Single File Upload ───────────────────────────────────────────────────
 
 @router.post("/file")
 async def ingest_file(
@@ -511,7 +425,7 @@ async def ingest_file(
     }
 
 
-# ─── Multi-File / Zip Upload ───────────────────────────────────────────────────
+# ─── Multi-File / Zip Upload ──────────────────────────────────────────────
 
 @router.post("/files")
 async def ingest_files(
@@ -691,7 +605,7 @@ async def _process_zip_upload(
     return jobs, errors
 
 
-# ─── Content Preview Extraction (for auto-tagging) ────────────────────────────
+# ─── Content Preview Extraction (for auto-tagging) ────────────────────────
 
 def _extract_preview(file_bytes: bytes, file_type: str, filename: str, max_chars: int = 1000) -> str:
     """Extract a text preview from a file for auto-tagging classification.
@@ -785,7 +699,7 @@ def _extract_preview(file_bytes: bytes, file_type: str, filename: str, max_chars
     return f"[{file_type} file: {filename}]"
 
 
-# ─── Stats & Log Endpoints ─────────────────────────────────────────────────────
+# ─── Stats & Log Endpoints ────────────────────────────────────────────────
 
 @router.get("/stats")
 async def ingestion_stats(_: None = Depends(verify_key)):
@@ -809,10 +723,10 @@ async def get_log(_: None = Depends(verify_key)):
 
 
 
-
-# ──── Admin: Back-Tag Existing Nodes ──────────────────────────────────────────
+# ──── Admin: Back-Tag Existing Nodes ──────────────────────────────────────
 # Re-runs auto-tagging on all nodes tagged "uncategorized" or with no tags.
-# Also creates any missing tags from _TAG_DESCRIPTIONS in the database.
+# Uses the HybridTagger with Top-K + adaptive floor + dynamic per-tag thresholds.
+# Also updates per-tag thresholds based on match scores for continuous learning.
 # Trigger via: POST /admin/backtag (requires API key)
 
 NEW_TAGS_FOR_BACKTAG = [
@@ -834,13 +748,16 @@ NEW_TAGS_FOR_BACKTAG = [
 async def admin_backtag(x_api_key: Optional[str] = Header(None)):
     """Re-run auto-tagging on all uncategorized/untagged nodes.
 
+    Uses the HybridTagger with:
+    - Top-K (top 2 tags per node)
+    - Adaptive floor (0.1 minimum similarity)
+    - Dynamic per-tag thresholds (learned from match scores)
+
     Also creates any missing tags from NEW_TAGS_FOR_BACKTAG in the database.
     Returns a summary of what was tagged and what stayed uncategorized.
     """
     if x_api_key != settings.dawn_api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
-
-    import numpy as np
 
     results = {"tags_created": 0, "nodes_processed": 0, "tagged": 0, "still_uncategorized": 0, "errors": 0}
 
@@ -904,30 +821,10 @@ async def admin_backtag(x_api_key: Optional[str] = Header(None)):
     if not nodes_to_tag:
         return {**results, "message": "No uncategorized or untagged nodes found."}
 
-    # Step 3: Load model and compute tag embeddings
-    try:
-        from llm.embeddings import get_embedding_model
-        model = get_embedding_model()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load embedding model: {e}")
+    # Step 3: Load the HybridTagger
+    tagger = await _get_tagger()
 
-    # Build tag -> description map
-    tag_defs = {}
-    for t in all_tags:
-        name = t["name"].lower().strip()
-        desc = t.get("description") or _TAG_DESCRIPTIONS.get(name, "")
-        if name:
-            tag_defs[name] = desc
-
-    if not tag_defs:
-        tag_defs = {k: v for k, v in _TAG_DESCRIPTIONS.items()}
-
-    # Compute tag embeddings
-    tag_texts = [f"{name}: {desc}" if desc else name for name, desc in tag_defs.items()]
-    tag_vecs = model.encode(tag_texts, show_progress_bar=False)
-    tag_embeddings = {name: vec for name, vec in zip(tag_defs.keys(), tag_vecs)}
-
-    # Step 4: Back-tag each node
+    # Step 4: Back-tag each node using the hybrid strategy
     for i, node in enumerate(nodes_to_tag):
         try:
             title = node.get("title", "") or ""
@@ -937,24 +834,33 @@ async def admin_backtag(x_api_key: Optional[str] = Header(None)):
             if not text:
                 continue
 
-            # Embed and compute similarities
-            doc_vec = model.encode(text[:2000], show_progress_bar=False)
-            doc_norm = doc_vec / (np.linalg.norm(doc_vec) + 1e-10)
-
-            scores = []
-            for tag_name, tag_vec in tag_embeddings.items():
-                tag_norm = tag_vec / (np.linalg.norm(tag_vec) + 1e-10)
-                sim = float(np.dot(doc_norm, tag_norm))
-                scores.append((sim, tag_name))
-
-            scores.sort(key=lambda x: -x[0])
-            matched = [name for score, name in scores if score >= 0.35][:3]
+            # Tag using the hybrid strategy
+            matched = await tagger.tag(
+                text=text,
+                title="",
+                top_k=2,
+                min_similarity=0.1,
+                use_dynamic_thresholds=True,
+            )
 
             if matched and matched != ["uncategorized"]:
                 tag_ids = [tag_name_to_id[t] for t in matched if t in tag_name_to_id]
                 if tag_ids:
                     await db.attach_tags_batch([node["id"]], tag_ids)
                     results["tagged"] += 1
+
+                    # ── Update per-tag thresholds ──
+                    # Re-embed to get the actual similarity scores for threshold learning
+                    if tagger.model is not None and tagger.tag_embeddings:
+                        import numpy as np
+                        doc_vec = tagger.model.encode(text[:2000], show_progress_bar=False)
+                        doc_norm = doc_vec / (np.linalg.norm(doc_vec) + 1e-10)
+                        for tag_name in matched:
+                            tag_vec = tagger.tag_embeddings.get(tag_name)
+                            if tag_vec is not None:
+                                tag_norm = tag_vec / (np.linalg.norm(tag_vec) + 1e-10)
+                                score = float(np.dot(doc_norm, tag_norm))
+                                await tagger.update_threshold(tag_name, score)
             else:
                 results["still_uncategorized"] += 1
 
@@ -962,11 +868,20 @@ async def admin_backtag(x_api_key: Optional[str] = Header(None)):
             results["errors"] += 1
             logger.error(f"Backtag error on node {node.get('id', '?')[:8]}: {e}")
 
+    # Log current thresholds for diagnostics
+    thresholds = await tagger.get_thresholds()
+    logger.info(f"Backtag complete. Per-tag thresholds: {thresholds}")
+
     return {
         **results,
-        "message": f"Processed {results['nodes_processed']} nodes. Tagged {results['tagged']}, {results['still_uncategorized']} still uncategorized.",
+        "thresholds": {k: round(v, 3) for k, v in thresholds.items()},
+        "message": (
+            f"Processed {results['nodes_processed']} nodes. "
+            f"Tagged {results['tagged']}, {results['still_uncategorized']} still uncategorized. "
+            f"Per-tag thresholds updated."
+        ),
     }
-# ─── File Type Detection ───────────────────────────────────────────────────────
+# ─── File Type Detection ──────────────────────────────────────────────────
 
 def detect_file_type(filename: str) -> Optional[str]:
     ext = os.path.splitext(filename.lower())[1]
@@ -1047,7 +962,7 @@ def _extract_content(file_bytes: bytes, file_type: str, filename: str, doc_title
     return {"text": "", "sections": []}
 
 
-# ─── PDF Parsing ───────────────────────────────────────────────────────────────
+# ─── PDF Parsing ──────────────────────────────────────────────────────────
 
 def _parse_pdf(file_bytes: bytes) -> str:
     pdf_gen = iter_pdf_pages(file_bytes)
@@ -1176,7 +1091,7 @@ def _iter_ocr_pdf_pages(file_bytes: bytes, max_pages: int = 5000):
         yield f"[OCR truncated: {total_pages} pages, only first {max_pages} OCR'd.]"
 
 
-# ─── DOCX Parsing ──────────────────────────────────────────────────────────────
+# ─── DOCX Parsing ─────────────────────────────────────────────────────────
 
 def _parse_docx(file_bytes: bytes) -> list[dict]:
     import docx
@@ -1213,7 +1128,7 @@ def _parse_docx(file_bytes: bytes) -> list[dict]:
     return [s for s in sections if s["body"].strip()]
 
 
-# ─── PPTX Parsing ──────────────────────────────────────────────────────────────
+# ─── PPTX Parsing ─────────────────────────────────────────────────────────
 
 def _parse_pptx(file_bytes: bytes) -> list[dict]:
     """Parse PowerPoint (.pptx) into sections, one per slide."""
@@ -1256,7 +1171,7 @@ def _parse_pptx(file_bytes: bytes) -> list[dict]:
     return sections
 
 
-# ─── ODP / ODS Parsing ─────────────────────────────────────────────────────────
+# ─── ODP / ODS Parsing ────────────────────────────────────────────────────
 
 def _parse_odp(file_bytes: bytes) -> list[dict]:
     """Parse LibreOffice Impress (.odp) into sections."""
@@ -1360,7 +1275,7 @@ def _parse_zip_xml_table(file_bytes: bytes, xml_path: str = "content.xml") -> li
     return sections
 
 
-# ─── XML / YAML / TXT / EPUB / HTML / RTF / JSON / MD / SVG Parsing ───────────
+# ─── XML / YAML / TXT / EPUB / HTML / RTF / JSON / MD / SVG Parsing ──────
 
 def _parse_xml(file_bytes: bytes) -> str:
     """Parse XML into a readable tree structure."""
