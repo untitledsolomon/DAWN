@@ -23,8 +23,13 @@ export default function ChartRenderer({ spec, title, className = "", compact = f
     setLoading(true);
     setError(null);
 
-    // Dynamic import of vega-embed (it's large, so lazy load at runtime only)
-    import("vega-embed")
+    // Dynamic import via Function constructor to bypass webpack static analysis.
+    // vega-embed is a large ESM module that should only load at runtime in the browser.
+    const loadVega = new Function(
+      "return import('vega-embed')"
+    )() as Promise<{ default: (el: Element, spec: any, opts?: any) => Promise<any> }>;
+
+    loadVega
       .then((mod) => {
         if (cancelled) return;
         const embed = mod.default;
@@ -45,7 +50,7 @@ export default function ChartRenderer({ spec, title, className = "", compact = f
           .then(() => {
             if (!cancelled) setLoading(false);
           })
-          .catch((err) => {
+          .catch((err: Error) => {
             if (!cancelled) {
               console.error("[ChartRenderer] Vega-embed error:", err);
               setError(err.message || "Failed to render chart");
@@ -53,7 +58,7 @@ export default function ChartRenderer({ spec, title, className = "", compact = f
             }
           });
       })
-      .catch((err) => {
+      .catch((err: Error) => {
         if (!cancelled) {
           console.error("[ChartRenderer] Failed to load vega-embed:", err);
           setError("Failed to load chart library");
