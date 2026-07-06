@@ -28,10 +28,12 @@ import {
   HeartPulse,
   BookOpen,
   ListTodo,
+  BarChart3,
+  Image,
   X as XIcon,
 } from "lucide-react";
 import clsx from "clsx";
-import { listSessions, createSession, deleteSession, updateSession } from "@/lib/api";
+import { listSessions, createSession, deleteSession, updateSession, countArtifacts } from "@/lib/api";
 import type { ChatSession } from "@/lib/types";
 
 // Navigation config
@@ -44,6 +46,7 @@ interface NavItem {
 
 const PRIMARY_NAV: NavItem[] = [
   { href: "/chat", icon: MessageSquare, label: "Chat" },
+  { href: "/visualize", icon: BarChart3, label: "Visualize" },
   { href: "/nodes", icon: Database, label: "Knowledge" },
   { href: "/memory", icon: Brain, label: "Memory" },
   { href: "/agent-logs", icon: Activity, label: "Agent Logs" },
@@ -59,6 +62,7 @@ const BUSINESS_NAV: NavItem[] = [
   { href: "/integrations", icon: Puzzle, label: "Integrations" },
   { href: "/monitoring", icon: HeartPulse, label: "Monitoring" },
   { href: "/books", icon: BookOpen, label: "Library" },
+  { href: "/artifacts", icon: Image, label: "Artifacts" },
 ];
 
 // Component
@@ -76,6 +80,7 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
+  const [artifactCount, setArtifactCount] = useState<number>(0);
 
   // Fetch sessions
   const fetchSessions = useCallback(async () => {
@@ -89,15 +94,32 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
     }
   }, []);
 
+  // Fetch artifact count
+  const fetchArtifactCount = useCallback(async () => {
+    try {
+      const count = await countArtifacts();
+      setArtifactCount(count);
+    } catch {
+      // Silently fail — not critical
+    }
+  }, []);
+
   useEffect(() => {
     fetchSessions();
-  }, [fetchSessions]);
+    fetchArtifactCount();
+  }, [fetchSessions, fetchArtifactCount]);
 
   // Poll for new sessions every 10s
   useEffect(() => {
     const interval = setInterval(fetchSessions, 10000);
     return () => clearInterval(interval);
   }, [fetchSessions]);
+
+  // Poll artifact count every 30s
+  useEffect(() => {
+    const interval = setInterval(fetchArtifactCount, 30000);
+    return () => clearInterval(interval);
+  }, [fetchArtifactCount]);
 
   // Listen for custom event from ChatWindow
   useEffect(() => {

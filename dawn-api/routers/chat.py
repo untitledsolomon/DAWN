@@ -20,28 +20,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ── Auth ──────────────────────────────────────────────────────────────
+# ── Auth ──────────────────────────────────────────────────────────────────────
 
 def verify_key(x_api_key: Optional[str] = Header(None)):
     if x_api_key != settings.dawn_api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
-# ── Schema ────────────────────────────────────────────────────────────
+# ── Schema ─────────────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
     message: str
     history: list[dict] = []
     session_id: Optional[str] = None
+    web_search_enabled: bool = False
 
 
-# ── SSE helpers ───────────────────────────────────────────────────────
+# ── SSE helpers ────────────────────────────────────────────────────────────────
 
 def sse(event_type: str, payload) -> str:
     return f"data: {json.dumps({'type': event_type, **payload})}\n\n"
 
 
-# ── DB helpers ────────────────────────────────────────────────────────
+# ── DB helpers ─────────────────────────────────────────────────────────────────
 
 def _save_message_sync(session_id: str, role: str, content: str,
                        tool_calls: Optional[list] = None,
@@ -299,7 +300,7 @@ async def _learn_from_error(
         logger.warning(f"[chat] Error learning failed: {e}")
 
 
-# ── Main chat endpoint ────────────────────────────────────────────────
+# ── Main chat endpoint ─────────────────────────────────────────────────────────
 
 @router.post("/")
 async def chat(
@@ -335,8 +336,8 @@ async def chat(
         # 4. Load memory context (personal facts, preferences, past learnings)
         memory_context = await _load_memory_context(req.message)
 
-        # 5. Build context from graph
-        context_result = await build_context(req.message)
+        # 5. Build context from graph — pass web_search_enabled flag
+        context_result = await build_context(req.message, web_search_enabled=req.web_search_enabled)
 
         # 6. Stream tool call events to frontend
         for tc in context_result.tool_calls:
@@ -361,6 +362,18 @@ async def chat(
                 combined_context += "\n\n" + memory_context
             else:
                 combined_context = memory_context
+
+        # Add web search context note if enabled
+        if req.web_search_enabled:
+            web_note = (
+                "\n\n[Web Search Enabled] You have access to web_search tool. "
+                "Use it when the knowledge graph doesn't have sufficient information "
+                "on the user's query. Search the web for current, up-to-date information."
+            )
+            if combined_context:
+                combined_context += web_note
+            else:
+                combined_context = web_note
 
         messages = build_messages(
             user_message=req.message,
