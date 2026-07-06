@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import AppShell from "@/components/layout/AppShell";
-import ChartRenderer from "@/components/visualize/ChartRenderer";
 import { listArtifacts, deleteArtifact } from "@/lib/api";
 import type { Artifact } from "@/lib/types";
 import {
@@ -12,14 +11,15 @@ import {
   FileText,
   Trash2,
   Search,
-  Filter,
   Loader2,
   AlertCircle,
-  ExternalLink,
   Clock,
   Tag,
 } from "lucide-react";
 import clsx from "clsx";
+
+// Lazy load ChartRenderer — vega-embed is heavy and only needed at runtime
+const ChartRenderer = lazy(() => import("@/components/visualize/ChartRenderer"));
 
 const TYPE_ICONS: Record<string, React.ElementType> = {
   chart: BarChart3,
@@ -250,7 +250,15 @@ function ArtifactsContent() {
             {/* Render chart if it has a spec */}
             {selectedArtifact.type === "chart" && selectedArtifact.spec && (
               <div className="mb-4">
-                <ChartRenderer spec={selectedArtifact.spec} title={selectedArtifact.title} />
+                <Suspense
+                  fallback={
+                    <div className="flex items-center justify-center py-8 rounded-xl border border-rim bg-surface/50">
+                      <Loader2 size={16} className="text-dawn animate-spin" />
+                    </div>
+                  }
+                >
+                  <ChartRenderer spec={selectedArtifact.spec} title={selectedArtifact.title} />
+                </Suspense>
               </div>
             )}
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, lazy, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Send,
@@ -11,17 +11,19 @@ import {
   Plus,
   Settings,
   Sparkles,
-  Zap,
   Image,
   Table2,
+  Loader2,
 } from "lucide-react";
 import Link from "next/link";
 import { streamChat, getSessionMessages, createSession } from "@/lib/api";
 import type { ChatMessage, ToolCall, SessionMessage, Artifact } from "@/lib/types";
 import type { AgentChatMessage, ArtifactRef } from "@/lib/agent-types";
 import Message from "@/components/chat/Message";
-import ChartRenderer from "./ChartRenderer";
 import clsx from "clsx";
+
+// Lazy load ChartRenderer — vega-embed is heavy and only needed at runtime
+const ChartRenderer = lazy(() => import("./ChartRenderer"));
 
 let messageId = 0;
 const nextId = () => String(++messageId);
@@ -156,7 +158,7 @@ export default function VisualizeWindow() {
         text,
         buildHistory(),
         sessionId.current,
-        webSearchEnabled,  // Pass web search flag
+        webSearchEnabled,
       )) {
         switch (event.type) {
           case "thinking":
@@ -238,25 +240,6 @@ export default function VisualizeWindow() {
     } catch (err) {
       console.error("[VisualizeWindow] Failed to create session:", err);
     }
-  };
-
-  // Extract Vega-Lite specs from message content
-  const extractCharts = (content: string): { spec: Record<string, unknown>; title: string }[] => {
-    const charts: { spec: Record<string, unknown>; title: string }[] = [];
-    const regex = /```vega-lite\n([\s\S]*?)```/g;
-    let match;
-    while ((match = regex.exec(content)) !== null) {
-      try {
-        const spec = JSON.parse(match[1]);
-        charts.push({
-          spec,
-          title: spec.title || "Chart",
-        });
-      } catch {
-        // Invalid JSON, skip
-      }
-    }
-    return charts;
   };
 
   return (
@@ -473,11 +456,19 @@ function ChartsFromContent({ content }: { content: string }) {
   return (
     <div className="ml-0 sm:ml-12 mt-3 space-y-3">
       {charts.map((chart, i) => (
-        <ChartRenderer
+        <Suspense
           key={i}
-          spec={chart.spec}
-          title={chart.title}
-        />
+          fallback={
+            <div className="flex items-center justify-center py-8 rounded-xl border border-rim bg-surface/50">
+              <Loader2 size={16} className="text-dawn animate-spin" />
+            </div>
+          }
+        >
+          <ChartRenderer
+            spec={chart.spec}
+            title={chart.title}
+          />
+        </Suspense>
       ))}
     </div>
   );

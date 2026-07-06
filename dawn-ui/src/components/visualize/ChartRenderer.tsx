@@ -23,41 +23,43 @@ export default function ChartRenderer({ spec, title, className = "", compact = f
     setLoading(true);
     setError(null);
 
-    // Dynamic import of vega-embed (it's large, so lazy load)
-    import("vega-embed").then((mod) => {
-      if (cancelled) return;
-      const embed = mod.default;
+    // Dynamic import of vega-embed (it's large, so lazy load at runtime only)
+    import("vega-embed")
+      .then((mod) => {
+        if (cancelled) return;
+        const embed = mod.default;
 
-      embed(ref.current!, spec as any, {
-        actions: {
-          export: true,
-          source: false,
-          compiled: false,
-          editor: false,
-        },
-        renderer: "canvas",
-        tooltip: true,
-        width: compact ? 280 : undefined,
-        height: compact ? 200 : undefined,
-        padding: { left: 5, right: 5, top: 5, bottom: 5 },
-      })
-        .then(() => {
-          if (!cancelled) setLoading(false);
+        embed(ref.current!, spec as any, {
+          actions: {
+            export: true,
+            source: false,
+            compiled: false,
+            editor: false,
+          },
+          renderer: "canvas",
+          tooltip: true,
+          width: compact ? 280 : undefined,
+          height: compact ? 200 : undefined,
+          padding: { left: 5, right: 5, top: 5, bottom: 5 },
         })
-        .catch((err) => {
-          if (!cancelled) {
-            console.error("[ChartRenderer] Vega-embed error:", err);
-            setError(err.message || "Failed to render chart");
-            setLoading(false);
-          }
-        });
-    }).catch((err) => {
-      if (!cancelled) {
-        console.error("[ChartRenderer] Failed to load vega-embed:", err);
-        setError("Failed to load chart library");
-        setLoading(false);
-      }
-    });
+          .then(() => {
+            if (!cancelled) setLoading(false);
+          })
+          .catch((err) => {
+            if (!cancelled) {
+              console.error("[ChartRenderer] Vega-embed error:", err);
+              setError(err.message || "Failed to render chart");
+              setLoading(false);
+            }
+          });
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error("[ChartRenderer] Failed to load vega-embed:", err);
+          setError("Failed to load chart library");
+          setLoading(false);
+        }
+      });
 
     return () => {
       cancelled = true;
