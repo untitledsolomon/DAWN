@@ -56,7 +56,7 @@ def extract_key_terms(query: str) -> list[str]:
     return candidates
 
 
-async def build_context(query: str, max_nodes: int = 10, include_code: bool = False) -> ContextResult:
+async def build_context(query: str, max_nodes: int = 10, include_code: bool = False, web_search_enabled: bool = False) -> ContextResult:
     """
     Main retrieval pipeline.
     1. Try fuzzy search on full query + key terms (code-tagged nodes
@@ -75,6 +75,9 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
     nodes a normal chat query is actually looking for. Set
     include_code=True for queries that are explicitly about the
     codebase (e.g. routed there by intent detection upstream).
+
+    web_search_enabled=False by default: when True, adds a note to the
+    context telling the LLM it can use web search for supplementary info.
     """
     tool_calls: list[ToolCall] = []
     node_ids: list[str] = []
@@ -84,7 +87,7 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
 
     exclude_tags = None if include_code else ["code"]
 
-    # ── Stage 1: Find entry nodes via fuzzy search ──────────────────────────
+    # ── Stage 1: Find entry nodes via fuzzy search ──────────────────────────────
     candidates = extract_key_terms(query)
     entry_nodes: list[dict] = []
 
@@ -101,7 +104,7 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
         if len(entry_nodes) >= 3:
             break  # Good enough entry points found
 
-    # ── Stage 1b: Semantic fallback if fuzzy search found nothing ────────────
+    # ── Stage 1b: Semantic fallback if fuzzy search found nothing ───────────────
     # Trigram similarity misses paraphrases and conceptually-related but
     # differently-worded content ("bot keeps losing money" vs a node
     # titled "Sharpe ratio degradation") — this is exactly what
@@ -118,6 +121,14 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
                     seen_ids.add(node["id"])
 
     if not entry_nodes:
+        # If web search is enabled, still return empty context but note it
+        if web_search_enabled:
+            return ContextResult(
+                context="[No relevant knowledge graph nodes found. Use web search to answer this query.]",
+                tool_calls=tool_calls,
+                node_ids=[],
+                node_titles=[],
+            )
         return ContextResult(
             context="",
             tool_calls=tool_calls,
@@ -125,7 +136,7 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
             node_titles=[],
         )
 
-    # ── Stage 2: Traverse from entry nodes ──────────────────────────────────
+    # ── Stage 2: Traverse from entry nodes ──────────────────────────────────────
     # Track how many nodes we've added so we can dynamically increase the limit
     # for table-type parents
     nodes_added = 0
@@ -178,6 +189,14 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
                     )
 
     context = "\n\n".join(context_parts)
+
+    # Add web search note if enabled
+    if web_search_enabled:
+        context += (
+            "\n\n[Web Search Available] If the information above is insufficient "
+            "or outdated, you can use the web_search tool to find current information."
+        )
+
     return ContextResult(
         context=context,
         tool_calls=tool_calls,

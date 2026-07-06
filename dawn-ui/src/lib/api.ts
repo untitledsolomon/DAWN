@@ -1,4 +1,4 @@
-import type { DawnNode, Tag, IngestionLog, SSEEvent, ChatSession, SessionMessage, AppSettings, NotificationPrefs, AgentLogEntry } from "./types";
+import type { DawnNode, Tag, IngestionLog, SSEEvent, ChatSession, SessionMessage, AppSettings, NotificationPrefs, AgentLogEntry, Artifact } from "./types";
 import type { AgentSSEEvent } from "./agent-types";
 
 const BASE = process.env.NEXT_PUBLIC_DAWN_API_URL || "http://localhost:8000";
@@ -9,7 +9,7 @@ const headers = () => ({
   "x-api-key": KEY,
 });
 
-// ── Nodes ──────────────────────────────────────────────────────────────────
+// ── Nodes ─────────────────────────────────────────────────────────────────────
 
 export async function listNodes(params?: {
   status?: string;
@@ -91,7 +91,7 @@ export async function getPendingNodes(): Promise<DawnNode[]> {
   return res.json();
 }
 
-// ── Tags ───────────────────────────────────────────────────────────────────
+// ── Tags ──────────────────────────────────────────────────────────────────────
 
 export async function listTags(): Promise<Tag[]> {
   const res = await fetch(`${BASE}/nodes/tags`, { headers: headers() });
@@ -107,7 +107,7 @@ export async function createTag(name: string, description?: string) {
   return res.json();
 }
 
-// ── Edges ──────────────────────────────────────────────────────────────────
+// ── Edges ─────────────────────────────────────────────────────────────────────
 
 export async function createEdge(data: {
   from_node: string;
@@ -124,7 +124,7 @@ export async function createEdge(data: {
   return res.json();
 }
 
-// ── Search ─────────────────────────────────────────────────────────────────
+// ── Search ────────────────────────────────────────────────────────────────────
 
 export async function searchNodes(q: string, limit = 10): Promise<DawnNode[]> {
   const res = await fetch(`${BASE}/search/?q=${encodeURIComponent(q)}&limit=${limit}`, { headers: headers() });
@@ -136,17 +136,18 @@ export async function traverseNode(nodeId: string, depth = 2) {
   return res.json();
 }
 
-// ── Chat (streaming) ───────────────────────────────────────────────────────
+// ── Chat (streaming) ──────────────────────────────────────────────────────────
 
 export async function* streamChat(
   message: string,
   history: { role: string; content: string }[],
   sessionId?: string,
+  webSearchEnabled?: boolean,
 ): AsyncGenerator<SSEEvent> {
   const res = await fetch(`${BASE}/chat/`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ message, history, session_id: sessionId }),
+    body: JSON.stringify({ message, history, session_id: sessionId, web_search_enabled: webSearchEnabled }),
   });
 
   if (!res.ok || !res.body) {
@@ -179,7 +180,7 @@ export async function* streamChat(
   }
 }
 
-// ── Chat Sessions ──────────────────────────────────────────────────────────
+// ── Chat Sessions ─────────────────────────────────────────────────────────────
 
 export async function listSessions(): Promise<ChatSession[]> {
   const res = await fetch(`${BASE}/chat/sessions`, { headers: headers() });
@@ -223,7 +224,7 @@ export async function getSessionMessages(sessionId: string): Promise<SessionMess
   return res.json();
 }
 
-// ── Settings ───────────────────────────────────────────────────────────────
+// ── Settings ──────────────────────────────────────────────────────────────────
 
 export async function getSettings(): Promise<AppSettings> {
   const res = await fetch(`${BASE}/settings`, { headers: headers() });
@@ -240,7 +241,7 @@ export async function updateSetting(key: string, value: unknown): Promise<void> 
   if (!res.ok) throw new Error(`Failed to update setting: ${res.status}`);
 }
 
-// ── Notifications ──────────────────────────────────────────────────────────
+// ── Notifications ─────────────────────────────────────────────────────────────
 
 export async function getNotificationPrefs(): Promise<NotificationPrefs> {
   const res = await fetch(`${BASE}/notifications`, { headers: headers() });
@@ -257,7 +258,7 @@ export async function updateNotificationPrefs(prefs: Partial<NotificationPrefs>)
   if (!res.ok) throw new Error(`Failed to update notification prefs: ${res.status}`);
 }
 
-// ── Agent Logs ─────────────────────────────────────────────────────────────
+// ── Agent Logs ────────────────────────────────────────────────────────────────
 
 export async function getAgentLogs(limit = 50, statusFilter?: string): Promise<AgentLogEntry[]> {
   const qs = new URLSearchParams();
@@ -274,7 +275,7 @@ export async function getAgentLog(logId: string): Promise<AgentLogEntry> {
   return res.json();
 }
 
-// ── Ingestion ──────────────────────────────────────────────────────────────
+// ── Ingestion ─────────────────────────────────────────────────────────────────
 
 export async function ingestRepo(repoPath: string, repoName: string, tags: string[] = []) {
   const res = await fetch(`${BASE}/ingest/repo`, {
@@ -318,7 +319,7 @@ export async function getIngestionLog(): Promise<IngestionLog[]> {
   return res.json();
 }
 
-// ── Health ─────────────────────────────────────────────────────────────────
+// ── Health ────────────────────────────────────────────────────────────────────
 
 export async function checkHealth() {
   try {
@@ -329,7 +330,7 @@ export async function checkHealth() {
   }
 }
 
-// ── v3.0: SSH Hosts ────────────────────────────────────────────────────────
+// ── v3.0: SSH Hosts ───────────────────────────────────────────────────────────
 
 export async function listSSHHosts() {
   const res = await fetch(`${BASE}/ssh/hosts`, { headers: headers() });
@@ -347,7 +348,7 @@ export async function deleteSSHHost(id: string) {
   await fetch(`${BASE}/ssh/hosts/${id}`, { method: "DELETE", headers: headers() });
 }
 
-// ── v5.0: OSINT ────────────────────────────────────────────────────────────
+// ── v5.0: OSINT ───────────────────────────────────────────────────────────────
 
 export async function listOSINTTargets() {
   const res = await fetch(`${BASE}/osint/targets`, { headers: headers() });
@@ -365,7 +366,7 @@ export async function deleteOSINTTarget(id: string) {
   await fetch(`${BASE}/osint/targets/${id}`, { method: "DELETE", headers: headers() });
 }
 
-// ── v6.0: Pentesting ───────────────────────────────────────────────────────
+// ── v6.0: Pentesting ──────────────────────────────────────────────────────────
 
 export async function listPentestTargets() {
   const res = await fetch(`${BASE}/pentest/targets`, { headers: headers() });
@@ -380,7 +381,7 @@ export async function listVulnerabilities(severity?: string, status?: string) {
   return res.json();
 }
 
-// ── v10.0: Integrations ────────────────────────────────────────────────────
+// ── v10.0: Integrations ───────────────────────────────────────────────────────
 
 export async function listIntegrations() {
   const res = await fetch(`${BASE}/integrations`, { headers: headers() });
@@ -392,7 +393,7 @@ export async function syncIntegration(serviceName: string) {
   return res.json();
 }
 
-// ── v13.0: Monitoring ──────────────────────────────────────────────────────
+// ── v13.0: Monitoring ─────────────────────────────────────────────────────────
 
 export async function getMonitorStatus() {
   const res = await fetch(`${BASE}/monitor/status`, { headers: headers() });
@@ -408,7 +409,7 @@ export async function acknowledgeAlert(eventId: string) {
   await fetch(`${BASE}/alerts/events/${eventId}/acknowledge`, { method: "POST", headers: headers() });
 }
 
-// ── v7.0: Books ────────────────────────────────────────────────────────────
+// ── v7.0: Books ───────────────────────────────────────────────────────────────
 
 export async function listBooks(category?: string) {
   const qs = category ? `?category=${category}` : "";
@@ -428,7 +429,7 @@ export async function ingestBook(bookId: string) {
   return res.json();
 }
 
-// ── v16.0: Agent Tasks ─────────────────────────────────────────────────────
+// ── v16.0: Agent Tasks ────────────────────────────────────────────────────────
 
 export async function listAgentTasks(status?: string) {
   const qs = status ? `?status=${status}` : "";
@@ -445,4 +446,62 @@ export async function createAgentTask(data: Record<string, unknown>) {
 
 export async function cancelAgentTask(taskId: string) {
   await fetch(`${BASE}/agent-tasks/${taskId}/cancel`, { method: "POST", headers: headers() });
+}
+
+// ── v20.0: Artifacts ──────────────────────────────────────────────────────────
+
+export async function listArtifacts(params?: {
+  type?: string;
+  session_id?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<Artifact[]> {
+  const qs = new URLSearchParams();
+  if (params?.type) qs.set("type", params.type);
+  if (params?.session_id) qs.set("session_id", params.session_id);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+
+  const res = await fetch(`${BASE}/artifacts?${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to list artifacts: ${res.status}`);
+  return res.json();
+}
+
+export async function countArtifacts(params?: { type?: string }): Promise<number> {
+  const qs = new URLSearchParams();
+  if (params?.type) qs.set("type", params.type);
+
+  const res = await fetch(`${BASE}/artifacts/count?${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to count artifacts: ${res.status}`);
+  const data = await res.json();
+  return data.total ?? 0;
+}
+
+export async function getArtifact(id: string): Promise<Artifact> {
+  const res = await fetch(`${BASE}/artifacts/${id}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Artifact not found: ${id}`);
+  return res.json();
+}
+
+export async function createArtifact(data: {
+  session_id: string;
+  type: string;
+  title: string;
+  description?: string;
+  spec?: Record<string, unknown>;
+  url?: string;
+  data_summary?: string;
+  tags?: string[];
+}): Promise<Artifact> {
+  const res = await fetch(`${BASE}/artifacts`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to create artifact");
+  return res.json();
+}
+
+export async function deleteArtifact(id: string): Promise<void> {
+  await fetch(`${BASE}/artifacts/${id}`, { method: "DELETE", headers: headers() });
 }

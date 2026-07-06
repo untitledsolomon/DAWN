@@ -250,3 +250,19 @@ export interface AgentTask {
 }
 
 export * from "./agent-types";
+
+// v20.0: Artifacts (visualizations, files, tables)
+export type ArtifactType = "chart" | "table" | "image" | "file";
+
+export interface Artifact {
+  id: string;
+  session_id: string;
+  type: ArtifactType;
+  title: string;
+  description: string | null;
+  spec: Record<string, unknown> | null;  // Vega-Lite spec for charts
+  url: string | null;                     // URL for images/files
+  data_summary: string | null;            // Text summary of what this artifact shows
+  tags: string[];
+  created_at: string;
+}
