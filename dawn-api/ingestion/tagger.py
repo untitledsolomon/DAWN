@@ -43,7 +43,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# ── Tag descriptions (used when DB has none) ────────────────────────────────
+# ── Tag descriptions (used when DB has none) ──────────────────────────────────
 _TAG_DESCRIPTIONS = {
     "crm": "Customer relationship management, sales, leads, contacts, deals",
     "payroll": "Payroll processing, salary, employee payments, PAYE, NSSF",
@@ -94,7 +94,7 @@ class HybridTagger:
         self.tag_ids: dict[str, str] = {}         # name -> db id
         self._cache_key: Optional[frozenset] = None
 
-    # ── Public API ──────────────────────────────────────────────────────────
+    # ── Public API ────────────────────────────────────────────────────────────────
 
     async def tag(
         self,
@@ -121,6 +121,7 @@ class HybridTagger:
         content = f"{title}\n{text}" if title else text
         content = content.strip()
         if not content or len(content) < 20:
+            logger.debug(f"Tagger: content too short ({len(content)} chars), returning uncategorized")
             return ["uncategorized"]
 
         # Lazy-load model
@@ -132,6 +133,7 @@ class HybridTagger:
             await self.refresh()
 
         if not self.tag_embeddings:
+            logger.debug("Tagger: no tag embeddings loaded, returning uncategorized")
             return ["uncategorized"]
 
         # Embed content
@@ -155,29 +157,36 @@ class HybridTagger:
         # Sort descending by score
         scores.sort(key=lambda x: -x[0])
 
-        # ── Strategy 1: Top-K ──────────────────────────────────────────────
+        # ── Strategy 1: Top-K ─────────────────────────────────────────────────────
         top_tags = scores[:top_k]
 
-        # ── Strategy 2: Adaptive floor ─────────────────────────────────────
+        # ── Strategy 2: Adaptive floor ────────────────────────────────────────────
         # If even the top tag is below the absolute floor, it's garbage
         if top_tags[0][0] < min_similarity:
+            logger.debug(f"Tagger: top tag '{top_tags[0][1]}' score {top_tags[0][0]:.4f} below floor {min_similarity}, uncategorized")
             return ["uncategorized"]
 
-        # ── Strategy 3: Dynamic per-tag thresholds ─────────────────────────
+        # ── Strategy 3: Dynamic per-tag thresholds ────────────────────────────────
         if use_dynamic_thresholds and self.tag_thresholds:
             matched = []
             for score, tag_name in top_tags:
                 threshold = self.tag_thresholds.get(tag_name, _DEFAULT_THRESHOLD)
                 if score >= threshold:
                     matched.append(tag_name)
+                else:
+                    logger.debug(f"Tagger: '{tag_name}' score {score:.4f} below threshold {threshold:.4f}, filtered")
             if matched:
+                logger.debug(f"Tagger: dynamic thresholds matched: {matched}")
                 return matched
             # If dynamic thresholds filtered everything out, fall back to
             # the single best match (better than uncategorizing good content)
+            logger.debug(f"Tagger: all top tags filtered by thresholds, falling back to '{top_tags[0][1]}' (score: {top_tags[0][0]:.4f})")
             return [top_tags[0][1]]
 
         # Without dynamic thresholds, just return top-k
-        return [name for _, name in top_tags]
+        result = [name for _, name in top_tags]
+        logger.debug(f"Tagger: returning top-{top_k}: {result}")
+        return result
 
     async def refresh(self):
         """Reload tags from DB and recompute embeddings.
@@ -229,6 +238,7 @@ class HybridTagger:
                 self.tag_embeddings = {
                     name: vec for name, vec in zip(tag_defs.keys(), tag_vecs)
                 }
+                logger.debug(f"Tagger: refreshed {len(self.tag_embeddings)} tag embeddings")
             except Exception as e:
                 logger.error(f"Tag embedding refresh failed: {e}")
 
@@ -264,7 +274,7 @@ class HybridTagger:
         """Return current per-tag thresholds (for diagnostics)."""
         return dict(self.tag_thresholds)
 
-    # ── Internal ────────────────────────────────────────────────────────────
+    # ── Internal ──────────────────────────────────────────────────────────────────
 
     async def _load_model(self):
         try:
