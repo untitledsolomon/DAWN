@@ -43,7 +43,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# ── Tag descriptions (used when DB has none) ──────────────────────────────
+# ── Tag descriptions (used when DB has none) ────────────────────────────────
 _TAG_DESCRIPTIONS = {
     "crm": "Customer relationship management, sales, leads, contacts, deals",
     "payroll": "Payroll processing, salary, employee payments, PAYE, NSSF",
@@ -94,7 +94,7 @@ class HybridTagger:
         self.tag_ids: dict[str, str] = {}         # name -> db id
         self._cache_key: Optional[frozenset] = None
 
-    # ── Public API ────────────────────────────────────────────────────────
+    # ── Public API ──────────────────────────────────────────────────────────
 
     async def tag(
         self,
@@ -141,10 +141,13 @@ class HybridTagger:
             logger.error(f"Tagger encoding failed: {e}")
             return ["uncategorized"]
 
-        # Compute similarities
+        # Compute similarities — EXCLUDE "uncategorized" from scoring
+        # so it can never win against a legitimate tag.
         doc_norm = doc_vec / (np.linalg.norm(doc_vec) + 1e-10)
         scores: list[tuple[float, str]] = []
         for tag_name, tag_vec in self.tag_embeddings.items():
+            if tag_name == "uncategorized":
+                continue
             tag_norm = tag_vec / (np.linalg.norm(tag_vec) + 1e-10)
             sim = float(np.dot(doc_norm, tag_norm))
             scores.append((sim, tag_name))
@@ -152,15 +155,15 @@ class HybridTagger:
         # Sort descending by score
         scores.sort(key=lambda x: -x[0])
 
-        # ── Strategy 1: Top-K ─────────────────────────────────────────
+        # ── Strategy 1: Top-K ──────────────────────────────────────────────
         top_tags = scores[:top_k]
 
-        # ── Strategy 2: Adaptive floor ────────────────────────────────
+        # ── Strategy 2: Adaptive floor ─────────────────────────────────────
         # If even the top tag is below the absolute floor, it's garbage
         if top_tags[0][0] < min_similarity:
             return ["uncategorized"]
 
-        # ── Strategy 3: Dynamic per-tag thresholds ────────────────────
+        # ── Strategy 3: Dynamic per-tag thresholds ─────────────────────────
         if use_dynamic_thresholds and self.tag_thresholds:
             matched = []
             for score, tag_name in top_tags:
@@ -261,7 +264,7 @@ class HybridTagger:
         """Return current per-tag thresholds (for diagnostics)."""
         return dict(self.tag_thresholds)
 
-    # ── Internal ──────────────────────────────────────────────────────────
+    # ── Internal ────────────────────────────────────────────────────────────
 
     async def _load_model(self):
         try:
