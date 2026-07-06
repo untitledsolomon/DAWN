@@ -333,6 +333,17 @@ _TAG_DESCRIPTIONS = {
     "marketing": "Marketing, advertising, social media, campaigns, branding",
     "hr": "Human resources, recruitment, employee management, staffing",
     "operations": "Operations, logistics, supply chain, processes",
+    "self-help": "Self-help, personal development, psychology, philosophy, life strategy, success principles, motivation",
+    "philosophy": "Philosophy, ethics, political theory, historical analysis, critical thinking, logic, morality",
+    "psychology": "Psychology, human behavior, cognitive science, persuasion, influence, mental models",
+    "history": "History, historical events, biographies, historical analysis, ancient civilizations, world history",
+    "strategy": "Strategy, tactics, game theory, military strategy, business strategy, competitive analysis, power dynamics",
+    "leadership": "Leadership, management, executive skills, team building, organizational behavior, decision making",
+    "communication": "Communication, negotiation, persuasion, public speaking, rhetoric, writing, storytelling",
+    "economics": "Economics, macroeconomics, microeconomics, economic theory, market analysis, trade",
+    "politics": "Politics, governance, political theory, international relations, policy, power",
+    "biography": "Biography, memoir, autobiography, personal stories, life narratives, historical figures",
+    "uncategorized": "Default fallback tag for content that doesn't match any other category",
 }
 
 
@@ -797,6 +808,164 @@ async def get_log(_: None = Depends(verify_key)):
     return await db.get_ingestion_log()
 
 
+
+
+# ──── Admin: Back-Tag Existing Nodes ──────────────────────────────────────────
+# Re-runs auto-tagging on all nodes tagged "uncategorized" or with no tags.
+# Also creates any missing tags from _TAG_DESCRIPTIONS in the database.
+# Trigger via: POST /admin/backtag (requires API key)
+
+NEW_TAGS_FOR_BACKTAG = [
+    {"name": "self-help", "description": "Self-help, personal development, psychology, philosophy, life strategy, success principles, motivation"},
+    {"name": "philosophy", "description": "Philosophy, ethics, political theory, historical analysis, critical thinking, logic, morality"},
+    {"name": "psychology", "description": "Psychology, human behavior, cognitive science, persuasion, influence, mental models"},
+    {"name": "history", "description": "History, historical events, biographies, historical analysis, ancient civilizations, world history"},
+    {"name": "strategy", "description": "Strategy, tactics, game theory, military strategy, business strategy, competitive analysis, power dynamics"},
+    {"name": "leadership", "description": "Leadership, management, executive skills, team building, organizational behavior, decision making"},
+    {"name": "communication", "description": "Communication, negotiation, persuasion, public speaking, rhetoric, writing, storytelling"},
+    {"name": "economics", "description": "Economics, macroeconomics, microeconomics, economic theory, market analysis, trade"},
+    {"name": "politics", "description": "Politics, governance, political theory, international relations, policy, power"},
+    {"name": "biography", "description": "Biography, memoir, autobiography, personal stories, life narratives, historical figures"},
+    {"name": "uncategorized", "description": "Default fallback tag for content that doesn't match any other category"},
+]
+
+
+@router.post("/admin/backtag")
+async def admin_backtag(x_api_key: Optional[str] = Header(None)):
+    """Re-run auto-tagging on all uncategorized/untagged nodes.
+
+    Also creates any missing tags from NEW_TAGS_FOR_BACKTAG in the database.
+    Returns a summary of what was tagged and what stayed uncategorized.
+    """
+    if x_api_key != settings.dawn_api_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    import numpy as np
+
+    results = {"tags_created": 0, "nodes_processed": 0, "tagged": 0, "still_uncategorized": 0, "errors": 0}
+
+    # Step 1: Add any missing tags
+    existing_tags = await db.get_all_tags()
+    existing_names = {t["name"] for t in existing_tags}
+    for tag_def in NEW_TAGS_FOR_BACKTAG:
+        if tag_def["name"] not in existing_names:
+            await db.create_tag(tag_def["name"], tag_def["description"])
+            results["tags_created"] += 1
+            logger.info(f"Backtag: created tag '{tag_def['name']}'")
+
+    # Refresh tag list
+    all_tags = await db.get_all_tags()
+    tag_name_to_id = {t["name"]: t["id"] for t in all_tags}
+
+    # Step 2: Find uncategorized and untagged nodes
+    db_client = db.get_db()
+
+    # Find the uncategorized tag ID
+    uncat_tag = next((t for t in all_tags if t["name"] == "uncategorized"), None)
+    uncat_tag_id = uncat_tag["id"] if uncat_tag else None
+
+    # Nodes with "uncategorized" tag
+    uncategorized_ids = set()
+    if uncat_tag_id:
+        res = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: db_client.table("node_tags")
+            .select("node_id")
+            .eq("tag_id", uncat_tag_id)
+            .execute()
+        )
+        uncategorized_ids = {row["node_id"] for row in (res.data or [])}
+
+    # All nodes with ANY tag
+    res = await asyncio.get_event_loop().run_in_executor(
+        None,
+        lambda: db_client.table("node_tags").select("node_id").execute()
+    )
+    any_tag_ids = {row["node_id"] for row in (res.data or [])}
+
+    # All active/stale nodes
+    res = await asyncio.get_event_loop().run_in_executor(
+        None,
+        lambda: db_client.table("nodes")
+        .select("id, title, body, type, source, source_ref")
+        .in_("status", ["active", "stale"])
+        .execute()
+    )
+    all_nodes = res.data or []
+
+    nodes_to_tag = []
+    for node in all_nodes:
+        nid = node["id"]
+        if nid in uncategorized_ids or nid not in any_tag_ids:
+            nodes_to_tag.append(node)
+
+    results["nodes_processed"] = len(nodes_to_tag)
+
+    if not nodes_to_tag:
+        return {**results, "message": "No uncategorized or untagged nodes found."}
+
+    # Step 3: Load model and compute tag embeddings
+    try:
+        from llm.embeddings import get_embedding_model
+        model = get_embedding_model()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load embedding model: {e}")
+
+    # Build tag -> description map
+    tag_defs = {}
+    for t in all_tags:
+        name = t["name"].lower().strip()
+        desc = t.get("description") or _TAG_DESCRIPTIONS.get(name, "")
+        if name:
+            tag_defs[name] = desc
+
+    if not tag_defs:
+        tag_defs = {k: v for k, v in _TAG_DESCRIPTIONS.items()}
+
+    # Compute tag embeddings
+    tag_texts = [f"{name}: {desc}" if desc else name for name, desc in tag_defs.items()]
+    tag_vecs = model.encode(tag_texts, show_progress_bar=False)
+    tag_embeddings = {name: vec for name, vec in zip(tag_defs.keys(), tag_vecs)}
+
+    # Step 4: Back-tag each node
+    for i, node in enumerate(nodes_to_tag):
+        try:
+            title = node.get("title", "") or ""
+            body = node.get("body", "") or ""
+            text = f"{title} {body}" if title else body
+            text = text.strip()
+            if not text:
+                continue
+
+            # Embed and compute similarities
+            doc_vec = model.encode(text[:2000], show_progress_bar=False)
+            doc_norm = doc_vec / (np.linalg.norm(doc_vec) + 1e-10)
+
+            scores = []
+            for tag_name, tag_vec in tag_embeddings.items():
+                tag_norm = tag_vec / (np.linalg.norm(tag_vec) + 1e-10)
+                sim = float(np.dot(doc_norm, tag_norm))
+                scores.append((sim, tag_name))
+
+            scores.sort(key=lambda x: -x[0])
+            matched = [name for score, name in scores if score >= 0.35][:3]
+
+            if matched and matched != ["uncategorized"]:
+                tag_ids = [tag_name_to_id[t] for t in matched if t in tag_name_to_id]
+                if tag_ids:
+                    await db.attach_tags_batch([node["id"]], tag_ids)
+                    results["tagged"] += 1
+            else:
+                results["still_uncategorized"] += 1
+
+        except Exception as e:
+            results["errors"] += 1
+            logger.error(f"Backtag error on node {node.get('id', '?')[:8]}: {e}")
+
+    return {
+        **results,
+        "message": f"Processed {results['nodes_processed']} nodes. Tagged {results['tagged']}, {results['still_uncategorized']} still uncategorized.",
+    }
 # ─── File Type Detection ───────────────────────────────────────────────────────
 
 def detect_file_type(filename: str) -> Optional[str]:
