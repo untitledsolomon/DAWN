@@ -8,8 +8,8 @@ vendor failure), this workflow:
   4. Returns ranked options with tradeoff summaries
 """
 
-from ..constraints import Constraint
-from ..scoring import rank_options, build_workflow_result
+from decision_engine.constraints import Constraint
+from decision_engine.scoring import rank_options, build_workflow_result
 
 
 def build_constraints() -> list[Constraint]:
@@ -52,7 +52,7 @@ def build_constraints() -> list[Constraint]:
 
 
 def _check_contract_compliance(option: dict) -> "ConstraintResult":
-    from ..constraints import ConstraintResult
+    from decision_engine.constraints import ConstraintResult
     has_contract = option.get("has_active_contract", False)
     return ConstraintResult(
         name="contract_compliance",
@@ -62,7 +62,7 @@ def _check_contract_compliance(option: dict) -> "ConstraintResult":
 
 
 def _check_budget_ceiling(option: dict) -> "ConstraintResult":
-    from ..constraints import ConstraintResult
+    from decision_engine.constraints import ConstraintResult
     cost = option.get("projected_cost", 0)
     shipment_value = option.get("shipment_value", 1)
     ceiling = shipment_value * 0.15
@@ -76,7 +76,7 @@ def _check_budget_ceiling(option: dict) -> "ConstraintResult":
 
 
 def _score_transit_time(option: dict) -> "ConstraintResult":
-    from ..constraints import ConstraintResult
+    from decision_engine.constraints import ConstraintResult
     days = option.get("transit_days", 30)
     # Lower is better: score = 1 - (days / max_expected_days)
     max_days = 30
@@ -91,7 +91,7 @@ def _score_transit_time(option: dict) -> "ConstraintResult":
 
 
 def _score_reliability(option: dict) -> "ConstraintResult":
-    from ..constraints import ConstraintResult
+    from decision_engine.constraints import ConstraintResult
     rate = option.get("on_time_rate", 0.5)
     return ConstraintResult(
         name="reliability",
@@ -103,7 +103,7 @@ def _score_reliability(option: dict) -> "ConstraintResult":
 
 
 def _score_cost(option: dict) -> "ConstraintResult":
-    from ..constraints import ConstraintResult
+    from decision_engine.constraints import ConstraintResult
     cost = option.get("projected_cost", 0)
     max_cost = option.get("max_acceptable_cost", 100000)
     score = max(0.0, 1.0 - (cost / max_cost))

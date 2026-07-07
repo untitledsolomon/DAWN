@@ -7,8 +7,8 @@ The LLM's job is limited to:
   3. Flagging anomalies the structured engine wouldn't catch
 """
 
-from ..tools.base import BaseTool, ToolResult
-from ..decision_engine.registry import run_workflow
+from tools.base import BaseTool, ToolResult
+from decision_engine.registry import run_workflow
 
 
 class DecisionWorkflowTool(BaseTool):

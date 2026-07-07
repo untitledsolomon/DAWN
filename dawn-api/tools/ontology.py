@@ -4,8 +4,8 @@ This tool replaces raw SQL queries for business objects. It returns
 typed object graphs with expanded relationships, not flat tables.
 """
 
-from ..tools.base import BaseTool, ToolResult
-from ..routers.decision_intelligence import OntologyQueryRequest, query_ontology
+from tools.base import BaseTool, ToolResult
+from routers.decision_intelligence import OntologyQueryRequest, query_ontology
 
 
 class OntologyQueryTool(BaseTool):
