@@ -31,6 +31,11 @@ import {
   BarChart3,
   Image,
   X as XIcon,
+  GitBranch,
+  Route,
+  FlaskConical,
+  ScrollText,
+  ActivitySquare,
 } from "lucide-react";
 import clsx from "clsx";
 import { listSessions, createSession, deleteSession, updateSession, countArtifacts } from "@/lib/api";
@@ -63,6 +68,13 @@ const BUSINESS_NAV: NavItem[] = [
   { href: "/monitoring", icon: HeartPulse, label: "Monitoring" },
   { href: "/books", icon: BookOpen, label: "Library" },
   { href: "/artifacts", icon: Image, label: "Artifacts" },
+];
+
+const DECISIONS_NAV: NavItem[] = [
+  { href: "/ontology", icon: GitBranch, label: "Ontology" },
+  { href: "/scenarios", icon: FlaskConical, label: "Scenarios" },
+  { href: "/decisions", icon: ScrollText, label: "Decisions" },
+  { href: "/admin/data-sources", icon: ActivitySquare, label: "Data Sources" },
 ];
 
 // Component
@@ -305,6 +317,9 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
 
         {/* Business section */}
         <div className="flex-shrink-0"><NavSection label="Business" items={BUSINESS_NAV} /></div>
+
+        {/* Decision Intelligence section */}
+        <div className="flex-shrink-0"><NavSection label="Decisions" items={DECISIONS_NAV} /></div>
 
         {/* Recent conversations */}
         {!collapsed && (

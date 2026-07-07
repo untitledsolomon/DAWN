@@ -36,7 +36,7 @@ class ToolRegistry:
         return list(self._tools.keys())
 
 
-# ── Singleton ─────────────────────────────────────────────────────────
+# ── Singleton ───────────────────────────────────────────────────────────────────────────
 
 _registry: Optional[ToolRegistry] = None
 
@@ -119,3 +119,16 @@ def _register_default_tools(registry: ToolRegistry) -> None:
         registry.register(PentestTool())
     except Exception as e:
         logger.error(f"Failed to register PentestTool: {e}")
+
+    # v32.0 — Decision Intelligence tools
+    try:
+        from tools.decision_workflow import DecisionWorkflowTool
+        registry.register(DecisionWorkflowTool())
+    except Exception as e:
+        logger.error(f"Failed to register DecisionWorkflowTool: {e}")
+
+    try:
+        from tools.ontology import OntologyQueryTool
+        registry.register(OntologyQueryTool())
+    except Exception as e:
+        logger.error(f"Failed to register OntologyQueryTool: {e}")
