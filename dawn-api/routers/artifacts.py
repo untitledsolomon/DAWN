@@ -77,7 +77,10 @@ async def count_artifacts(
     """Count artifacts, optionally filtered by type."""
     try:
         supabase = db.get_db()
-        query = supabase.table("artifacts").select("*", count="exact", head=True)
+        # NOTE: this postgrest-py version's select() doesn't support `head=`.
+        # Use range(0, 0) instead so Postgres still returns an exact `count`
+        # without us pulling back real rows.
+        query = supabase.table("artifacts").select("id", count="exact").range(0, 0)
 
         if type:
             query = query.eq("type", type)
