@@ -16,7 +16,8 @@ import {
   Loader2,
 } from "lucide-react";
 import Link from "next/link";
-import { streamChat, getSessionMessages, createSession } from "@/lib/api";
+import { getSessionMessages, createSession } from "@/lib/api";
+import { streamAgent } from "@/lib/agent-api";
 import type { ChatMessage, ToolCall, SessionMessage, Artifact } from "@/lib/types";
 import type { AgentChatMessage, ArtifactRef } from "@/lib/agent-types";
 import Message from "@/components/chat/Message";
@@ -154,41 +155,56 @@ export default function VisualizeWindow() {
     const newArtifacts: ArtifactRef[] = [];
 
     try {
-      for await (const event of streamChat(
+      // Visualize mode goes through the agent loop (not plain /chat/) because
+      // producing a chart requires real tool-calling — the create_chart tool
+      // builds a Vega-Lite spec, which routers/agent.py then persists as an
+      // artifact and streams back as an "artifact" event.
+      for await (const event of streamAgent(
         text,
         buildHistory(),
         sessionId.current,
-        webSearchEnabled,
       )) {
         switch (event.type) {
           case "thinking":
             setThinkingState(true);
             break;
-          case "tool":
+          case "tool_call":
             toolCalls.push({
               name: event.name,
               args: event.args,
-              result_count: event.result_count,
+              result_count: 0,
             });
             setStreamingToolCalls([...toolCalls]);
             setThinkingState(false);
             break;
-          case "context":
-            finalNodeIds = event.node_ids;
-            finalNodeTitles = event.node_titles;
+          case "tool_result":
+            setThinkingState(false);
+            break;
+          case "artifact":
+            newArtifacts.push({
+              id: event.artifact_id,
+              type: event.artifact_type as ArtifactRef["type"],
+              title: event.title,
+              spec: event.spec,
+              url: event.url,
+              created_at: new Date().toISOString(),
+            });
             break;
           case "token":
             fullContent += event.content;
             setStreamingContent(fullContent);
             setThinkingState(false);
             break;
+          case "warning":
+            fullContent += `\n\n⚠️ ${event.content}`;
+            setStreamingContent(fullContent);
+            break;
           case "done":
-            finalNodeIds = event.node_ids;
-            finalNodeTitles = event.node_titles;
             if (event.session_id) adoptSessionId(event.session_id);
             break;
+          case "iteration_limit":
           case "error":
-            fullContent = `⚠️ Error: ${event.message}`;
+            fullContent = fullContent || `⚠️ ${event.content}`;
             setStreamingContent(fullContent);
             break;
         }

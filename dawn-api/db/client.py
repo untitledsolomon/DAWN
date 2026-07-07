@@ -356,3 +356,36 @@ async def ping() -> bool:
         return True
     except Exception:
         return False
+
+
+async def create_artifact(
+    session_id: str,
+    type: str,
+    title: str,
+    description: Optional[str] = None,
+    spec: Optional[dict] = None,
+    url: Optional[str] = None,
+    data_summary: Optional[str] = None,
+    tags: Optional[list[str]] = None,
+) -> dict:
+    """
+    Shared insert path for the `artifacts` table — used by routers/artifacts.py's
+    POST / (user-facing CRUD) and by routers/agent.py (when the create_chart tool
+    hands back a spec that needs persisting). Keeping this here rather than
+    duplicating the insert logic in both callers.
+    """
+    db = get_db()
+    data: dict = {"session_id": session_id, "type": type, "title": title}
+    if description:
+        data["description"] = description
+    if spec:
+        data["spec"] = spec
+    if url:
+        data["url"] = url
+    if data_summary:
+        data["data_summary"] = data_summary
+    if tags:
+        data["tags"] = tags
+
+    res = await _async_execute(lambda: db.table("artifacts").insert(data).execute())
+    return res.data[0] if res.data else {}

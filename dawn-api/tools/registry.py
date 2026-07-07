@@ -99,6 +99,13 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register OmniTool: {e}")
 
+    # Chart tool — builds Vega-Lite specs, rendered by dawn-ui's ChartRenderer
+    try:
+        from tools.chart import ChartTool
+        registry.register(ChartTool())
+    except Exception as e:
+        logger.error(f"Failed to register ChartTool: {e}")
+
     # OSINT recon tool
     try:
         from tools.osint_tool import OSINTTool

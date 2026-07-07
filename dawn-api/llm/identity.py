@@ -39,7 +39,7 @@ class TrustTier(str, Enum):
 # being refused after the fact.
 TIER_TOOL_ACCESS: dict[TrustTier, set[str] | None] = {
     TrustTier.OWNER: None,  # None = all registered tools
-    TrustTier.SERVICE: {"filesystem", "web_search", "knowledge_graph"},
+    TrustTier.SERVICE: {"filesystem", "web_search", "knowledge_graph", "create_chart"},
     TrustTier.UNKNOWN: set(),
 }
 

@@ -104,6 +104,36 @@ async def agent(
                     tc_dict["success"] = event.get("success")
                     tc_dict["output"] = event.get("output")
                     tc_dict["error"] = event.get("error")
+
+                # The create_chart tool only builds a spec — it doesn't know the
+                # session_id, so persisting it into `artifacts` and telling the
+                # frontend about it happens here, where we have both.
+                if (
+                    event.get("name") == "create_chart"
+                    and event.get("success")
+                    and isinstance(event.get("output"), dict)
+                ):
+                    output = event["output"]
+                    try:
+                        artifact = await db.create_artifact(
+                            session_id=session_id,
+                            type="chart",
+                            title=output.get("title") or "Chart",
+                            description=output.get("description"),
+                            spec=output.get("spec"),
+                        )
+                        if artifact:
+                            # Shape must match AgentSSEEvent's "artifact" variant
+                            # in dawn-ui/src/lib/agent-types.ts exactly.
+                            yield sse("artifact", {
+                                "artifact_id": artifact.get("id"),
+                                "artifact_type": artifact.get("type", "chart"),
+                                "title": artifact.get("title"),
+                                "spec": artifact.get("spec"),
+                                "url": artifact.get("url"),
+                            })
+                    except Exception:
+                        logger.exception("Failed to persist chart artifact")
             elif event_type == "token":
                 full_response.append(event.get("content", ""))
             elif event_type == "done":
