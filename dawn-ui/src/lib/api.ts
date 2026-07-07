@@ -188,11 +188,11 @@ export async function listSessions(): Promise<ChatSession[]> {
   return res.json();
 }
 
-export async function createSession(title = "New Chat"): Promise<ChatSession> {
+export async function createSession(title = "New Chat", mode: "chat" | "agent" | "visualize" = "chat"): Promise<ChatSession> {
   const res = await fetch(`${BASE}/chat/sessions`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ title }),
+    body: JSON.stringify({ title, mode }),
   });
   if (!res.ok) throw new Error("Failed to create session");
   return res.json();
@@ -462,7 +462,7 @@ export async function listArtifacts(params?: {
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.offset) qs.set("offset", String(params.offset));
 
-  const res = await fetch(`${BASE}/artifacts?${qs}`, { headers: headers() });
+  const res = await fetch(`${BASE}/artifacts/?${qs}`, { headers: headers() });
   if (!res.ok) throw new Error(`Failed to list artifacts: ${res.status}`);
   return res.json();
 }
@@ -493,7 +493,7 @@ export async function createArtifact(data: {
   data_summary?: string;
   tags?: string[];
 }): Promise<Artifact> {
-  const res = await fetch(`${BASE}/artifacts`, {
+  const res = await fetch(`${BASE}/artifacts/`, {
     method: "POST",
     headers: headers(),
     body: JSON.stringify(data),

@@ -127,7 +127,7 @@ export default function VisualizeWindow() {
 
     if (!sessionId.current) {
       try {
-        const session = await createSession("Visualize - " + text.slice(0, 40));
+        const session = await createSession("Visualize - " + text.slice(0, 40), "visualize");
         adoptSessionId(session.id);
       } catch (err) {
         console.error("[VisualizeWindow] Failed to create session:", err);
@@ -244,7 +244,7 @@ export default function VisualizeWindow() {
 
   const handleNewChat = async () => {
     try {
-      const session = await createSession("Visualize");
+      const session = await createSession("Visualize", "visualize");
       const url = new URL(window.location.href);
       url.searchParams.set("id", session.id);
       window.history.replaceState({}, "", url.toString());

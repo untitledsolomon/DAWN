@@ -1,0 +1,657 @@
+diff --git a/dawn-api/db/client.py b/dawn-api/db/client.py
+index 9d07ca9..79d7a84 100644
+--- a/dawn-api/db/client.py
++++ b/dawn-api/db/client.py
+@@ -356,3 +356,36 @@ async def ping() -> bool:
+         return True
+     except Exception:
+         return False
++
++
++async def create_artifact(
++    session_id: str,
++    type: str,
++    title: str,
++    description: Optional[str] = None,
++    spec: Optional[dict] = None,
++    url: Optional[str] = None,
++    data_summary: Optional[str] = None,
++    tags: Optional[list[str]] = None,
++) -> dict:
++    """
++    Shared insert path for the `artifacts` table — used by routers/artifacts.py's
++    POST / (user-facing CRUD) and by routers/agent.py (when the create_chart tool
++    hands back a spec that needs persisting). Keeping this here rather than
++    duplicating the insert logic in both callers.
++    """
++    db = get_db()
++    data: dict = {"session_id": session_id, "type": type, "title": title}
++    if description:
++        data["description"] = description
++    if spec:
++        data["spec"] = spec
++    if url:
++        data["url"] = url
++    if data_summary:
++        data["data_summary"] = data_summary
++    if tags:
++        data["tags"] = tags
++
++    res = await _async_execute(lambda: db.table("artifacts").insert(data).execute())
++    return res.data[0] if res.data else {}
+diff --git a/dawn-api/llm/agent.py b/dawn-api/llm/agent.py
+index de84fb4..51cbb61 100644
+--- a/dawn-api/llm/agent.py
++++ b/dawn-api/llm/agent.py
+@@ -61,6 +61,10 @@ def build_agent_messages(user_message: str, history: list[dict]) -> list[dict]:
+           "web search, and installing new capabilities inside a sandboxed workspace. "
+           "Use them when the task requires reading, writing, or inspecting real "
+           "files or repositories — don't guess at contents you haven't actually read."
++        + "\n\nWhen asked to visualize, chart, graph, or plot something, gather the "
++          "underlying data first (e.g. via the knowledge_graph tool), then call "
++          "create_chart with that data rather than describing a chart in words or "
++          "claiming you can't produce visuals — you can, via that tool."
+         + "\n\nBefore answering questions about Solomon, his projects, past decisions, "
+           "or anything that might already be recorded, call the knowledge_graph tool "
+           "first (search for topics/entities, recall for personal facts and "
+diff --git a/dawn-api/llm/identity.py b/dawn-api/llm/identity.py
+index dc3a299..b1fb8c5 100644
+--- a/dawn-api/llm/identity.py
++++ b/dawn-api/llm/identity.py
+@@ -39,7 +39,7 @@ class TrustTier(str, Enum):
+ # being refused after the fact.
+ TIER_TOOL_ACCESS: dict[TrustTier, set[str] | None] = {
+     TrustTier.OWNER: None,  # None = all registered tools
+-    TrustTier.SERVICE: {"filesystem", "web_search", "knowledge_graph"},
++    TrustTier.SERVICE: {"filesystem", "web_search", "knowledge_graph", "create_chart"},
+     TrustTier.UNKNOWN: set(),
+ }
+ 
+diff --git a/dawn-api/migrations/004_fix_search_overloads.sql b/dawn-api/migrations/004_fix_search_overloads.sql
+new file mode 100644
+index 0000000..bb852c5
+--- /dev/null
++++ b/dawn-api/migrations/004_fix_search_overloads.sql
+@@ -0,0 +1,116 @@
++-- ============================================================
++-- MIGRATION 004: Fix PGRST203 ambiguous overload errors
++-- ============================================================
++-- Root cause: earlier migrations used CREATE OR REPLACE FUNCTION
++-- with DIFFERENT parameter lists for semantic_search / fuzzy_search.
++-- Postgres treats a different signature as a NEW overload rather
++-- than a replacement, so multiple versions of each function now
++-- coexist. PostgREST can't pick one when called with a subset of
++-- args that matches more than one overload -> PGRST203.
++--
++-- Fix: explicitly drop every old overload, leaving only the
++-- canonical (p_query/p_embedding, p_limit, p_exclude_types,
++-- p_exclude_tags) signature in place.
++-- ============================================================
++
++-- semantic_search overloads to remove
++DROP FUNCTION IF EXISTS semantic_search(public.vector, integer);
++DROP FUNCTION IF EXISTS semantic_search(public.vector, integer, text[]);
++
++-- fuzzy_search overloads to remove
++DROP FUNCTION IF EXISTS fuzzy_search(text, integer, float);
++DROP FUNCTION IF EXISTS fuzzy_search(text, integer, float, text[]);
++
++-- This overload isn't in any committed migration -- it appears to have
++-- been created directly against the DB (e.g. via SQL editor) using the
++-- node_type enum array instead of text[] for p_exclude_types. It's the
++-- one actually colliding with the canonical version below, so drop both
++-- possible forms defensively.
++DROP FUNCTION IF EXISTS fuzzy_search(text, integer, float, node_type[], text[]);
++DROP FUNCTION IF EXISTS fuzzy_search(text, integer, float, text[], text[]);
++
++-- Same defensive drop for semantic_search in case a node_type[] variant
++-- was created there too.
++DROP FUNCTION IF EXISTS semantic_search(public.vector, integer, node_type[], text[]);
++DROP FUNCTION IF EXISTS semantic_search(public.vector, integer, text[], text[]);
++
++-- Recreate the canonical versions (safe no-op if identical to migration 003_add_auto_threshold)
++CREATE OR REPLACE FUNCTION fuzzy_search(
++  p_query         TEXT,
++  p_limit         INT DEFAULT 5,
++  p_threshold     FLOAT DEFAULT 0.2,
++  p_exclude_types TEXT[] DEFAULT NULL,
++  p_exclude_tags  TEXT[] DEFAULT NULL
++)
++RETURNS JSON AS $$
++DECLARE
++  result JSON;
++BEGIN
++  SELECT json_agg(json_build_object(
++    'id', n.id,
++    'title', n.title,
++    'type', n.type,
++    'body', n.body,
++    'similarity', GREATEST(
++      similarity(LOWER(n.title), LOWER(p_query)),
++      similarity(LOWER(n.body),  LOWER(p_query))
++    )
++  ) ORDER BY GREATEST(
++    similarity(LOWER(n.title), LOWER(p_query)),
++    similarity(LOWER(n.body),  LOWER(p_query))
++  ) DESC) INTO result
++  FROM nodes n
++  WHERE
++    n.status = 'active'
++    AND GREATEST(
++      similarity(LOWER(n.title), LOWER(p_query)),
++      similarity(LOWER(n.body),  LOWER(p_query))
++    ) > p_threshold
++    AND (p_exclude_types IS NULL OR n.type::text != ALL(p_exclude_types))
++    AND (p_exclude_tags IS NULL OR n.id NOT IN (
++      SELECT nt.node_id FROM node_tags nt
++      JOIN tags t ON t.id = nt.tag_id
++      WHERE t.name = ANY(p_exclude_tags)
++    ))
++  LIMIT p_limit;
++
++  RETURN result;
++END;
++$$ LANGUAGE plpgsql;
++
++
++CREATE OR REPLACE FUNCTION semantic_search(
++  p_embedding     VECTOR(384),
++  p_limit         INT DEFAULT 5,
++  p_exclude_types TEXT[] DEFAULT NULL,
++  p_exclude_tags  TEXT[] DEFAULT NULL
++)
++RETURNS JSON AS $$
++DECLARE
++  result JSON;
++BEGIN
++  SELECT json_agg(json_build_object(
++    'id', n.id,
++    'title', n.title,
++    'type', n.type,
++    'body', n.body,
++    'distance', n.embedding <=> p_embedding
++  ) ORDER BY n.embedding <=> p_embedding) INTO result
++  FROM nodes n
++  WHERE n.status = 'active'
++    AND n.embedding IS NOT NULL
++    AND (p_exclude_types IS NULL OR n.type::text != ALL(p_exclude_types))
++    AND (p_exclude_tags IS NULL OR n.id NOT IN (
++      SELECT nt.node_id FROM node_tags nt
++      JOIN tags t ON t.id = nt.tag_id
++      WHERE t.name = ANY(p_exclude_tags)
++    ))
++  LIMIT p_limit;
++
++  RETURN result;
++END;
++$$ LANGUAGE plpgsql;
++
++-- Force PostgREST to reload its schema cache so the dropped
++-- overloads disappear immediately instead of after the next restart.
++NOTIFY pgrst, 'reload schema';
+diff --git a/dawn-api/migrations/005_chat_sessions_mode.sql b/dawn-api/migrations/005_chat_sessions_mode.sql
+new file mode 100644
+index 0000000..c2aa65d
+--- /dev/null
++++ b/dawn-api/migrations/005_chat_sessions_mode.sql
+@@ -0,0 +1,23 @@
++-- ============================================================
++-- MIGRATION 005: Add `mode` to chat_sessions
++-- ============================================================
++-- The chat, agent, and visualize pages all share the same
++-- chat_sessions/chat_messages tables, but sessions had no way to
++-- record which page created them. That meant the sidebar could only
++-- ever link to /chat?id=..., so opening a session created from the
++-- Visualize page dropped you into plain chat instead — the messages
++-- were still there (same table), just the wrong page/tool context.
++-- ============================================================
++
++ALTER TABLE chat_sessions
++  ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'chat';
++
++-- Keep it to the three modes the frontend actually has pages for.
++ALTER TABLE chat_sessions
++  DROP CONSTRAINT IF EXISTS chat_sessions_mode_check;
++ALTER TABLE chat_sessions
++  ADD CONSTRAINT chat_sessions_mode_check CHECK (mode IN ('chat', 'agent', 'visualize'));
++
++CREATE INDEX IF NOT EXISTS idx_chat_sessions_mode ON chat_sessions(mode);
++
++NOTIFY pgrst, 'reload schema';
+diff --git a/dawn-api/routers/agent.py b/dawn-api/routers/agent.py
+index 997750d..5816868 100644
+--- a/dawn-api/routers/agent.py
++++ b/dawn-api/routers/agent.py
+@@ -104,6 +104,36 @@ async def agent(
+                     tc_dict["success"] = event.get("success")
+                     tc_dict["output"] = event.get("output")
+                     tc_dict["error"] = event.get("error")
++
++                # The create_chart tool only builds a spec — it doesn't know the
++                # session_id, so persisting it into `artifacts` and telling the
++                # frontend about it happens here, where we have both.
++                if (
++                    event.get("name") == "create_chart"
++                    and event.get("success")
++                    and isinstance(event.get("output"), dict)
++                ):
++                    output = event["output"]
++                    try:
++                        artifact = await db.create_artifact(
++                            session_id=session_id,
++                            type="chart",
++                            title=output.get("title") or "Chart",
++                            description=output.get("description"),
++                            spec=output.get("spec"),
++                        )
++                        if artifact:
++                            # Shape must match AgentSSEEvent's "artifact" variant
++                            # in dawn-ui/src/lib/agent-types.ts exactly.
++                            yield sse("artifact", {
++                                "artifact_id": artifact.get("id"),
++                                "artifact_type": artifact.get("type", "chart"),
++                                "title": artifact.get("title"),
++                                "spec": artifact.get("spec"),
++                                "url": artifact.get("url"),
++                            })
++                    except Exception:
++                        logger.exception("Failed to persist chart artifact")
+             elif event_type == "token":
+                 full_response.append(event.get("content", ""))
+             elif event_type == "done":
+diff --git a/dawn-api/routers/artifacts.py b/dawn-api/routers/artifacts.py
+index f8ab3b7..47c5460 100644
+--- a/dawn-api/routers/artifacts.py
++++ b/dawn-api/routers/artifacts.py
+@@ -77,7 +77,10 @@ async def count_artifacts(
+     """Count artifacts, optionally filtered by type."""
+     try:
+         supabase = db.get_db()
+-        query = supabase.table("artifacts").select("*", count="exact", head=True)
++        # NOTE: this postgrest-py version's select() doesn't support `head=`.
++        # Use range(0, 0) instead so Postgres still returns an exact `count`
++        # without us pulling back real rows.
++        query = supabase.table("artifacts").select("id", count="exact").range(0, 0)
+ 
+         if type:
+             query = query.eq("type", type)
+diff --git a/dawn-api/routers/chat_sessions.py b/dawn-api/routers/chat_sessions.py
+index 63850c5..96a642c 100644
+--- a/dawn-api/routers/chat_sessions.py
++++ b/dawn-api/routers/chat_sessions.py
+@@ -24,6 +24,7 @@ def verify_key(x_api_key: Optional[str] = Header(None)):
+ 
+ class CreateSessionRequest(BaseModel):
+     title: str = "New Chat"
++    mode: str = "chat"
+ 
+ 
+ class UpdateSessionRequest(BaseModel):
+@@ -44,6 +45,7 @@ class MessageResponse(BaseModel):
+ class SessionResponse(BaseModel):
+     id: str
+     title: str
++    mode: str = "chat"
+     created_at: str
+     updated_at: str
+     message_count: int = 0
+@@ -73,7 +75,7 @@ async def list_sessions(_: None = Depends(verify_key)):
+     try:
+         supabase = db.get_db()
+         res = supabase.table("chat_sessions").select(
+-            "id, title, created_at, updated_at"
++            "id, title, mode, created_at, updated_at"
+         ).order("updated_at", desc=True).execute()
+         sessions = res.data or []
+ 
+@@ -100,6 +102,7 @@ async def create_session(
+         supabase = db.get_db()
+         res = supabase.table("chat_sessions").insert({
+             "title": req.title,
++            "mode": req.mode,
+         }).execute()
+         if not res.data:
+             raise HTTPException(status_code=500, detail="Failed to create session")
+diff --git a/dawn-api/tools/chart.py b/dawn-api/tools/chart.py
+new file mode 100644
+index 0000000..e2373ea
+--- /dev/null
++++ b/dawn-api/tools/chart.py
+@@ -0,0 +1,159 @@
++"""
++Chart tool — lets the agent turn data into a Vega-Lite chart spec.
++
++This tool does NOT persist anything itself. It just builds and validates a
++spec and hands it back as the tool's output. Persistence (inserting into the
++`artifacts` table) and notifying the frontend (the `artifact` SSE event) are
++handled by the caller (routers/agent.py), which already has the session_id
++this tool doesn't know about.
++
++Kept deliberately small: a handful of common Vega-Lite mark types built from
++plain (field_name -> value) row dicts, rather than accepting a raw Vega-Lite
++spec from the model. Free-form specs from the LLM are a bigger validation
++surface (arbitrary "transform"/"data.url" entries, etc.) for very little
++benefit — the model doesn't need anything fancier than "chart these rows this way".
++"""
++from typing import Any, Optional
++import logging
++from tools.base import BaseTool, ToolResult
++
++logger = logging.getLogger(__name__)
++
++MAX_ROWS = 500
++VALID_CHART_TYPES = {"bar", "line", "area", "point", "arc"}  # arc == pie/donut in Vega-Lite
++
++
++class ChartTool(BaseTool):
++    name = "create_chart"
++    description = (
++        "Turn tabular data into a chart the user can see. Use this whenever the user "
++        "asks you to visualize, chart, graph, or plot something, or when showing a "
++        "table/list of numbers as a chart would communicate it better than text. "
++        "You provide the rows of data plus which fields to plot; this tool builds a "
++        "Vega-Lite chart spec that gets rendered inline for the user. Gather the "
++        "underlying data first (e.g. via the knowledge_graph tool) before calling this."
++    )
++    input_schema = {
++        "type": "object",
++        "properties": {
++            "title": {
++                "type": "string",
++                "description": "Short title for the chart, shown above it.",
++            },
++            "chart_type": {
++                "type": "string",
++                "enum": sorted(VALID_CHART_TYPES),
++                "description": (
++                    "bar: compare categories. line/area: trends over an ordered field "
++                    "(e.g. time). point: scatter/correlation. arc: pie/donut, proportion of a whole."
++                ),
++            },
++            "data": {
++                "type": "array",
++                "description": (
++                    f"Rows of data as flat objects, e.g. "
++                    f"[{{\"category\": \"Axis\", \"count\": 12}}, ...]. Max {MAX_ROWS} rows — "
++                    "aggregate or sample first if you have more."
++                ),
++                "items": {"type": "object"},
++            },
++            "x_field": {
++                "type": "string",
++                "description": "Which field in each row goes on the x-axis (or the category/slice field for 'arc').",
++            },
++            "y_field": {
++                "type": "string",
++                "description": "Which field in each row goes on the y-axis (or the value field for 'arc').",
++            },
++            "color_field": {
++                "type": "string",
++                "description": "Optional field to color/group by (e.g. a category splitting the data into series).",
++            },
++            "description": {
++                "type": "string",
++                "description": "Optional 1-2 sentence summary of what this chart shows — stored alongside it.",
++            },
++        },
++        "required": ["title", "chart_type", "data", "x_field", "y_field"],
++    }
++
++    async def run(
++        self,
++        title: str,
++        chart_type: str,
++        data: list[dict[str, Any]],
++        x_field: str,
++        y_field: str,
++        color_field: Optional[str] = None,
++        description: Optional[str] = None,
++    ) -> ToolResult:
++        if chart_type not in VALID_CHART_TYPES:
++            return ToolResult(
++                success=False,
++                error=f"Invalid chart_type '{chart_type}'. Must be one of: {', '.join(sorted(VALID_CHART_TYPES))}.",
++            )
++
++        if not isinstance(data, list) or not data:
++            return ToolResult(success=False, error="'data' must be a non-empty list of row objects.")
++
++        if not all(isinstance(row, dict) for row in data):
++            return ToolResult(success=False, error="Every item in 'data' must be an object/row, not a scalar.")
++
++        if len(data) > MAX_ROWS:
++            logger.info(f"[ChartTool] Truncating {len(data)} rows to {MAX_ROWS}")
++            data = data[:MAX_ROWS]
++
++        missing_x = [i for i, row in enumerate(data) if x_field not in row]
++        missing_y = [i for i, row in enumerate(data) if y_field not in row]
++        if missing_x:
++            return ToolResult(success=False, error=f"x_field '{x_field}' missing from {len(missing_x)} row(s).")
++        if missing_y:
++            return ToolResult(success=False, error=f"y_field '{y_field}' missing from {len(missing_y)} row(s).")
++
++        def infer_type(field: str) -> str:
++            for row in data:
++                val = row.get(field)
++                if val is None:
++                    continue
++                if isinstance(val, bool):
++                    return "nominal"
++                if isinstance(val, (int, float)):
++                    return "quantitative"
++                return "nominal"
++            return "nominal"
++
++        if chart_type == "arc":
++            encoding = {
++                "theta": {"field": y_field, "type": "quantitative"},
++                "color": {"field": x_field, "type": "nominal"},
++            }
++            mark = {"type": "arc", "innerRadius": 50}
++        else:
++            encoding = {
++                "x": {"field": x_field, "type": infer_type(x_field)},
++                "y": {"field": y_field, "type": infer_type(y_field)},
++            }
++            if color_field:
++                encoding["color"] = {"field": color_field, "type": infer_type(color_field)}
++            mark = {"type": chart_type, "tooltip": True}
++
++        spec = {
++            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
++            "title": title,
++            "data": {"values": data},
++            "mark": mark,
++            "encoding": encoding,
++            "width": "container",
++            "height": 300,
++        }
++
++        return ToolResult(
++            success=True,
++            output={
++                "title": title,
++                "description": description,
++                "spec": spec,
++                "row_count": len(data),
++            },
++            metadata={"artifact_type": "chart"},
++        )
+diff --git a/dawn-api/tools/registry.py b/dawn-api/tools/registry.py
+index 058436c..77fb0cb 100644
+--- a/dawn-api/tools/registry.py
++++ b/dawn-api/tools/registry.py
+@@ -99,6 +99,13 @@ def _register_default_tools(registry: ToolRegistry) -> None:
+     except Exception as e:
+         logger.error(f"Failed to register OmniTool: {e}")
+ 
++    # Chart tool — builds Vega-Lite specs, rendered by dawn-ui's ChartRenderer
++    try:
++        from tools.chart import ChartTool
++        registry.register(ChartTool())
++    except Exception as e:
++        logger.error(f"Failed to register ChartTool: {e}")
++
+     # OSINT recon tool
+     try:
+         from tools.osint_tool import OSINTTool
+diff --git a/dawn-ui/src/components/layout/Sidebar.tsx b/dawn-ui/src/components/layout/Sidebar.tsx
+index e2cf59d..865981b 100644
+--- a/dawn-ui/src/components/layout/Sidebar.tsx
++++ b/dawn-ui/src/components/layout/Sidebar.tsx
+@@ -329,7 +329,7 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
+                 sessions.map((session) => (
+                   <div key={session.id} className="group relative">
+                     <Link
+-                      href={`/chat?id=${session.id}`}
++                      href={session.mode === "visualize" ? `/visualize?id=${session.id}` : `/chat?id=${session.id}`}
+                       onClick={handleNavClick}
+                       className={clsx(
+                         "w-full text-left px-2.5 py-1.5 rounded-lg transition-colors flex items-start justify-between gap-1",
+diff --git a/dawn-ui/src/components/visualize/VisualizeWindow.tsx b/dawn-ui/src/components/visualize/VisualizeWindow.tsx
+index fb56f72..b942665 100644
+--- a/dawn-ui/src/components/visualize/VisualizeWindow.tsx
++++ b/dawn-ui/src/components/visualize/VisualizeWindow.tsx
+@@ -16,7 +16,8 @@ import {
+   Loader2,
+ } from "lucide-react";
+ import Link from "next/link";
+-import { streamChat, getSessionMessages, createSession } from "@/lib/api";
++import { getSessionMessages, createSession } from "@/lib/api";
++import { streamAgent } from "@/lib/agent-api";
+ import type { ChatMessage, ToolCall, SessionMessage, Artifact } from "@/lib/types";
+ import type { AgentChatMessage, ArtifactRef } from "@/lib/agent-types";
+ import Message from "@/components/chat/Message";
+@@ -126,7 +127,7 @@ export default function VisualizeWindow() {
+ 
+     if (!sessionId.current) {
+       try {
+-        const session = await createSession("Visualize - " + text.slice(0, 40));
++        const session = await createSession("Visualize - " + text.slice(0, 40), "visualize");
+         adoptSessionId(session.id);
+       } catch (err) {
+         console.error("[VisualizeWindow] Failed to create session:", err);
+@@ -154,41 +155,56 @@ export default function VisualizeWindow() {
+     const newArtifacts: ArtifactRef[] = [];
+ 
+     try {
+-      for await (const event of streamChat(
++      // Visualize mode goes through the agent loop (not plain /chat/) because
++      // producing a chart requires real tool-calling — the create_chart tool
++      // builds a Vega-Lite spec, which routers/agent.py then persists as an
++      // artifact and streams back as an "artifact" event.
++      for await (const event of streamAgent(
+         text,
+         buildHistory(),
+         sessionId.current,
+-        webSearchEnabled,
+       )) {
+         switch (event.type) {
+           case "thinking":
+             setThinkingState(true);
+             break;
+-          case "tool":
++          case "tool_call":
+             toolCalls.push({
+               name: event.name,
+               args: event.args,
+-              result_count: event.result_count,
++              result_count: 0,
+             });
+             setStreamingToolCalls([...toolCalls]);
+             setThinkingState(false);
+             break;
+-          case "context":
+-            finalNodeIds = event.node_ids;
+-            finalNodeTitles = event.node_titles;
++          case "tool_result":
++            setThinkingState(false);
++            break;
++          case "artifact":
++            newArtifacts.push({
++              id: event.artifact_id,
++              type: event.artifact_type as ArtifactRef["type"],
++              title: event.title,
++              spec: event.spec,
++              url: event.url,
++              created_at: new Date().toISOString(),
++            });
+             break;
+           case "token":
+             fullContent += event.content;
+             setStreamingContent(fullContent);
+             setThinkingState(false);
+             break;
++          case "warning":
++            fullContent += `\n\n⚠️ ${event.content}`;
++            setStreamingContent(fullContent);
++            break;
+           case "done":
+-            finalNodeIds = event.node_ids;
+-            finalNodeTitles = event.node_titles;
+             if (event.session_id) adoptSessionId(event.session_id);
+             break;
++          case "iteration_limit":
+           case "error":
+-            fullContent = `⚠️ Error: ${event.message}`;
++            fullContent = fullContent || `⚠️ ${event.content}`;
+             setStreamingContent(fullContent);
+             break;
+         }
+@@ -228,7 +244,7 @@ export default function VisualizeWindow() {
+ 
+   const handleNewChat = async () => {
+     try {
+-      const session = await createSession("Visualize");
++      const session = await createSession("Visualize", "visualize");
+       const url = new URL(window.location.href);
+       url.searchParams.set("id", session.id);
+       window.history.replaceState({}, "", url.toString());
+diff --git a/dawn-ui/src/lib/api.ts b/dawn-ui/src/lib/api.ts
+index 04a49f1..8006b57 100644
+--- a/dawn-ui/src/lib/api.ts
++++ b/dawn-ui/src/lib/api.ts
+@@ -188,11 +188,11 @@ export async function listSessions(): Promise<ChatSession[]> {
+   return res.json();
+ }
+ 
+-export async function createSession(title = "New Chat"): Promise<ChatSession> {
++export async function createSession(title = "New Chat", mode: "chat" | "agent" | "visualize" = "chat"): Promise<ChatSession> {
+   const res = await fetch(`${BASE}/chat/sessions`, {
+     method: "POST",
+     headers: headers(),
+-    body: JSON.stringify({ title }),
++    body: JSON.stringify({ title, mode }),
+   });
+   if (!res.ok) throw new Error("Failed to create session");
+   return res.json();
+@@ -462,7 +462,7 @@ export async function listArtifacts(params?: {
+   if (params?.limit) qs.set("limit", String(params.limit));
+   if (params?.offset) qs.set("offset", String(params.offset));
+ 
+-  const res = await fetch(`${BASE}/artifacts?${qs}`, { headers: headers() });
++  const res = await fetch(`${BASE}/artifacts/?${qs}`, { headers: headers() });
+   if (!res.ok) throw new Error(`Failed to list artifacts: ${res.status}`);
+   return res.json();
+ }
+@@ -493,7 +493,7 @@ export async function createArtifact(data: {
+   data_summary?: string;
+   tags?: string[];
+ }): Promise<Artifact> {
+-  const res = await fetch(`${BASE}/artifacts`, {
++  const res = await fetch(`${BASE}/artifacts/`, {
+     method: "POST",
+     headers: headers(),
+     body: JSON.stringify(data),
+diff --git a/dawn-ui/src/lib/types.ts b/dawn-ui/src/lib/types.ts
+index 5c9ce34..ea102d4 100644
+--- a/dawn-ui/src/lib/types.ts
++++ b/dawn-ui/src/lib/types.ts
+@@ -59,6 +59,7 @@ export interface ChatMessage {
+ export interface ChatSession {
+   id: string;
+   title: string;
++  mode: "chat" | "agent" | "visualize";
+   created_at: string;
+   updated_at: string;
+   message_count: number;

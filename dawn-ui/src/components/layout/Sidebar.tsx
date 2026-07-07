@@ -329,7 +329,7 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
                 sessions.map((session) => (
                   <div key={session.id} className="group relative">
                     <Link
-                      href={`/chat?id=${session.id}`}
+                      href={session.mode === "visualize" ? `/visualize?id=${session.id}` : `/chat?id=${session.id}`}
                       onClick={handleNavClick}
                       className={clsx(
                         "w-full text-left px-2.5 py-1.5 rounded-lg transition-colors flex items-start justify-between gap-1",

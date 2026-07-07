@@ -59,6 +59,7 @@ export interface ChatMessage {
 export interface ChatSession {
   id: string;
   title: string;
+  mode: "chat" | "agent" | "visualize";
   created_at: string;
   updated_at: string;
   message_count: number;

@@ -24,6 +24,7 @@ def verify_key(x_api_key: Optional[str] = Header(None)):
 
 class CreateSessionRequest(BaseModel):
     title: str = "New Chat"
+    mode: str = "chat"
 
 
 class UpdateSessionRequest(BaseModel):
@@ -44,6 +45,7 @@ class MessageResponse(BaseModel):
 class SessionResponse(BaseModel):
     id: str
     title: str
+    mode: str = "chat"
     created_at: str
     updated_at: str
     message_count: int = 0
@@ -73,7 +75,7 @@ async def list_sessions(_: None = Depends(verify_key)):
     try:
         supabase = db.get_db()
         res = supabase.table("chat_sessions").select(
-            "id, title, created_at, updated_at"
+            "id, title, mode, created_at, updated_at"
         ).order("updated_at", desc=True).execute()
         sessions = res.data or []
 
@@ -100,6 +102,7 @@ async def create_session(
         supabase = db.get_db()
         res = supabase.table("chat_sessions").insert({
             "title": req.title,
+            "mode": req.mode,
         }).execute()
         if not res.data:
             raise HTTPException(status_code=500, detail="Failed to create session")
