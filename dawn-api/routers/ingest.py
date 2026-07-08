@@ -607,99 +607,30 @@ async def _process_zip_upload(
 
 # ─── Content Preview Extraction (for auto-tagging) ────────────────────────
 
+
+# ── Content Preview Extraction (for auto-tagging) ─────────────────────────
+# Delegated to ingestion.parsers.extract_preview
+
 def _extract_preview(file_bytes: bytes, file_type: str, filename: str, max_chars: int = 1000) -> str:
     """Extract a text preview from a file for auto-tagging classification.
-
-    Uses the same parsers as the full ingestion pipeline but only reads
-    enough to classify the content. Returns plain text (first ~1000 chars).
+    
+    Delegates to the unified parser module which handles all formats.
+    PDF is handled specially with OCR fallback.
     """
-    try:
-        if file_type == "PDF":
-            gen = iter_pdf_pages(file_bytes)
-            if gen:
-                text = " ".join(gen)
-                return text[:max_chars] if text else ""
-            # Try OCR preview
-            ocr = _iter_ocr_pdf_pages(file_bytes, max_pages=3)
-            if ocr:
-                text = " ".join(ocr)
-                return text[:max_chars] if text else ""
-            return ""
-        elif file_type == "Word":
-            sections = _parse_docx(file_bytes)
-            if sections:
-                return (sections[0].get("body", "") or "")[:max_chars]
-            return ""
-        elif file_type == "Markdown":
-            text = file_bytes.decode("utf-8", errors="ignore")
-            return text[:max_chars]
-        elif file_type == "CSV":
-            text = file_bytes.decode("utf-8", errors="replace")
-            return text[:max_chars]
-        elif file_type == "Excel":
-            import openpyxl
-            wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
-            texts = []
-            for sheet_name in wb.sheetnames:
-                ws = wb[sheet_name]
-                for row in ws.iter_rows(values_only=True, max_row=5):
-                    texts.append(" ".join(str(c) for c in row if c is not None))
-                if texts:
-                    break
-            wb.close()
-            return " ".join(texts)[:max_chars]
-        elif file_type == "PowerPoint":
-            sections = _parse_pptx(file_bytes)
-            if sections:
-                return (sections[0].get("body", "") or "")[:max_chars]
-            return ""
-        elif file_type == "Text":
-            return file_bytes.decode("utf-8", errors="ignore")[:max_chars]
-        elif file_type == "HTML":
-            from html.parser import HTMLParser
-            class _Extractor(HTMLParser):
-                def __init__(self):
-                    super().__init__()
-                    self.parts = []
-                    self._skip = False
-                def handle_starttag(self, tag, attrs):
-                    if tag in ("script", "style"):
-                        self._skip = True
-                def handle_endtag(self, tag):
-                    if tag in ("script", "style"):
-                        self._skip = False
-                def handle_data(self, data):
-                    if not self._skip and data.strip():
-                        self.parts.append(data.strip())
-            parser = _Extractor()
-            parser.feed(file_bytes.decode("utf-8", errors="ignore"))
-            return " ".join(parser.parts)[:max_chars]
-        elif file_type == "JSON":
-            return file_bytes.decode("utf-8", errors="ignore")[:max_chars]
-        elif file_type == "XML":
-            return file_bytes.decode("utf-8", errors="ignore")[:max_chars]
-        elif file_type == "YAML":
-            return file_bytes.decode("utf-8", errors="ignore")[:max_chars]
-        elif file_type == "EPUB":
-            sections = _parse_epub(file_bytes)
-            if sections:
-                return (sections[0].get("body", "") or "")[:max_chars]
-            return ""
-        elif file_type == "SVG":
-            return _parse_svg(file_bytes)[:max_chars]
-        elif file_type == "RTF":
-            from striprtf.striprtf import rtf_to_text
-            return rtf_to_text(file_bytes.decode("utf-8", errors="ignore"))[:max_chars]
-        elif file_type in ("Spreadsheet", "Presentation"):
-            return f"[{file_type} file: {filename}]"[:max_chars]
-    except Exception as e:
-        logger.debug(f"Preview extraction failed for {filename}: {e}")
-        return f"[{file_type} file: {filename}]"
-
-    return f"[{file_type} file: {filename}]"
+    if file_type == "PDF":
+        gen = iter_pdf_pages(file_bytes)
+        if gen:
+            text = " ".join(gen)
+            return text[:max_chars] if text else ""
+        ocr = _iter_ocr_pdf_pages(file_bytes, max_pages=3)
+        if ocr:
+            text = " ".join(ocr)
+            return text[:max_chars] if text else ""
+        return ""
+    return extract_preview(file_bytes, filename, max_chars)
 
 
-# ─── Stats & Log Endpoints ────────────────────────────────────────────────
+# ── Stats & Log Endpoints ─────────────────────────────────────────────────
 
 @router.get("/stats")
 async def ingestion_stats(_: None = Depends(verify_key)):
@@ -824,7 +755,6 @@ async def admin_backtag(x_api_key: Optional[str] = Header(None)):
         return {**results, "message": "No uncategorized or untagged nodes found."}
 
     tagger = await _get_tagger()
-    # Force refresh to pick up any new/updated tag descriptions from DB
     await tagger.refresh()
 
     # Step 4: Back-tag each node using the hybrid strategy
@@ -837,7 +767,6 @@ async def admin_backtag(x_api_key: Optional[str] = Header(None)):
             if not text:
                 continue
 
-            # Tag using the hybrid strategy
             matched = await tagger.tag(
                 text=text,
                 title="",
@@ -852,8 +781,6 @@ async def admin_backtag(x_api_key: Optional[str] = Header(None)):
                     await db.attach_tags_batch([node["id"]], tag_ids)
                     results["tagged"] += 1
 
-                    # ── Update per-tag thresholds ──
-                    # Re-embed to get the actual similarity scores for threshold learning
                     if tagger.model is not None and tagger.tag_embeddings:
                         import numpy as np
                         doc_vec = tagger.model.encode(text[:2000], show_progress_bar=False)
@@ -871,7 +798,6 @@ async def admin_backtag(x_api_key: Optional[str] = Header(None)):
             results["errors"] += 1
             logger.error(f"Backtag error on node {node.get('id', '?')[:8]}: {e}")
 
-    # Log current thresholds for diagnostics
     thresholds = await tagger.get_thresholds()
     logger.info(f"Backtag complete. Per-tag thresholds: {thresholds}")
 
@@ -884,11 +810,15 @@ async def admin_backtag(x_api_key: Optional[str] = Header(None)):
             f"Per-tag thresholds updated."
         ),
     }
-# ─── File Type Detection ──────────────────────────────────────────────────
+
+
+# ── File Type Detection ───────────────────────────────────────────────────
+# Delegated to ingestion.parsers.detect_file_type
 
 def detect_file_type(filename: str) -> Optional[str]:
-    ext = os.path.splitext(filename.lower())[1]
-    return SUPPORTED_EXTENSIONS.get(ext)
+    """Detect file type from filename extension. Delegates to parsers module."""
+    from ingestion.parsers import detect_file_type as _detect
+    return _detect(filename)
 
 
 def _check_zip_safety(file_bytes: bytes) -> Optional[str]:
@@ -914,58 +844,32 @@ def _quick_sanity_check(file_bytes: bytes, file_type: str) -> bool:
     try:
         if file_type == "PDF":
             return file_bytes[:5] == b"%PDF-"
-        if file_type in ("Word", "EPUB", "Excel", "PowerPoint", "Presentation"):
+        if file_type in ("Word", "EPUB", "Excel", "PowerPoint", "Presentation", "MOBI", "FB2", "ODT"):
             return file_bytes[:2] == b"PK"
         if file_type == "XML":
             return file_bytes[:5].lstrip()[:1] == b"<" or file_bytes[:5] == b"<?xml"
         if file_type == "SVG":
             return file_bytes[:5].lstrip()[:1] == b"<"
+        if file_type == "DjVu":
+            return file_bytes[:4] == b"AT&T"
+        if file_type == "LaTeX":
+            return file_bytes[:1] == b"\\"
         return True
     except Exception:
         return False
 
 
 def _extract_content(file_bytes: bytes, file_type: str, filename: str, doc_title: str = "") -> dict:
-    """Extract content from a file. doc_title is used for table summaries."""
-    try:
-        if file_type == "PDF":
-            return {"text": _parse_pdf(file_bytes), "sections": []}
-        elif file_type == "Markdown":
-            return {"text": "", "sections": _parse_md(file_bytes.decode("utf-8", errors="ignore"))}
-        elif file_type == "CSV":
-            return {"text": "", "sections": _parse_csv(file_bytes, doc_title or os.path.splitext(filename)[0])}
-        elif file_type == "Excel":
-            return {"text": "", "sections": _parse_xlsx(file_bytes, doc_title or os.path.splitext(filename)[0])}
-        elif file_type == "SVG":
-            return {"text": _parse_svg(file_bytes), "sections": []}
-        elif file_type == "Word":
-            return {"text": "", "sections": _parse_docx(file_bytes)}
-        elif file_type == "PowerPoint":
-            return {"text": "", "sections": _parse_pptx(file_bytes)}
-        elif file_type == "Presentation":
-            return {"text": "", "sections": _parse_odp(file_bytes)}
-        elif file_type == "Spreadsheet":
-            return {"text": "", "sections": _parse_ods(file_bytes)}
-        elif file_type == "Text":
-            return {"text": _parse_txt(file_bytes), "sections": []}
-        elif file_type == "EPUB":
-            return {"text": "", "sections": _parse_epub(file_bytes)}
-        elif file_type == "HTML":
-            return {"text": _parse_html(file_bytes), "sections": []}
-        elif file_type == "RTF":
-            return {"text": _parse_rtf(file_bytes), "sections": []}
-        elif file_type == "JSON":
-            return {"text": _parse_json(file_bytes), "sections": []}
-        elif file_type == "XML":
-            return {"text": _parse_xml(file_bytes), "sections": []}
-        elif file_type == "YAML":
-            return {"text": _parse_yaml(file_bytes), "sections": []}
-    except Exception as e:
-        logger.error(f"Extraction failed for {file_type} ({filename}): {e}")
-    return {"text": "", "sections": []}
+    """Extract content from a file. Delegates to the unified parser module."""
+    result = parse_file(file_bytes, filename, doc_title)
+    return {
+        "text": result.get("text", ""),
+        "sections": result.get("sections", []),
+    }
 
 
-# ─── PDF Parsing ──────────────────────────────────────────────────────────
+# ── PDF Parsing ───────────────────────────────────────────────────────────
+# PDF is handled natively in this router because of OCR support
 
 def _parse_pdf(file_bytes: bytes) -> str:
     pdf_gen = iter_pdf_pages(file_bytes)
@@ -1092,452 +996,3 @@ def _iter_ocr_pdf_pages(file_bytes: bytes, max_pages: int = 5000):
         doc.close()
     if total_pages > max_pages:
         yield f"[OCR truncated: {total_pages} pages, only first {max_pages} OCR'd.]"
-
-
-# ─── DOCX Parsing ─────────────────────────────────────────────────────────
-
-def _parse_docx(file_bytes: bytes) -> list[dict]:
-    import docx
-    document = docx.Document(io.BytesIO(file_bytes))
-    sections = []
-    current_title = "Overview"
-    current_lines = []
-    for para in document.paragraphs:
-        style = (para.style.name if para.style else "") or ""
-        text = para.text.strip()
-        if not text:
-            continue
-        if style.startswith("Heading") or style == "Title":
-            _flush(current_title, current_lines, sections)
-            current_title, current_lines = text, []
-        else:
-            current_lines.append(text)
-    _flush(current_title, current_lines, sections)
-    for i, table in enumerate(document.tables, start=1):
-        rows_text = []
-        for row in table.rows:
-            cells = [c.text.strip() for c in row.cells if c.text.strip()]
-            if cells:
-                rows_text.append(" | ".join(cells))
-        if rows_text:
-            sections.append({"title": f"Table {i}", "body": "\n".join(rows_text)})
-    for para in document.paragraphs:
-        for run in para.runs:
-            if run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing'):
-                for drawing in run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing'):
-                    desc = drawing.find('.//{http://schemas.openxmlformats.org/drawingml/2006/main}desc')
-                    if desc is not None and desc.text and desc.text.strip():
-                        current_lines.append(f"[Image: {desc.text.strip()}]")
-    return [s for s in sections if s["body"].strip()]
-
-
-# ─── PPTX Parsing ─────────────────────────────────────────────────────────
-
-def _parse_pptx(file_bytes: bytes) -> list[dict]:
-    """Parse PowerPoint (.pptx) into sections, one per slide."""
-    try:
-        from pptx import Presentation
-        from pptx.util import Inches, Pt
-    except ImportError:
-        logger.warning("python-pptx not available - PPTX parsing disabled.")
-        return []
-    try:
-        prs = Presentation(io.BytesIO(file_bytes))
-    except Exception as e:
-        logger.warning(f"Failed to open PPTX: {e}")
-        return []
-    sections = []
-    for i, slide in enumerate(prs.slides, start=1):
-        slide_lines = []
-        for shape in slide.shapes:
-            if shape.has_text_frame:
-                for para in shape.text_frame.paragraphs:
-                    text = para.text.strip()
-                    if text:
-                        slide_lines.append(text)
-            if shape.has_table:
-                table = shape.table
-                for row in table.rows:
-                    cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
-                    if cells:
-                        slide_lines.append(" | ".join(cells))
-        body = "\n".join(slide_lines).strip()
-        if body:
-            title = f"Slide {i}"
-            for shape in slide.shapes:
-                if shape.has_text_frame and shape == slide.shapes[0]:
-                    first_text = shape.text_frame.paragraphs[0].text.strip() if shape.text_frame.paragraphs else ""
-                    if first_text:
-                        title = first_text
-                        break
-            sections.append({"title": title, "body": body})
-    return sections
-
-
-# ─── ODP / ODS Parsing ────────────────────────────────────────────────────
-
-def _parse_odp(file_bytes: bytes) -> list[dict]:
-    """Parse LibreOffice Impress (.odp) into sections."""
-    try:
-        from pptx import Presentation
-        prs = Presentation(io.BytesIO(file_bytes))
-        sections = []
-        for i, slide in enumerate(prs.slides, start=1):
-            slide_lines = []
-            for shape in slide.shapes:
-                if shape.has_text_frame:
-                    for para in shape.text_frame.paragraphs:
-                        text = para.text.strip()
-                        if text:
-                            slide_lines.append(text)
-            body = "\n".join(slide_lines).strip()
-            if body:
-                sections.append({"title": f"Slide {i}", "body": body})
-        if sections:
-            return sections
-    except Exception:
-        pass
-    return _parse_zip_xml_text(file_bytes, "content.xml")
-
-
-def _parse_ods(file_bytes: bytes) -> list[dict]:
-    """Parse LibreOffice Calc (.ods) spreadsheet into table sections."""
-    return _parse_zip_xml_table(file_bytes, "content.xml")
-
-
-def _parse_zip_xml_text(file_bytes: bytes, xml_path: str = "content.xml") -> list[dict]:
-    """Generic parser for zip-based XML formats."""
-    try:
-        import zipfile
-        import xml.etree.ElementTree as ET
-    except ImportError:
-        return []
-    try:
-        zf = zipfile.ZipFile(io.BytesIO(file_bytes))
-        if xml_path not in zf.namelist():
-            return []
-        xml_content = zf.read(xml_path)
-        zf.close()
-    except Exception:
-        return []
-    try:
-        root = ET.fromstring(xml_content)
-    except Exception:
-        return []
-    texts = []
-    for elem in root.iter():
-        if elem.text and elem.text.strip():
-            texts.append(elem.text.strip())
-    if texts:
-        return [{"title": "Content", "body": "\n".join(texts)}]
-    return []
-
-
-def _parse_zip_xml_table(file_bytes: bytes, xml_path: str = "content.xml") -> list[dict]:
-    """Parse table data from a zip-based XML spreadsheet (ODS)."""
-    try:
-        import zipfile
-        import xml.etree.ElementTree as ET
-    except ImportError:
-        return []
-    try:
-        zf = zipfile.ZipFile(io.BytesIO(file_bytes))
-        if xml_path not in zf.namelist():
-            return []
-        xml_content = zf.read(xml_path)
-        zf.close()
-    except Exception:
-        return []
-    try:
-        root = ET.fromstring(xml_content)
-    except Exception:
-        return []
-    sections = []
-    for table_elem in root.iter("{urn:oasis:names:tc:opendocument:xmlns:table:1.0}table"):
-        table_name = table_elem.get("{urn:oasis:names:tc:opendocument:xmlns:table:1.0}name", "Sheet")
-        rows = []
-        for row_elem in table_elem.iter("{urn:oasis:names:tc:opendocument:xmlns:table:1.0}table-row"):
-            cells = []
-            for cell_elem in row_elem.iter("{urn:oasis:names:tc:opendocument:xmlns:table:1.0}table-cell"):
-                cell_texts = []
-                for p in cell_elem.iter("{urn:oasis:names:tc:opendocument:xmlns:text:1.0}p"):
-                    if p.text:
-                        cell_texts.append(p.text)
-                cells.append(" ".join(cell_texts))
-            if any(c.strip() for c in cells):
-                rows.append(cells)
-        if not rows:
-            continue
-        headers = rows[0]
-        data_rows = rows[1:]
-        md_rows = [[str(c) if c else "" for c in row] for row in data_rows]
-        table_md = _table_to_markdown(headers, md_rows)
-        summary = _generate_table_summary(table_name, headers, len(data_rows), table_name)
-        sections.append({"title": f"{table_name}", "body": summary, "type": "table_summary"})
-        sections.append({"title": f"{table_name} - Data", "body": table_md, "type": "table_data"})
-    return sections
-
-
-# ─── XML / YAML / TXT / EPUB / HTML / RTF / JSON / MD / SVG Parsing ──────
-
-def _parse_xml(file_bytes: bytes) -> str:
-    """Parse XML into a readable tree structure."""
-    try:
-        import xml.etree.ElementTree as ET
-    except ImportError:
-        return file_bytes.decode("utf-8", errors="ignore")
-    try:
-        root = ET.fromstring(file_bytes)
-    except Exception:
-        return file_bytes.decode("utf-8", errors="ignore")
-    lines = []
-    def _walk(elem, depth=0):
-        indent = "  " * depth
-        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-        text = (elem.text or "").strip()
-        if text:
-            lines.append(f"{indent}{tag}: {text}")
-        else:
-            lines.append(f"{indent}{tag}")
-        for child in elem:
-            _walk(child, depth + 1)
-        tail = (elem.tail or "").strip()
-        if tail:
-            lines.append(f"{indent}  [tail]: {tail}")
-    _walk(root)
-    return "\n".join(lines)
-
-
-def _parse_yaml(file_bytes: bytes) -> str:
-    """Parse YAML into pretty-printed JSON."""
-    import json as _json
-    try:
-        import yaml
-    except ImportError:
-        return file_bytes.decode("utf-8", errors="ignore")
-    try:
-        data = yaml.safe_load(file_bytes)
-        return _json.dumps(data, indent=2, ensure_ascii=False, default=str)
-    except Exception:
-        return file_bytes.decode("utf-8", errors="ignore")
-
-
-def _parse_txt(file_bytes: bytes) -> str:
-    return file_bytes.decode("utf-8", errors="ignore")
-
-
-def _parse_epub(file_bytes: bytes) -> list[dict]:
-    import ebooklib
-    from ebooklib import epub
-    from html.parser import HTMLParser
-    import tempfile
-    class _TextExtractor(HTMLParser):
-        def __init__(self):
-            super().__init__()
-            self.parts = []
-        def handle_data(self, data):
-            if data.strip():
-                self.parts.append(data.strip())
-    fd, tmp_path = tempfile.mkstemp(suffix=".epub")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(file_bytes)
-        book = epub.read_epub(tmp_path)
-    except Exception:
-        os.unlink(tmp_path)
-        raise
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-    sections = []
-    for i, item in enumerate(book.get_items_of_type(ebooklib.ITEM_DOCUMENT), start=1):
-        parser = _TextExtractor()
-        try:
-            content_bytes = item.get_content()
-            if content_bytes:
-                parser.feed(content_bytes.decode("utf-8", errors="ignore"))
-        except Exception:
-            continue
-        body = "\n".join(parser.parts).strip()
-        if body:
-            sections.append({"title": item.get_name() or f"Chapter {i}", "body": body})
-    return sections
-
-
-def _parse_html(file_bytes: bytes) -> str:
-    from html.parser import HTMLParser
-    class _TextExtractor(HTMLParser):
-        def __init__(self):
-            super().__init__()
-            self.parts = []
-            self._skip = False
-        def handle_starttag(self, tag, attrs):
-            if tag in ("script", "style"):
-                self._skip = True
-        def handle_endtag(self, tag):
-            if tag in ("script", "style"):
-                self._skip = False
-        def handle_data(self, data):
-            if not self._skip and data.strip():
-                self.parts.append(data.strip())
-    parser = _TextExtractor()
-    parser.feed(file_bytes.decode("utf-8", errors="ignore"))
-    return "\n".join(parser.parts)
-
-
-def _parse_rtf(file_bytes: bytes) -> str:
-    from striprtf.striprtf import rtf_to_text
-    return rtf_to_text(file_bytes.decode("utf-8", errors="ignore"))
-
-
-def _parse_json(file_bytes: bytes) -> str:
-    import json as _json
-    data = _json.loads(file_bytes.decode("utf-8", errors="ignore"))
-    return _json.dumps(data, indent=2, ensure_ascii=False)
-
-
-def _parse_md(text: str) -> list[dict]:
-    sections = []
-    current_title = "Overview"
-    current_lines = []
-    for line in text.splitlines():
-        stripped = line.lstrip("#").strip()
-        if line.startswith("### "):
-            _flush(current_title, current_lines, sections)
-            current_title, current_lines = stripped, []
-        elif line.startswith("## "):
-            _flush(current_title, current_lines, sections)
-            current_title, current_lines = stripped, []
-        elif line.startswith("# "):
-            _flush(current_title, current_lines, sections)
-            current_title, current_lines = stripped, []
-        else:
-            current_lines.append(line)
-    _flush(current_title, current_lines, sections)
-    return [s for s in sections if s["body"].strip()]
-
-
-def _flush(title: str, lines: list[str], out: list[dict]):
-    body = "\n".join(lines).strip()
-    if body:
-        out.append({"title": title, "body": body})
-
-
-def _table_to_markdown(headers: list[str], rows: list[list], max_rows: int = 100) -> str:
-    """Convert tabular data to a markdown table string.
-
-    For very large tables, only the first max_rows are included and a
-    summary note is appended.
-    """
-    if not headers or not rows:
-        return ""
-
-    md = "| " + " | ".join(headers) + " |\n"
-    md += "| " + " | ".join("---" for _ in headers) + " |\n"
-
-    truncated = len(rows) > max_rows
-    display_rows = rows[:max_rows]
-
-    for row in display_rows:
-        cells = [str(c) if c is not None else "" for c in row]
-        md += "| " + " | ".join(cells) + " |\n"
-
-    if truncated:
-        md += f"\n*[Table truncated: {len(rows)} total rows, showing first {max_rows}]*\n"
-
-    return md
-
-
-def _generate_table_summary(title: str, headers: list[str], row_count: int, sheet_name: str = None) -> str:
-    """Generate a natural-language summary of a table for the parent node body."""
-    parts = [f"Spreadsheet: {title}"]
-    if sheet_name:
-        parts.append(f"Sheet: {sheet_name}")
-    parts.append(f"Rows: {row_count}")
-    parts.append(f"Columns: {', '.join(headers)}")
-    return " | ".join(parts)
-
-
-def _parse_csv(file_bytes: bytes, doc_title: str = "Untitled") -> list[dict]:
-    """Parse CSV into a single table section + summary, not one node per row."""
-    import csv, io as _io
-    text = file_bytes.decode("utf-8", errors="replace")
-    reader = csv.DictReader(_io.StringIO(text))
-
-    rows = list(reader)
-    if not rows:
-        return []
-
-    headers = list(rows[0].keys())
-    total_rows = len(rows)
-
-    if total_rows > _MAX_SPREADSHEET_ROWS:
-        rows = rows[:_MAX_SPREADSHEET_ROWS]
-        logger.warning(f"CSV truncated at {_MAX_SPREADSHEET_ROWS} rows")
-
-    md_rows = [[row.get(h, "") for h in headers] for row in rows]
-    table_md = _table_to_markdown(headers, md_rows)
-
-    summary = _generate_table_summary(doc_title, headers, total_rows)
-
-    return [
-        {"title": doc_title, "body": summary, "type": "table_summary"},
-        {"title": f"{doc_title} - Data", "body": table_md, "type": "table_data"},
-    ]
-
-
-def _parse_xlsx(file_bytes: bytes, doc_title: str = "Untitled") -> list[dict]:
-    """Parse Excel into one section per sheet (summary + data), not one node per row."""
-    import openpyxl
-    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
-    sections = []
-
-    for sheet_name in wb.sheetnames:
-        ws = wb[sheet_name]
-        rows = list(ws.iter_rows(values_only=True))
-        if not rows:
-            continue
-
-        headers = [str(h) if h is not None else f"col{i}" for i, h in enumerate(rows[0])]
-        data_rows = rows[1:]
-        total_rows = len(data_rows)
-
-        if total_rows > _MAX_SPREADSHEET_ROWS:
-            data_rows = data_rows[:_MAX_SPREADSHEET_ROWS]
-            logger.warning(f"XLSX sheet '{sheet_name}' truncated at {_MAX_SPREADSHEET_ROWS} rows")
-
-        md_rows = [[str(c) if c is not None else "" for c in row] for row in data_rows]
-        table_md = _table_to_markdown(headers, md_rows)
-
-        summary = _generate_table_summary(doc_title, headers, total_rows, sheet_name)
-
-        sections.append({
-            "title": f"{doc_title} - {sheet_name}",
-            "body": summary,
-            "type": "table_summary",
-        })
-        sections.append({
-            "title": f"{doc_title} - {sheet_name} - Data",
-            "body": table_md,
-            "type": "table_data",
-        })
-
-    wb.close()
-    return sections
-
-
-def _parse_svg(file_bytes: bytes) -> str:
-    import xml.etree.ElementTree as ET
-    root = ET.fromstring(file_bytes)
-    texts = []
-    text_tags = {"title", "desc", "text", "tspan", "flowRoot", "flowPara"}
-    for elem in root.iter():
-        local = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-        if local in text_tags:
-            if elem.text and elem.text.strip():
-                texts.append(elem.text.strip())
-            if elem.tail and elem.tail.strip():
-                texts.append(elem.tail.strip())
-    return "\n".join(dict.fromkeys(texts))
