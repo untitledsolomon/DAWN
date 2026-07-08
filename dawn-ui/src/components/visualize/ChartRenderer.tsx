@@ -23,13 +23,36 @@ export default function ChartRenderer({ spec, title, className = "", compact = f
     setLoading(true);
     setError(null);
 
+    const el = ref.current;
+
+    // Guard against embedding while the container is still 0-width (e.g. the
+    // artifacts panel is collapsed or mid-transition on first mount). Vega-Lite's
+    // "container" autosize trusts clientWidth at embed time; if it's 0, bars
+    // collapse to ~0px permanently. Wait one frame, and if still 0, watch via
+    // ResizeObserver until it's real.
+    let resizeObserver: ResizeObserver | null = null;
+    const waitForWidth = (): Promise<void> =>
+      new Promise((resolve) => {
+        if (el.clientWidth > 0) {
+          resolve();
+          return;
+        }
+        resizeObserver = new ResizeObserver(() => {
+          if (el.clientWidth > 0) {
+            resizeObserver?.disconnect();
+            resolve();
+          }
+        });
+        resizeObserver.observe(el);
+      });
+
     // Dynamic import of vega-embed (it's large, so lazy load at runtime only)
-    import("vega-embed")
-      .then((mod) => {
+    Promise.all([import("vega-embed"), waitForWidth()])
+      .then(([mod]) => {
         if (cancelled) return;
         const embed = mod.default;
 
-        embed(ref.current!, spec as any, {
+        embed(el, spec as any, {
           actions: {
             export: true,
             source: false,
@@ -63,6 +86,7 @@ export default function ChartRenderer({ spec, title, className = "", compact = f
 
     return () => {
       cancelled = true;
+      resizeObserver?.disconnect();
     };
   }, [spec, compact]);
 
@@ -126,8 +150,8 @@ export default function ChartRenderer({ spec, title, className = "", compact = f
 
         <div
           ref={ref}
-          className={`flex items-center justify-center ${loading || error ? "hidden" : ""}`}
-          style={{ minHeight: compact ? 180 : 300 }}
+          className={`w-full flex items-center justify-center ${loading || error ? "hidden" : ""}`}
+          style={{ minHeight: compact ? 180 : 300, minWidth: compact ? 280 : 320 }}
         />
 
         {/* Close button for expanded mode */}
