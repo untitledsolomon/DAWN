@@ -9,7 +9,7 @@ const headers = () => ({
   "x-api-key": KEY,
 });
 
-// ── Nodes ─────────────────────────────────────────────────────────────────────
+// ── Nodes ────────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function listNodes(params?: {
   status?: string;
@@ -91,7 +91,7 @@ export async function getPendingNodes(): Promise<DawnNode[]> {
   return res.json();
 }
 
-// ── Tags ──────────────────────────────────────────────────────────────────────
+// ── Tags ────────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function listTags(): Promise<Tag[]> {
   const res = await fetch(`${BASE}/nodes/tags`, { headers: headers() });
@@ -107,7 +107,7 @@ export async function createTag(name: string, description?: string) {
   return res.json();
 }
 
-// ── Edges ─────────────────────────────────────────────────────────────────────
+// ── Edges ────────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function createEdge(data: {
   from_node: string;
@@ -124,7 +124,7 @@ export async function createEdge(data: {
   return res.json();
 }
 
-// ── Search ────────────────────────────────────────────────────────────────────
+// ── Search ──────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function searchNodes(q: string, limit = 10): Promise<DawnNode[]> {
   const res = await fetch(`${BASE}/search/?q=${encodeURIComponent(q)}&limit=${limit}`, { headers: headers() });
@@ -136,7 +136,7 @@ export async function traverseNode(nodeId: string, depth = 2) {
   return res.json();
 }
 
-// ── Chat (streaming) ──────────────────────────────────────────────────────────
+// ── Chat (streaming) ────────────────────────────────────────────────────────────────────────────────────
 
 export async function* streamChat(
   message: string,
@@ -180,7 +180,7 @@ export async function* streamChat(
   }
 }
 
-// ── Chat Sessions ─────────────────────────────────────────────────────────────
+// ── Chat Sessions ───────────────────────────────────────────────────────────────────────────────────────
 
 export async function listSessions(): Promise<ChatSession[]> {
   const res = await fetch(`${BASE}/chat/sessions`, { headers: headers() });
@@ -224,7 +224,7 @@ export async function getSessionMessages(sessionId: string): Promise<SessionMess
   return res.json();
 }
 
-// ── Settings ──────────────────────────────────────────────────────────────────
+// ── Settings ────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function getSettings(): Promise<AppSettings> {
   const res = await fetch(`${BASE}/settings`, { headers: headers() });
@@ -241,7 +241,7 @@ export async function updateSetting(key: string, value: unknown): Promise<void> 
   if (!res.ok) throw new Error(`Failed to update setting: ${res.status}`);
 }
 
-// ── Notifications ─────────────────────────────────────────────────────────────
+// ── Notifications ───────────────────────────────────────────────────────────────────────────────────────
 
 export async function getNotificationPrefs(): Promise<NotificationPrefs> {
   const res = await fetch(`${BASE}/notifications`, { headers: headers() });
@@ -258,7 +258,7 @@ export async function updateNotificationPrefs(prefs: Partial<NotificationPrefs>)
   if (!res.ok) throw new Error(`Failed to update notification prefs: ${res.status}`);
 }
 
-// ── Agent Logs ────────────────────────────────────────────────────────────────
+// ── Agent Logs ──────────────────────────────────────────────────────────────────────────────────────────
 
 export async function getAgentLogs(limit = 50, statusFilter?: string): Promise<AgentLogEntry[]> {
   const qs = new URLSearchParams();
@@ -275,7 +275,56 @@ export async function getAgentLog(logId: string): Promise<AgentLogEntry> {
   return res.json();
 }
 
-// ── Ingestion ─────────────────────────────────────────────────────────────────
+// ── Ingestion ──────────────────────────────────────────────────────────────────────────────────────────
+
+export interface IngestFileResponse {
+  status: string;
+  job_id: string;
+  title: string;
+  file_type: string;
+  filename: string;
+  tags: string[];
+  size_mb: number;
+  note?: string | null;
+}
+
+export interface IngestUrlResponse {
+  status: string;
+  job_id: string;
+  title: string;
+  source_url: string;
+  tags: string[];
+}
+
+export interface IngestJobStatus {
+  job_id: string;
+  type: string;
+  status: "queued" | "running" | "success" | "failed";
+  error?: string | null;
+  result?: {
+    title?: string;
+    nodes_created?: number;
+    edges_created?: number;
+    sections?: number;
+    file_type?: string;
+  } | null;
+  created_at: number;
+  started_at?: number | null;
+  completed_at?: number | null;
+}
+
+export interface IngestedDocument {
+  id: string;
+  title: string;
+  type: string;
+  body?: string;
+  status: string;
+  source: string;
+  source_ref?: string;
+  tags?: string[];
+  created_at: string;
+  updated_at: string;
+}
 
 export async function ingestRepo(repoPath: string, repoName: string, tags: string[] = []) {
   const res = await fetch(`${BASE}/ingest/repo`, {
@@ -295,7 +344,7 @@ export async function ingestDocument(title: string, content: string, sourceRef =
   return res.json();
 }
 
-export async function ingestFile(file: File, title: string, tags: string[] = []): Promise<{ status: string; title: string; file_type: string; word_count: number; sections: number; filename: string }> {
+export async function ingestFile(file: File, title: string, tags: string[] = []): Promise<IngestFileResponse> {
   const form = new FormData();
   form.append("file", file);
   form.append("title", title);
@@ -314,12 +363,57 @@ export async function ingestFile(file: File, title: string, tags: string[] = [])
 
 export const ingestPdf = ingestFile;
 
+export async function ingestUrl(sourceUrl: string, title?: string, tags: string[] = []): Promise<IngestUrlResponse> {
+  const res = await fetch(`${BASE}/ingest/url`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ url: sourceUrl, title: title || "", tags }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "URL ingestion failed" }));
+    throw new Error(err.detail || `URL ingestion failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function getIngestionStatus(jobId: string): Promise<IngestJobStatus> {
+  const res = await fetch(`${BASE}/ingest/status/${jobId}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to get job status: ${res.status}`);
+  return res.json();
+}
+
+export async function listIngestedDocuments(params?: {
+  type?: string;
+  tag?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<IngestedDocument[]> {
+  const qs = new URLSearchParams();
+  if (params?.type) qs.set("type", params.type);
+  if (params?.tag) qs.set("tag", params.tag);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  const res = await fetch(`${BASE}/nodes/?${qs}&source=document`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to list ingested documents: ${res.status}`);
+  return res.json();
+}
+
+export async function getIngestedDocument(docId: string): Promise<IngestedDocument> {
+  const res = await fetch(`${BASE}/nodes/${docId}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Document not found: ${docId}`);
+  return res.json();
+}
+
+export async function deleteIngestedDocument(docId: string): Promise<void> {
+  await fetch(`${BASE}/nodes/${docId}`, { method: "DELETE", headers: headers() });
+}
+
 export async function getIngestionLog(): Promise<IngestionLog[]> {
   const res = await fetch(`${BASE}/ingest/log`, { headers: headers() });
   return res.json();
 }
 
-// ── Health ────────────────────────────────────────────────────────────────────
+// ── Health ──────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function checkHealth() {
   try {
@@ -330,7 +424,7 @@ export async function checkHealth() {
   }
 }
 
-// ── v3.0: SSH Hosts ───────────────────────────────────────────────────────────
+// ── v3.0: SSH Hosts ─────────────────────────────────────────────────────────────────────────────────────
 
 export async function listSSHHosts() {
   const res = await fetch(`${BASE}/ssh/hosts`, { headers: headers() });
@@ -348,7 +442,7 @@ export async function deleteSSHHost(id: string) {
   await fetch(`${BASE}/ssh/hosts/${id}`, { method: "DELETE", headers: headers() });
 }
 
-// ── v5.0: OSINT ───────────────────────────────────────────────────────────────
+// ── v5.0: OSINT ─────────────────────────────────────────────────────────────────────────────────────────
 
 export async function listOSINTTargets() {
   const res = await fetch(`${BASE}/osint/targets`, { headers: headers() });
@@ -366,7 +460,7 @@ export async function deleteOSINTTarget(id: string) {
   await fetch(`${BASE}/osint/targets/${id}`, { method: "DELETE", headers: headers() });
 }
 
-// ── v6.0: Pentesting ──────────────────────────────────────────────────────────
+// ── v6.0: Pentesting ────────────────────────────────────────────────────────────────────────────────────
 
 export async function listPentestTargets() {
   const res = await fetch(`${BASE}/pentest/targets`, { headers: headers() });
@@ -381,7 +475,7 @@ export async function listVulnerabilities(severity?: string, status?: string) {
   return res.json();
 }
 
-// ── v10.0: Integrations ───────────────────────────────────────────────────────
+// ── v10.0: Integrations ─────────────────────────────────────────────────────────────────────────────────
 
 export async function listIntegrations() {
   const res = await fetch(`${BASE}/integrations`, { headers: headers() });
@@ -393,7 +487,7 @@ export async function syncIntegration(serviceName: string) {
   return res.json();
 }
 
-// ── v13.0: Monitoring ─────────────────────────────────────────────────────────
+// ── v13.0: Monitoring ───────────────────────────────────────────────────────────────────────────────────
 
 export async function getMonitorStatus() {
   const res = await fetch(`${BASE}/monitor/status`, { headers: headers() });
@@ -409,19 +503,41 @@ export async function acknowledgeAlert(eventId: string) {
   await fetch(`${BASE}/alerts/events/${eventId}/acknowledge`, { method: "POST", headers: headers() });
 }
 
-// ── v7.0: Books ───────────────────────────────────────────────────────────────
+// ── v7.0: Books ─────────────────────────────────────────────────────────────────────────────────────────
 
-export async function listBooks(category?: string) {
+export interface Book {
+  id: string;
+  title: string;
+  author: string | null;
+  category: string | null;
+  tags: string[];
+  ingested: boolean;
+  ingestion_status: string;
+  summary: string | null;
+  created_at: string;
+}
+
+export async function listBooks(category?: string): Promise<Book[]> {
   const qs = category ? `?category=${category}` : "";
   const res = await fetch(`${BASE}/books${qs}`, { headers: headers() });
   return res.json();
 }
 
-export async function addBook(data: Record<string, unknown>) {
+export async function addBook(data: Record<string, unknown>): Promise<Book> {
   const res = await fetch(`${BASE}/books`, {
     method: "POST", headers: headers(), body: JSON.stringify(data),
   });
   return res.json();
+}
+
+export async function getBook(bookId: string): Promise<Book> {
+  const res = await fetch(`${BASE}/books/${bookId}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Book not found: ${bookId}`);
+  return res.json();
+}
+
+export async function deleteBook(bookId: string): Promise<void> {
+  await fetch(`${BASE}/books/${bookId}`, { method: "DELETE", headers: headers() });
 }
 
 export async function ingestBook(bookId: string) {
@@ -429,7 +545,7 @@ export async function ingestBook(bookId: string) {
   return res.json();
 }
 
-// ── v16.0: Agent Tasks ────────────────────────────────────────────────────────
+// ── v16.0: Agent Tasks ─────────────────────────────────────────────────────────────────────────────────
 
 export async function listAgentTasks(status?: string) {
   const qs = status ? `?status=${status}` : "";
@@ -448,7 +564,7 @@ export async function cancelAgentTask(taskId: string) {
   await fetch(`${BASE}/agent-tasks/${taskId}/cancel`, { method: "POST", headers: headers() });
 }
 
-// ── v20.0: Artifacts ──────────────────────────────────────────────────────────
+// ── v20.0: Artifacts ────────────────────────────────────────────────────────────────────────────────────
 
 export async function listArtifacts(params?: {
   type?: string;

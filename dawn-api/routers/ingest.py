@@ -996,3 +996,98 @@ def _iter_ocr_pdf_pages(file_bytes: bytes, max_pages: int = 5000):
         doc.close()
     if total_pages > max_pages:
         yield f"[OCR truncated: {total_pages} pages, only first {max_pages} OCR'd.]"
+
+
+# ── URL Ingestion ────────────────────────────────────────────────────────────────────────────────────────
+# Fetches content from a URL and ingests it as a document.
+
+class UrlIngestRequest(BaseModel):
+    url: str
+    title: str = ""
+    tags: list[str] = []
+
+
+@router.post("/url")
+async def ingest_url_endpoint(req: UrlIngestRequest, _: None = Depends(verify_key)):
+    """Ingest content from a URL. Fetches the URL, detects file type, and queues ingestion."""
+    import httpx
+
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=422, detail="URL is required")
+
+    doc_title = req.title.strip() or url.split("/")[-1].split("?")[0] or "URL Document"
+    tag_list = list(req.tags)
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "")
+            file_bytes = resp.content
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=400, detail=f"URL returned {e.response.status_code}")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {str(e)}")
+
+    if not file_bytes:
+        raise HTTPException(status_code=422, detail="Empty response from URL")
+
+    # Detect file type from URL or content-type
+    filename = url.split("/")[-1].split("?")[0]
+    file_type = detect_file_type(filename)
+
+    if not file_type:
+        # Try to detect from content-type
+        ct_map = {
+            "application/pdf": "PDF",
+            "text/markdown": "Markdown",
+            "text/plain": "Text",
+            "text/html": "HTML",
+            "application/epub+zip": "EPUB",
+            "application/json": "JSON",
+            "text/csv": "CSV",
+            "application/xml": "XML",
+            "text/xml": "XML",
+            "application/rtf": "RTF",
+        }
+        for ct_key, ft_val in ct_map.items():
+            if ct_key in content_type:
+                file_type = ft_val
+                break
+
+    if not file_type:
+        # Fall back to document ingestion with raw text
+        try:
+            text = file_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            text = file_bytes.decode("utf-8", errors="replace")
+
+        # Auto-tag if no tags
+        if not tag_list:
+            tag_list = await _auto_tag_content(text[:1000], doc_title)
+
+        job = IngestionJob(id=str(uuid.uuid4()), type="document",
+            params={"title": doc_title, "content": text, "source_ref": url, "tags": tag_list})
+        await ingestion_queue.enqueue(job)
+        return {
+            "status": "queued", "job_id": job.id, "title": doc_title,
+            "source_url": url, "tags": tag_list, "file_type": "Text",
+        }
+
+    # Auto-tag if no tags
+    if not tag_list:
+        preview = _extract_preview(file_bytes, file_type, filename)
+        tag_list = await _auto_tag_content(preview, doc_title)
+
+    # Queue as file job
+    job = IngestionJob(id=str(uuid.uuid4()), type="file",
+        params={"title": doc_title, "source_ref": url, "file_type": file_type,
+                "file_bytes": file_bytes, "tags": tag_list})
+    await ingestion_queue.enqueue(job)
+
+    return {
+        "status": "queued", "job_id": job.id, "title": doc_title,
+        "source_url": url, "tags": tag_list, "file_type": file_type,
+        "size_mb": len(file_bytes) / 1e6,
+    }

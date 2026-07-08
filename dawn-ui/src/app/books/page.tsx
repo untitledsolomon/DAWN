@@ -1,68 +1,94 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   BookOpen,
   Plus,
   Trash2,
   RefreshCw,
-  ChevronDown,
+  Upload,
+  Link,
+  FileText,
   BookMarked,
-  GraduationCap,
   Lightbulb,
+  ExternalLink,
+  CheckCircle2,
+  AlertCircle,
+  Clock,
+  Loader2,
+  X,
+  FileUp,
 } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
-
-interface Book {
-  id: string;
-  title: string;
-  author: string | null;
-  category: string | null;
-  tags: string[];
-  ingested: boolean;
-  ingestion_status: string;
-  summary: string | null;
-  created_at: string;
-}
-
-interface KnowledgeGap {
-  id: string;
-  topic: string;
-  context: string | null;
-  frequency: number;
-  is_addressed: boolean;
-}
-
-const BASE = process.env.NEXT_PUBLIC_DAWN_API_URL || "http://localhost:8000";
-const KEY = process.env.NEXT_PUBLIC_DAWN_API_KEY || "";
-
-const headers = () => ({
-  "Content-Type": "application/json",
-  "x-api-key": KEY,
-});
+import {
+  listBooks,
+  addBook,
+  deleteBook,
+  ingestBook,
+  ingestFile,
+  ingestUrl,
+  getIngestionStatus,
+  deleteIngestedDocument,
+  type Book,
+  type IngestFileResponse,
+  type IngestJobStatus,
+} from "@/lib/api";
 
 const CATEGORIES = [
   "computer_science", "security", "business", "engineering", "mathematics",
   "artificial_intelligence", "networking", "economics", "design",
+  "philosophy", "psychology", "history", "self_help", "biography",
 ];
+
+const ACCEPTED_FORMATS = [
+  ".pdf", ".epub", ".mobi", ".azw", ".azw3", ".fb2", ".djvu",
+  ".docx", ".odt", ".pptx", ".odp", ".xlsx", ".xls", ".ods",
+  ".md", ".markdown", ".html", ".htm", ".rtf", ".txt",
+  ".csv", ".json", ".xml", ".yaml", ".yml", ".svg",
+  ".tex", ".sty", ".cls", ".bib",
+];
+
+const FORMAT_LABELS: Record<string, string> = {
+  pdf: "PDF", epub: "EPUB", mobi: "MOBI", azw: "AZW", azw3: "AZW3",
+  fb2: "FB2", djvu: "DjVu",
+  docx: "DOCX", odt: "ODT", pptx: "PPTX", odp: "ODP",
+  xlsx: "XLSX", xls: "XLS", ods: "ODS",
+  md: "Markdown", html: "HTML", rtf: "RTF", txt: "Text",
+  csv: "CSV", json: "JSON", xml: "XML", yaml: "YAML", svg: "SVG",
+  tex: "LaTeX",
+};
+
+interface UploadJob {
+  jobId: string;
+  title: string;
+  filename: string;
+  status: "queued" | "running" | "success" | "failed";
+  error?: string;
+  nodesCreated?: number;
+}
 
 export default function BooksPage() {
   const [books, setBooks] = useState<Book[]>([]);
-  const [gaps, setGaps] = useState<KnowledgeGap[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [filter, setFilter] = useState<string | null>(null);
   const [form, setForm] = useState({ title: "", author: "", category: "computer_science", tags: "", notes: "" });
 
+  // Upload state
+  const [uploadMode, setUploadMode] = useState<"file" | "url" | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [urlInput, setUrlInput] = useState("");
+  const [uploadTitle, setUploadTitle] = useState("");
+  const [uploadTags, setUploadTags] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadJobs, setUploadJobs] = useState<UploadJob[]>([]);
+  const [activeJobs, setActiveJobs] = useState<Set<string>>(new Set());
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const load = useCallback(async () => {
     try {
-      const qs = filter ? `?category=${filter}` : "";
-      const [bRes, gRes] = await Promise.all([
-        fetch(`${BASE}/books${qs}`, { headers: headers() }),
-        fetch(`${BASE}/knowledge-gaps`, { headers: headers() }),
-      ]);
-      if (bRes.ok) setBooks(await bRes.json());
-      if (gRes.ok) setGaps(await gRes.json());
+      const data = await listBooks(filter || undefined);
+      setBooks(data);
     } catch (e) {
       console.error("Failed to load books:", e);
     } finally {
@@ -72,51 +98,150 @@ export default function BooksPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Poll active jobs
+  useEffect(() => {
+    if (activeJobs.size === 0) return;
+    const interval = setInterval(async () => {
+      let changed = false;
+      const newActive = new Set(activeJobs);
+      for (const jobId of activeJobs) {
+        try {
+          const status = await getIngestionStatus(jobId);
+          setUploadJobs((prev) =>
+            prev.map((j) =>
+              j.jobId === jobId
+                ? {
+                    ...j,
+                    status: status.status as UploadJob["status"],
+                    error: status.error || undefined,
+                    nodesCreated: status.result?.nodes_created,
+                  }
+                : j
+            )
+          );
+          if (status.status === "success" || status.status === "failed") {
+            newActive.delete(jobId);
+            changed = true;
+          }
+        } catch {
+          // Keep polling
+        }
+      }
+      if (changed) {
+        setActiveJobs(newActive);
+        load(); // Refresh book list
+      }
+      if (newActive.size === 0) clearInterval(interval);
+    }, 1500);
+    return () => clearInterval(interval);
+  }, [activeJobs, load]);
+
   const handleCreate = async () => {
     try {
-      const res = await fetch(`${BASE}/books`, {
-        method: "POST",
-        headers: headers(),
-        body: JSON.stringify({
-          ...form,
-          tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
-        }),
+      await addBook({
+        ...form,
+        tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
       });
-      if (res.ok) {
-        setShowForm(false);
-        setForm({ title: "", author: "", category: "computer_science", tags: "", notes: "" });
-        load();
-      }
+      setShowForm(false);
+      setForm({ title: "", author: "", category: "computer_science", tags: "", notes: "" });
+      load();
     } catch (e) {
       console.error("Failed to add book:", e);
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Delete this book?")) return;
+    if (!confirm("Delete this book? This will also remove any ingested nodes.")) return;
     try {
-      await fetch(`${BASE}/books/${id}`, { method: "DELETE", headers: headers() });
+      await deleteBook(id);
       setBooks((prev) => prev.filter((b) => b.id !== id));
     } catch (e) {
       console.error("Failed to delete book:", e);
     }
   };
 
-  const handleIngest = async (id: string) => {
+  const handleFileUpload = async () => {
+    if (!selectedFile) return;
+    setUploading(true);
+    const title = uploadTitle || selectedFile.name.replace(/\.[^/.]+$/, "");
+    const tags = uploadTags.split(",").map((t) => t.trim()).filter(Boolean);
     try {
-      await fetch(`${BASE}/books/${id}/ingest`, { method: "POST", headers: headers() });
-      load();
-    } catch (e) {
-      console.error("Failed to ingest book:", e);
+      const result = await ingestFile(selectedFile, title, tags);
+      const job: UploadJob = {
+        jobId: result.job_id,
+        title,
+        filename: selectedFile.name,
+        status: "queued",
+      };
+      setUploadJobs((prev) => [job, ...prev]);
+      setActiveJobs((prev) => new Set(prev).add(result.job_id));
+      resetUpload();
+    } catch (e: any) {
+      alert(`Upload failed: ${e.message}`);
+    } finally {
+      setUploading(false);
     }
   };
 
-  const handleAddressGap = async (id: string) => {
+  const handleUrlIngest = async () => {
+    if (!urlInput.trim()) return;
+    setUploading(true);
+    const title = uploadTitle || urlInput.split("/").pop()?.split("?")[0] || "URL Document";
+    const tags = uploadTags.split(",").map((t) => t.trim()).filter(Boolean);
     try {
-      await fetch(`${BASE}/knowledge-gaps/${id}/address`, { method: "POST", headers: headers() });
-      setGaps((prev) => prev.map((g) => g.id === id ? { ...g, is_addressed: true } : g));
-    } catch (e) {
-      console.error("Failed to address gap:", e);
+      const result = await ingestUrl(urlInput.trim(), title, tags);
+      const job: UploadJob = {
+        jobId: result.job_id,
+        title,
+        filename: urlInput.trim(),
+        status: "queued",
+      };
+      setUploadJobs((prev) => [job, ...prev]);
+      setActiveJobs((prev) => new Set(prev).add(result.job_id));
+      resetUpload();
+    } catch (e: any) {
+      alert(`URL ingestion failed: ${e.message}`);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const resetUpload = () => {
+    setSelectedFile(null);
+    setUrlInput("");
+    setUploadTitle("");
+    setUploadTags("");
+    setUploadMode(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    setSelectedFile(file);
+    if (file && !uploadTitle) {
+      setUploadTitle(file.name.replace(/\.[^/.]+$/, ""));
+    }
+  };
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case "success": return <CheckCircle2 size={12} className="text-success" />;
+      case "failed": return <AlertCircle size={12} className="text-error" />;
+      case "running": return <Loader2 size={12} className="text-dawn animate-spin" />;
+      default: return <Clock size={12} className="text-text-muted" />;
+    }
+  };
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case "complete":
+        return "bg-success/10 text-success border border-success/20";
+      case "ingesting":
+        return "bg-dawn/10 text-dawn border border-dawn/20";
+      case "error":
+        return "bg-error/10 text-error border border-error/20";
+      default:
+        return "bg-elevated/50 text-text-muted border border-rim";
     }
   };
 
@@ -126,11 +251,19 @@ export default function BooksPage() {
         <header className="flex items-center justify-between px-6 py-3 border-b border-rim flex-shrink-0">
           <div>
             <h1 className="text-text-primary font-semibold text-sm tracking-tight">Library</h1>
-            <p className="text-text-muted text-2xs">Books, learning, and knowledge gaps</p>
+            <p className="text-text-muted text-2xs">Books, documents, and knowledge gaps</p>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => setShowForm(!showForm)}
+            <button onClick={() => { setShowForm(false); setUploadMode("file"); }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-dawn/90 hover:bg-dawn text-white text-xs font-medium transition-all">
+              <FileUp size={12} /> Upload
+            </button>
+            <button onClick={() => { setShowForm(false); setUploadMode("url"); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-dawn/30 text-dawn hover:bg-dawn/10 text-xs font-medium transition-all">
+              <Link size={12} /> From URL
+            </button>
+            <button onClick={() => setShowForm(!showForm)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface border border-rim text-text-secondary hover:text-dawn hover:border-dawn/30 text-xs font-medium transition-all">
               <Plus size={12} /> Add Book
             </button>
             <button onClick={load} className="w-8 h-8 flex items-center justify-center rounded-lg text-text-muted hover:text-dawn hover:bg-dawn/10 transition-all">
@@ -139,6 +272,93 @@ export default function BooksPage() {
           </div>
         </header>
 
+        {/* Upload / URL Form */}
+        {uploadMode && (
+          <div className="border-b border-rim bg-elevated/30 px-6 py-4">
+            <div className="max-w-xl space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-text-primary text-xs font-medium">
+                  {uploadMode === "file" ? "Upload File" : "Ingest from URL"}
+                </h3>
+                <button onClick={resetUpload} className="text-text-muted hover:text-text-secondary">
+                  <X size={14} />
+                </button>
+              </div>
+
+              {uploadMode === "file" ? (
+                <div>
+                  <label className="text-text-muted text-2xs font-medium block mb-1">File</label>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept={ACCEPTED_FORMATS.join(",")}
+                    onChange={handleFileSelect}
+                    className="w-full text-xs text-text-primary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-dawn/10 file:text-dawn file:text-xs file:font-medium hover:file:bg-dawn/20"
+                  />
+                  {selectedFile && (
+                    <p className="text-2xs text-text-muted mt-1">
+                      {selectedFile.name} ({(selectedFile.size / 1e6).toFixed(1)} MB)
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <label className="text-text-muted text-2xs font-medium block mb-1">URL</label>
+                  <input
+                    value={urlInput}
+                    onChange={(e) => setUrlInput(e.target.value)}
+                    placeholder="https://example.com/book.epub"
+                    className="w-full bg-surface border border-rim rounded-lg px-3 py-2 text-text-primary text-xs outline-none focus:border-dawn/50 font-mono"
+                  />
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-text-muted text-2xs font-medium block mb-1">Title (optional)</label>
+                  <input
+                    value={uploadTitle}
+                    onChange={(e) => setUploadTitle(e.target.value)}
+                    placeholder="Auto from filename"
+                    className="w-full bg-surface border border-rim rounded-lg px-3 py-2 text-text-primary text-xs outline-none focus:border-dawn/50"
+                  />
+                </div>
+                <div>
+                  <label className="text-text-muted text-2xs font-medium block mb-1">Tags (comma-separated)</label>
+                  <input
+                    value={uploadTags}
+                    onChange={(e) => setUploadTags(e.target.value)}
+                    placeholder="e.g. philosophy, strategy"
+                    className="w-full bg-surface border border-rim rounded-lg px-3 py-2 text-text-primary text-xs outline-none focus:border-dawn/50"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={uploadMode === "file" ? handleFileUpload : handleUrlIngest}
+                  disabled={uploading || (uploadMode === "file" ? !selectedFile : !urlInput.trim())}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-dawn/90 hover:bg-dawn text-white text-xs font-medium transition-all disabled:opacity-30"
+                >
+                  {uploading ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : uploadMode === "file" ? (
+                    <Upload size={12} />
+                  ) : (
+                    <Link size={12} />
+                  )}
+                  {uploading ? "Ingesting..." : uploadMode === "file" ? "Upload & Ingest" : "Ingest URL"}
+                </button>
+                <button onClick={resetUpload}
+                  className="px-4 py-2 rounded-lg border border-rim text-text-muted hover:text-text-secondary text-xs font-medium transition-all">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Add Book Form */}
         {showForm && (
           <div className="border-b border-rim bg-elevated/30 px-6 py-4">
             <div className="max-w-xl space-y-3">
@@ -182,6 +402,44 @@ export default function BooksPage() {
             </div>
           ) : (
             <>
+              {/* Active upload jobs */}
+              {uploadJobs.length > 0 && (
+                <div>
+                  <h3 className="text-text-secondary text-xs font-medium uppercase tracking-wider mb-3 flex items-center gap-2">
+                    <Clock size={12} /> Recent Ingestion Jobs
+                  </h3>
+                  <div className="space-y-2 max-w-4xl">
+                    {uploadJobs.slice(0, 10).map((job) => (
+                      <div key={job.jobId} className="bg-surface border border-rim rounded-xl px-4 py-3 flex items-center justify-between">
+                        <div className="flex items-center gap-3 min-w-0">
+                          {getStatusIcon(job.status)}
+                          <div className="min-w-0">
+                            <p className="text-text-primary text-sm font-medium truncate">{job.title}</p>
+                            <p className="text-text-muted text-2xs truncate font-mono">{job.filename}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3 flex-shrink-0">
+                          {job.status === "success" && job.nodesCreated !== undefined && (
+                            <span className="text-2xs text-success font-mono">{job.nodesCreated} nodes</span>
+                          )}
+                          {job.status === "failed" && job.error && (
+                            <span className="text-2xs text-error max-w-[200px] truncate" title={job.error}>{job.error}</span>
+                          )}
+                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-mono ${
+                            job.status === "success" ? "bg-success/10 text-success" :
+                            job.status === "failed" ? "bg-error/10 text-error" :
+                            job.status === "running" ? "bg-dawn/10 text-dawn" :
+                            "bg-elevated/50 text-text-muted"
+                          }`}>
+                            {job.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Category filter */}
               <div className="flex gap-2 flex-wrap">
                 <button onClick={() => setFilter(null)}
@@ -202,7 +460,7 @@ export default function BooksPage() {
                   {books.map((book) => (
                     <div key={book.id} className="bg-surface border border-rim rounded-xl p-4 hover:border-dawn/20 transition-all group">
                       <div className="flex items-start justify-between">
-                        <div className="flex items-start gap-3">
+                        <div className="flex items-start gap-3 min-w-0">
                           <div className="w-9 h-9 rounded-lg bg-dawn/10 border border-dawn/20 flex items-center justify-center flex-shrink-0">
                             <BookOpen size={16} className="text-dawn" />
                           </div>
@@ -218,7 +476,7 @@ export default function BooksPage() {
                         </div>
                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                           {!book.ingested && (
-                            <button onClick={() => handleIngest(book.id)}
+                            <button onClick={() => ingestBook(book.id).then(load)}
                               className="w-6 h-6 flex items-center justify-center rounded text-dawn hover:bg-dawn/10 transition-all" title="Ingest">
                               <RefreshCw size={10} />
                             </button>
@@ -230,50 +488,29 @@ export default function BooksPage() {
                         </div>
                       </div>
                       <div className="mt-2 flex items-center gap-2">
-                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-mono ${
-                          book.ingestion_status === "complete" ? "bg-success/10 text-success border border-success/20" :
-                          book.ingestion_status === "ingesting" ? "bg-dawn/10 text-dawn border border-dawn/20" :
-                          "bg-elevated/50 text-text-muted border border-rim"
-                        }`}>
+                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-mono ${getStatusBadge(book.ingestion_status)}`}>
+                          {book.ingestion_status === "complete" && <CheckCircle2 size={10} />}
+                          {book.ingestion_status === "ingesting" && <Loader2 size={10} className="animate-spin" />}
+                          {book.ingestion_status === "error" && <AlertCircle size={10} />}
                           {book.ingestion_status}
                         </span>
+                        {book.ingested && (
+                          <a href={`/books/${book.id}`}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-mono text-dawn hover:bg-dawn/10 transition-all">
+                            <ExternalLink size={10} /> View
+                          </a>
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
               )}
 
-              {/* Knowledge gaps */}
-              {gaps.filter((g) => !g.is_addressed).length > 0 && (
-                <div>
-                  <h3 className="text-text-secondary text-xs font-medium uppercase tracking-wider mb-3 flex items-center gap-2">
-                    <Lightbulb size={12} /> Knowledge Gaps
-                  </h3>
-                  <div className="space-y-2 max-w-4xl">
-                    {gaps.filter((g) => !g.is_addressed).map((gap) => (
-                      <div key={gap.id} className="bg-surface border border-rim rounded-xl px-4 py-3 flex items-center justify-between">
-                        <div>
-                          <p className="text-text-primary text-sm font-medium">{gap.topic}</p>
-                          {gap.context && <p className="text-text-muted text-xs">{gap.context}</p>}
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className="text-text-muted text-2xs font-mono">Seen {gap.frequency}x</span>
-                          <button onClick={() => handleAddressGap(gap.id)}
-                            className="px-2 py-1 rounded text-2xs font-medium text-dawn hover:bg-dawn/10 transition-all">
-                            Address
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {books.length === 0 && gaps.length === 0 && (
+              {books.length === 0 && (
                 <div className="flex flex-col items-center justify-center h-48 gap-3">
                   <BookMarked size={24} className="text-text-muted/30" />
                   <p className="text-text-muted text-sm">No books in the library</p>
-                  <p className="text-text-muted text-xs">Add books to start building DAWN's knowledge</p>
+                  <p className="text-text-muted text-xs">Upload a file, ingest from URL, or add a book to get started</p>
                 </div>
               )}
             </>

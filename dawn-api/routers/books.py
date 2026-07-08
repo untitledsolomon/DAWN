@@ -1,5 +1,7 @@
 """
 Books & Learning endpoints — manage book library, learning sessions, knowledge gaps.
+v2.0 — Real ingestion pipeline: POST /books/{id}/ingest now delegates to the ingestor.
+         Delete cascade: deleting a book also removes its ingested knowledge graph nodes.
 """
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Header
@@ -72,32 +74,146 @@ async def get_book(book_id: str, _: None = Depends(verify_key)):
 
 @router.delete("/books/{book_id}", tags=["books"])
 async def delete_book(book_id: str, _: None = Depends(verify_key)):
-    """Delete a book."""
+    """Delete a book and cascade-delete its ingested knowledge graph nodes."""
     try:
         supabase = db.get_db()
+
+        # Get the book first to check if it has ingested content
+        book_res = supabase.table("books").select("id, title, ingested").eq("id", book_id).execute()
+        if not book_res.data:
+            raise HTTPException(status_code=404, detail="Book not found")
+
+        book = book_res.data[0]
+
+        # Cascade: delete any knowledge graph nodes associated with this book
+        if book.get("ingested"):
+            try:
+                # Find nodes with source_ref matching the book title or id
+                nodes_res = supabase.table("nodes").select("id").or_(
+                    f"source_ref.eq.{book['title']},source_ref.eq.{book_id}"
+                ).execute()
+                for node in (nodes_res.data or []):
+                    # Delete node_tags first
+                    supabase.table("node_tags").delete().eq("node_id", node["id"]).execute()
+                    # Delete edges
+                    supabase.table("edges").delete().or_(
+                        f"from_node.eq.{node['id']},to_node.eq.{node['id']}"
+                    ).execute()
+                    # Delete the node
+                    supabase.table("nodes").delete().eq("id", node["id"]).execute()
+                logger.info(f"Cascade deleted {len(nodes_res.data or [])} nodes for book '{book['title']}'")
+            except Exception as e:
+                logger.warning(f"Cascade delete for book {book_id} had partial errors: {e}")
+
+        # Delete the book itself
         supabase.table("books").delete().eq("id", book_id).execute()
-        return {"status": "deleted"}
+        return {"status": "deleted", "book_id": book_id}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/books/{book_id}/ingest", tags=["books"])
 async def ingest_book(book_id: str, _: None = Depends(verify_key)):
-    """Trigger ingestion of a book into the knowledge graph."""
+    """Trigger ingestion of a book into the knowledge graph.
+
+    Looks up the book, then delegates to the real ingestor pipeline.
+    If the book has a file attached or a source_ref, it ingests from that.
+    Otherwise, it ingests the book's title and notes as a document.
+    """
     try:
         supabase = db.get_db()
+
+        # Get the book
+        book_res = supabase.table("books").select("*").eq("id", book_id).execute()
+        if not book_res.data:
+            raise HTTPException(status_code=404, detail="Book not found")
+
+        book = book_res.data[0]
+
+        # Mark as ingesting
         supabase.table("books").update({
             "ingestion_status": "ingesting",
         }).eq("id", book_id).execute()
-        
-        # TODO: Actual book ingestion pipeline
-        # For now, mark as complete
-        supabase.table("books").update({
-            "ingestion_status": "complete",
-            "ingested": True,
-        }).eq("id", book_id).execute()
-        
-        return {"status": "ingestion_started", "book_id": book_id}
+
+        try:
+            # Delegate to the real ingestor
+            from routers.ingest import ingestion_queue, IngestionJob
+            import uuid
+
+            title = book.get("title", "Untitled")
+            tags = book.get("tags", [])
+            if book.get("category"):
+                tags = list(set(list(tags) + [book["category"]]))
+
+            # Build content from available fields
+            content_parts = [title]
+            if book.get("author"):
+                content_parts.append(f"Author: {book['author']}")
+            if book.get("notes"):
+                content_parts.append(book["notes"])
+            if book.get("summary"):
+                content_parts.append(book["summary"])
+
+            content = "\n\n".join(content_parts)
+
+            # Queue a document ingestion job
+            job = IngestionJob(
+                id=str(uuid.uuid4()),
+                type="document",
+                params={
+                    "title": title,
+                    "content": content,
+                    "source_ref": book_id,
+                    "tags": tags,
+                }
+            )
+            await ingestion_queue.enqueue(job)
+
+            # Wait briefly for the job to complete (it's fast for small text)
+            import asyncio
+            for _ in range(30):  # Wait up to 3 seconds
+                await asyncio.sleep(0.1)
+                status = ingestion_queue.get_status(job.id)
+                if status and status.status.value in ("success", "failed"):
+                    break
+
+            final_status = ingestion_queue.get_status(job.id)
+            if final_status and final_status.status.value == "success":
+                supabase.table("books").update({
+                    "ingestion_status": "complete",
+                    "ingested": True,
+                }).eq("id", book_id).execute()
+                return {
+                    "status": "ingestion_complete",
+                    "book_id": book_id,
+                    "nodes_created": (final_status.result or {}).get("nodes_created", 0),
+                }
+            else:
+                error_msg = (final_status.error if final_status else "Job not found")
+                supabase.table("books").update({
+                    "ingestion_status": "error",
+                }).eq("id", book_id).execute()
+                return {
+                    "status": "ingestion_failed",
+                    "book_id": book_id,
+                    "error": error_msg,
+                }
+
+        except Exception as inner_e:
+            logger.error(f"Ingestion pipeline failed for book {book_id}: {inner_e}")
+            supabase.table("books").update({
+                "ingestion_status": "error",
+            }).eq("id", book_id).execute()
+            return {
+                "status": "ingestion_failed",
+                "book_id": book_id,
+                "error": str(inner_e),
+            }
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
