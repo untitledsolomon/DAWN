@@ -38,6 +38,7 @@ function sessionMessageToChatMessage(sm: SessionMessage): AgentChatMessage {
     tool_calls: sm.tool_calls ?? undefined,
     node_ids: sm.node_ids ?? undefined,
     node_titles: sm.node_titles ?? undefined,
+    artifact_ids: sm.artifact_ids ?? undefined,
     timestamp: new Date(sm.created_at),
   };
 }
@@ -109,6 +110,70 @@ export default function ChatWindow() {
         setLoadingSession(false);
       });
   }, [sessionIdFromUrl]);
+
+  // ── Load artifacts for the current session ───────────────────────────────
+  // When messages are loaded (or change), fetch artifacts referenced by
+  // artifact_ids and attach them to the corresponding messages.
+  useEffect(() => {
+    const sid = sessionId.current;
+    if (!sid) return;
+
+    // Collect all artifact IDs referenced across messages
+    const allArtifactIds = new Set<string>();
+    for (const msg of messages) {
+      if (msg.artifact_ids && msg.artifact_ids.length > 0) {
+        for (const aid of msg.artifact_ids) {
+          allArtifactIds.add(aid);
+        }
+      }
+    }
+
+    if (allArtifactIds.size === 0) return;
+
+    // Fetch artifacts from the API
+    const BASE = process.env.NEXT_PUBLIC_DAWN_API_URL || "http://localhost:8000";
+    const KEY = process.env.NEXT_PUBLIC_DAWN_API_KEY || "";
+
+    fetch(`${BASE}/artifacts/?session_id=${sid}&limit=100`, {
+      headers: { "x-api-key": KEY },
+    })
+      .then((res) => res.json())
+      .then((artifacts: any[]) => {
+        if (!Array.isArray(artifacts) || artifacts.length === 0) return;
+
+        // Build a map of artifact_id -> ArtifactRef
+        const artifactMap = new Map<string, ArtifactRef>();
+        for (const a of artifacts) {
+          artifactMap.set(a.id, {
+            id: a.id,
+            type: a.type || "chart",
+            title: a.title || "Chart",
+            spec: a.spec || undefined,
+            url: a.url || undefined,
+            created_at: a.created_at,
+          });
+        }
+
+        // Attach artifacts to messages that reference them
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (!msg.artifact_ids || msg.artifact_ids.length === 0) return msg;
+            if (msg.artifacts && msg.artifacts.length > 0) return msg; // already hydrated
+
+            const matched: ArtifactRef[] = [];
+            for (const aid of msg.artifact_ids) {
+              const artifact = artifactMap.get(aid);
+              if (artifact) matched.push(artifact);
+            }
+            if (matched.length === 0) return msg;
+            return { ...msg, artifacts: matched };
+          })
+        );
+      })
+      .catch((err) => {
+        console.error("[ChatWindow] Failed to load artifacts:", err);
+      });
+  }, [messages.length, sessionId.current]);
 
   // Auto-scroll to bottom
   useEffect(() => {

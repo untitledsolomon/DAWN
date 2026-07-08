@@ -20,14 +20,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+# ── Auth ─────────────────────────────────────────────────────────────────────
 
 def verify_key(x_api_key: Optional[str] = Header(None)):
     if x_api_key != settings.dawn_api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
-# ── Schema ─────────────────────────────────────────────────────────────────────
+# ── Schema ───────────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
     message: str
@@ -36,18 +36,19 @@ class ChatRequest(BaseModel):
     web_search_enabled: bool = False
 
 
-# ── SSE helpers ────────────────────────────────────────────────────────────────
+# ── SSE helpers ──────────────────────────────────────────────────────────────
 
 def sse(event_type: str, payload) -> str:
     return f"data: {json.dumps({'type': event_type, **payload})}\n\n"
 
 
-# ── DB helpers ─────────────────────────────────────────────────────────────────
+# ── DB helpers ───────────────────────────────────────────────────────────────
 
 def _save_message_sync(session_id: str, role: str, content: str,
                        tool_calls: Optional[list] = None,
                        node_ids: Optional[list[str]] = None,
-                       node_titles: Optional[list[str]] = None) -> dict:
+                       node_titles: Optional[list[str]] = None,
+                       artifact_ids: Optional[list[str]] = None) -> dict:
     """Insert a message into chat_messages (sync — called from async generator)."""
     try:
         supabase = db.get_db()
@@ -62,6 +63,8 @@ def _save_message_sync(session_id: str, role: str, content: str,
             data["node_ids"] = node_ids
         if node_titles:
             data["node_titles"] = node_titles
+        if artifact_ids:
+            data["artifact_ids"] = artifact_ids
         res = supabase.table("chat_messages").insert(data).execute()
         return res.data[0] if res.data else {}
     except Exception as e:
@@ -300,7 +303,7 @@ async def _learn_from_error(
         logger.warning(f"[chat] Error learning failed: {e}")
 
 
-# ── Main chat endpoint ─────────────────────────────────────────────────────────
+# ── Main chat endpoint ───────────────────────────────────────────────────────
 
 @router.post("/")
 async def chat(

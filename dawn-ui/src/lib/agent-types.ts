@@ -1,4 +1,4 @@
-// ── Agent mode types ──────────────────────────────────────────────────────────
+// ── Agent mode types ────────────────────────────────────────────────────────
 
 export interface AgentToolCall {
   name: string;
@@ -29,6 +29,8 @@ export interface AgentChatMessage {
   // agent-mode fields (real tool execution)
   trace?: AgentTraceEntry[];
   warning?: string;
+  // artifact references (stored in DB, loaded on session reload)
+  artifact_ids?: string[];
   // visualize-mode fields (chart specs embedded in content)
   artifacts?: ArtifactRef[];
 }

@@ -73,6 +73,7 @@ export interface SessionMessage {
   tool_calls?: ToolCall[] | null;
   node_ids?: string[] | null;
   node_titles?: string[] | null;
+  artifact_ids?: string[] | null;
   created_at: string;
 }
 

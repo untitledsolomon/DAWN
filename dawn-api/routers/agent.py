@@ -69,9 +69,11 @@ async def agent(
 
     tool_calls_list: list[dict] = []
     full_response: list[str] = []
+    # Track artifact IDs created during this turn so we can save them on the message
+    artifact_ids_this_turn: list[str] = []
 
     async def generate():
-        nonlocal full_response, tool_calls_list
+        nonlocal full_response, tool_calls_list, artifact_ids_this_turn
 
         # 1. Save user message immediately
         _save_message_sync(session_id, "user", req.message)
@@ -84,7 +86,10 @@ async def agent(
                 _generate_title, session_id, req.message, engine.complete
             )
 
+        # Track tool calls by a unique key (name + index) so duplicate tool
+        # names don't overwrite each other in pending_calls.
         pending_calls: dict[str, dict] = {}
+        tool_call_counter: dict[str, int] = {}
 
         async for event in run_agent_loop(
             user_message=req.message,
@@ -95,12 +100,28 @@ async def agent(
             event_type = event.pop("type")
 
             if event_type == "tool_call":
-                tc_dict = {"name": event.get("name"), "args": event.get("args")}
+                name = event.get("name", "unknown")
+                # Build a unique key: "create_chart#0", "create_chart#1", etc.
+                counter = tool_call_counter.get(name, 0)
+                tool_call_counter[name] = counter + 1
+                key = f"{name}#{counter}"
+
+                tc_dict = {"name": name, "args": event.get("args")}
                 tool_calls_list.append(tc_dict)
-                pending_calls[event.get("name")] = tc_dict
+                pending_calls[key] = tc_dict
+
             elif event_type == "tool_result":
-                tc_dict = pending_calls.get(event.get("name"))
-                if tc_dict is not None:
+                name = event.get("name", "unknown")
+                # Find the first pending call with this name that doesn't have
+                # a result yet (by iterating keys in insertion order).
+                matched_key = None
+                for k, v in pending_calls.items():
+                    if k.startswith(f"{name}#") and "success" not in v:
+                        matched_key = k
+                        break
+
+                if matched_key:
+                    tc_dict = pending_calls[matched_key]
                     tc_dict["success"] = event.get("success")
                     tc_dict["output"] = event.get("output")
                     tc_dict["error"] = event.get("error")
@@ -122,7 +143,8 @@ async def agent(
                             description=output.get("description"),
                             spec=output.get("spec"),
                         )
-                        if artifact:
+                        if artifact and artifact.get("id"):
+                            artifact_ids_this_turn.append(artifact["id"])
                             # Shape must match AgentSSEEvent's "artifact" variant
                             # in dawn-ui/src/lib/agent-types.ts exactly.
                             yield sse("artifact", {
@@ -134,8 +156,10 @@ async def agent(
                             })
                     except Exception:
                         logger.exception("Failed to persist chart artifact")
+
             elif event_type == "token":
                 full_response.append(event.get("content", ""))
+
             elif event_type == "done":
                 # Prefer the fully assembled content if we captured tokens;
                 # fall back to whatever run_agent_loop reports as final content.
@@ -154,6 +178,7 @@ async def agent(
                 "assistant",
                 assistant_content,
                 tool_calls=tool_calls_list if tool_calls_list else None,
+                artifact_ids=artifact_ids_this_turn if artifact_ids_this_turn else None,
             )
 
     return StreamingResponse(
