@@ -94,10 +94,8 @@ export default function MemoryPage() {
     const tags = fileTags.split(",").map((t) => t.trim()).filter(Boolean);
     try {
       const result = await ingestFile(file, fileTitle || file.name.replace(/\.[^.]+$/, ""), tags);
-      const info = result.sections > 0
-        ? `${result.sections} sections`
-        : `${result.word_count?.toLocaleString() ?? "?"} words`;
-      setUploadMsg({ ok: true, text: `✓ "${result.title}" queued — ${info} extracted as nodes` });
+      const sizeInfo = result.size_mb ? `${result.size_mb.toFixed(1)} MB` : "";
+      setUploadMsg({ ok: true, text: `✓ "${result.title}" queued — ${result.file_type}${sizeInfo ? ` (${sizeInfo})` : ""} sent for ingestion` });
       setFile(null);
       setFileTitle("");
       setFileTags("");
@@ -152,7 +150,6 @@ export default function MemoryPage() {
           </button>
         </header>
 
-        {/* Tabs — scrollable on mobile */}
         <div className="flex border-b border-rim px-4 sm:px-6 flex-shrink-0 overflow-x-auto">
           {TABS.map(({ id, label, count }) => (
             <button
