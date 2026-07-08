@@ -364,6 +364,9 @@ async def create_artifact(
     title: str,
     description: Optional[str] = None,
     spec: Optional[dict] = None,
+    code: Optional[str] = None,
+    prompt: Optional[str] = None,
+    metadata: Optional[dict] = None,
     url: Optional[str] = None,
     data_summary: Optional[str] = None,
     tags: Optional[list[str]] = None,
@@ -380,6 +383,12 @@ async def create_artifact(
         data["description"] = description
     if spec:
         data["spec"] = spec
+    if code:
+        data["code"] = code
+    if prompt:
+        data["prompt"] = prompt
+    if metadata:
+        data["metadata"] = metadata
     if url:
         data["url"] = url
     if data_summary:

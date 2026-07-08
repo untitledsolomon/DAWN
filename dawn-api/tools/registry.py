@@ -132,3 +132,10 @@ def _register_default_tools(registry: ToolRegistry) -> None:
         registry.register(OntologyQueryTool())
     except Exception as e:
         logger.error(f"Failed to register OntologyQueryTool: {e}")
+
+    # v35.0 — Explainer tool (animated whiteboard-style HTML/SVG/JS artifacts)
+    try:
+        from tools.explainer import ExplainerTool
+        registry.register(ExplainerTool())
+    except Exception as e:
+        logger.error(f"Failed to register ExplainerTool: {e}")

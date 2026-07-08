@@ -1,4 +1,4 @@
-// ── Agent mode types ────────────────────────────────────────────────────────
+// ── Agent mode types ──────────────────────────────────────────────────────
 
 export interface AgentToolCall {
   name: string;
@@ -37,9 +37,10 @@ export interface AgentChatMessage {
 
 export interface ArtifactRef {
   id: string;
-  type: "chart" | "table" | "image" | "file";
+  type: "chart" | "table" | "image" | "file" | "explainer";
   title: string;
   spec?: Record<string, unknown>;  // Vega-Lite spec for charts
+  code?: string;                    // Self-contained HTML for explainers
   url?: string;                     // URL for images/files
   created_at: string;
 }
@@ -56,6 +57,6 @@ export type AgentSSEEvent =
   | { type: "iteration_limit"; content: string }
   | { type: "error"; content: string }
   // visualize-mode events
-  | { type: "artifact"; artifact_id: string; artifact_type: string; title: string; spec?: Record<string, unknown>; url?: string };
+  | { type: "artifact"; artifact_id: string; artifact_type: string; title: string; spec?: Record<string, unknown>; code?: string; url?: string };
 
 export type ChatMode = "chat" | "agent" | "visualize";

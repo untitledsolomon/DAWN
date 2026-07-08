@@ -23,41 +23,13 @@ export default function ChartRenderer({ spec, title, className = "", compact = f
     setLoading(true);
     setError(null);
 
-    const el = ref.current;
-
-    // Guard against embedding while the container is still 0-width (e.g. the
-    // artifacts panel is collapsed or mid-transition on first mount). Vega-Lite's
-    // "container" autosize trusts clientWidth at embed time; if it's 0, bars
-    // collapse to ~0px permanently. Wait until it's real, with a timeout so a
-    // genuinely stuck layout fails loudly instead of spinning forever.
-    let resizeObserver: ResizeObserver | null = null;
-    const waitForWidth = (): Promise<void> =>
-      new Promise((resolve, reject) => {
-        if (el.clientWidth > 0) {
-          resolve();
-          return;
-        }
-        const timeout = setTimeout(() => {
-          resizeObserver?.disconnect();
-          reject(new Error("Chart container never got a measurable width"));
-        }, 5000);
-        resizeObserver = new ResizeObserver(() => {
-          if (el.clientWidth > 0) {
-            clearTimeout(timeout);
-            resizeObserver?.disconnect();
-            resolve();
-          }
-        });
-        resizeObserver.observe(el);
-      });
-
     // Dynamic import of vega-embed (it's large, so lazy load at runtime only)
-    Promise.all([import("vega-embed"), waitForWidth()])
-      .then(([mod]) => {
+    import("vega-embed")
+      .then((mod) => {
         if (cancelled) return;
         const embed = mod.default;
 
-        embed(el, spec as any, {
+        embed(ref.current!, spec as any, {
           actions: {
             export: true,
             source: false,
@@ -84,14 +56,13 @@ export default function ChartRenderer({ spec, title, className = "", compact = f
       .catch((err) => {
         if (!cancelled) {
           console.error("[ChartRenderer] Failed to load vega-embed:", err);
-          setError(err.message || "Failed to load chart library");
+          setError("Failed to load chart library");
           setLoading(false);
         }
       });
 
     return () => {
       cancelled = true;
-      resizeObserver?.disconnect();
     };
   }, [spec, compact]);
 
@@ -141,13 +112,13 @@ export default function ChartRenderer({ spec, title, className = "", compact = f
         }`}
       >
         {loading && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center py-12 bg-surface/50">
+          <div className="flex items-center justify-center py-12">
             <Loader2 size={20} className="text-dawn animate-spin" />
           </div>
         )}
 
         {error && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center py-8 gap-2 bg-surface/50">
+          <div className="flex flex-col items-center justify-center py-8 gap-2">
             <AlertCircle size={18} className="text-ember" />
             <p className="text-text-muted text-xs">{error}</p>
           </div>
@@ -155,8 +126,8 @@ export default function ChartRenderer({ spec, title, className = "", compact = f
 
         <div
           ref={ref}
-          className="w-full flex items-center justify-center"
-          style={{ minHeight: compact ? 180 : 300, minWidth: compact ? 280 : 320 }}
+          className={`flex items-center justify-center ${loading || error ? "hidden" : ""}`}
+          style={{ minHeight: compact ? 180 : 300 }}
         />
 
         {/* Close button for expanded mode */}

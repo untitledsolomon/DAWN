@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ── Auth ─────────────────────────────────────────────────────────────────────
+# ── Auth ───────────────────────────────────────────────────────────────────
 # Unlike routers/chat.py's verify_key (which only checks the key is valid),
 # this resolves *which* identity is making the request, since agent mode's
 # tool access is tiered — see llm/identity.py.
@@ -36,7 +36,7 @@ def get_identity(x_api_key: Optional[str] = Header(None)) -> Identity:
     return identity
 
 
-# ── Schema ───────────────────────────────────────────────────────────────────
+# ── Schema ─────────────────────────────────────────────────────────────────
 
 class AgentRequest(BaseModel):
     message: str
@@ -45,7 +45,7 @@ class AgentRequest(BaseModel):
     max_iterations: int = DEFAULT_MAX_ITERATIONS
 
 
-# ── SSE helper ───────────────────────────────────────────────────────────────
+# ── SSE helper ─────────────────────────────────────────────────────────────
 # Identical format to routers/chat.py's sse() — duplicated here rather than
 # imported to avoid a cross-router dependency; consider moving to a shared
 # util if a third SSE router shows up.
@@ -54,7 +54,7 @@ def sse(event_type: str, payload: dict) -> str:
     return f"data: {json.dumps({'type': event_type, **payload})}\n\n"
 
 
-# ── Main agent endpoint ──────────────────────────────────────────────────────
+# ── Main agent endpoint ────────────────────────────────────────────────────
 
 @router.post("/")
 async def agent(
@@ -126,9 +126,7 @@ async def agent(
                     tc_dict["output"] = event.get("output")
                     tc_dict["error"] = event.get("error")
 
-                # The create_chart tool only builds a spec — it doesn't know the
-                # session_id, so persisting it into `artifacts` and telling the
-                # frontend about it happens here, where we have both.
+                # ── create_chart: persist Vega-Lite spec ──────────────────
                 if (
                     event.get("name") == "create_chart"
                     and event.get("success")
@@ -145,8 +143,6 @@ async def agent(
                         )
                         if artifact and artifact.get("id"):
                             artifact_ids_this_turn.append(artifact["id"])
-                            # Shape must match AgentSSEEvent's "artifact" variant
-                            # in dawn-ui/src/lib/agent-types.ts exactly.
                             yield sse("artifact", {
                                 "artifact_id": artifact.get("id"),
                                 "artifact_type": artifact.get("type", "chart"),
@@ -156,6 +152,49 @@ async def agent(
                             })
                     except Exception:
                         logger.exception("Failed to persist chart artifact")
+
+                # ── create_explainer: persist HTML code ───────────────────
+                if (
+                    event.get("name") == "create_explainer"
+                    and event.get("success")
+                    and isinstance(event.get("output"), dict)
+                ):
+                    output = event["output"]
+                    # The explainer tool returns a placeholder; the actual
+                    # LLM generation happens via the /explainer/generate endpoint.
+                    # But if the output already contains code (e.g. from a
+                    # direct LLM call), persist it here.
+                    code = output.get("code")
+                    if code:
+                        try:
+                            supabase = db.get_db()
+                            data = {
+                                "session_id": session_id,
+                                "type": "explainer",
+                                "title": output.get("title") or "Explainer",
+                                "code": code,
+                                "prompt": output.get("prompt", ""),
+                                "metadata": {
+                                    "diagram_type": output.get("diagram_type", "illustrative"),
+                                    "topic": output.get("topic", ""),
+                                    "model_used": settings.deepseek_model,
+                                },
+                            }
+                            if output.get("description"):
+                                data["description"] = output["description"]
+                            res = supabase.table("artifacts").insert(data).execute()
+                            if res.data and res.data[0].get("id"):
+                                artifact = res.data[0]
+                                artifact_ids_this_turn.append(artifact["id"])
+                                yield sse("artifact", {
+                                    "artifact_id": artifact["id"],
+                                    "artifact_type": "explainer",
+                                    "title": artifact["title"],
+                                    "code": artifact["code"],
+                                    "url": None,
+                                })
+                        except Exception:
+                            logger.exception("Failed to persist explainer artifact")
 
             elif event_type == "token":
                 full_response.append(event.get("content", ""))

@@ -253,8 +253,8 @@ export interface AgentTask {
 
 export * from "./agent-types";
 
-// v20.0: Artifacts (visualizations, files, tables)
-export type ArtifactType = "chart" | "table" | "image" | "file";
+// v20.0: Artifacts (visualizations, files, tables, explainers)
+export type ArtifactType = "chart" | "table" | "image" | "file" | "explainer";
 
 export interface Artifact {
   id: string;
@@ -263,6 +263,9 @@ export interface Artifact {
   title: string;
   description: string | null;
   spec: Record<string, unknown> | null;  // Vega-Lite spec for charts
+  code: string | null;                    // Self-contained HTML for explainers
+  prompt: string | null;                  // Original prompt for explainers
+  metadata: Record<string, unknown> | null; // { diagram_type, topic, model_used }
   url: string | null;                     // URL for images/files
   data_summary: string | null;            // Text summary of what this artifact shows
   tags: string[];
