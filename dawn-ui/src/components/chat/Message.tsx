@@ -1,10 +1,12 @@
 import { Sparkles, User, Zap } from "lucide-react";
 import clsx from "clsx";
 import type { ChatMessage } from "@/lib/types";
+import type { AgentChatMessage } from "@/lib/agent-types";
 import ToolCallIndicator from "./ToolCallIndicator";
+import ChartRenderer from "../visualize/ChartRenderer";
 
 interface Props {
-  message: ChatMessage;
+  message: ChatMessage | AgentChatMessage;
   isStreaming?: boolean;
   streamingToolCalls?: import("@/lib/types").ToolCall[];
 }
@@ -30,6 +32,9 @@ export default function Message({
       </div>
     );
   }
+
+  // Check if this message has artifacts (from agent mode)
+  const artifacts = "artifacts" in message ? (message as AgentChatMessage).artifacts : undefined;
 
   return (
     <div className="flex gap-3 animate-slide-up group">
@@ -71,6 +76,25 @@ export default function Message({
           <span className="inline-block w-1.5 h-4 bg-dawn/70 ml-0.5 animate-pulse rounded-sm align-middle" />
         )}
 
+        {/* Artifacts (charts, tables, images) */}
+        {artifacts && artifacts.length > 0 && (
+          <div className="mt-4 space-y-4">
+            {artifacts.map((artifact) => {
+              if (artifact.type === "chart" && artifact.spec) {
+                return (
+                  <ChartRenderer
+                    key={artifact.id}
+                    spec={artifact.spec}
+                    title={artifact.title}
+                  />
+                );
+              }
+              // Future: handle table, image, file types here
+              return null;
+            })}
+          </div>
+        )}
+
         {/* Node citations */}
         {!isStreaming &&
           message.node_titles &&
@@ -102,7 +126,7 @@ export default function Message({
   );
 }
 
-// ── Minimal markdown renderer ─────────────────────────────────────────────────
+// ── Minimal markdown renderer ──────────────────────────────────────────────
 function renderMarkdown(text: string): string {
   return text
     // Code blocks

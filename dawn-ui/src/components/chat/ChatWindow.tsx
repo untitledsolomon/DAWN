@@ -19,6 +19,7 @@ import type { ChatMessage, ToolCall, SessionMessage } from "@/lib/types";
 import type {
   AgentChatMessage,
   AgentTraceEntry,
+  ArtifactRef,
   ChatMode,
 } from "@/lib/agent-types";
 import Message from "./Message";
@@ -66,6 +67,9 @@ export default function ChatWindow() {
   const [streamingWarning, setStreamingWarning] = useState<
     string | null
   >(null);
+  const [streamingArtifacts, setStreamingArtifacts] = useState<
+    ArtifactRef[]
+  >([]);
   const [thinkingState, setThinkingState] = useState(false);
   const [thinkingLabel, setThinkingLabel] = useState("");
   const [loadingSession, setLoadingSession] = useState(false);
@@ -74,7 +78,7 @@ export default function ChatWindow() {
   const sessionId = useRef<string | undefined>(undefined);
   const prevSessionIdRef = useRef<string | null>(null);
 
-  // ── Load messages when session ID changes ──────────────────────────────
+  // ── Load messages when session ID changes ────────────────────────────────
   useEffect(() => {
     const sid = sessionIdFromUrl;
 
@@ -212,6 +216,7 @@ export default function ChatWindow() {
       let fullContent = "";
       const trace: AgentTraceEntry[] = [];
       let warning: string | undefined;
+      const artifacts: ArtifactRef[] = [];
 
       try {
         for await (const event of streamAgent(
@@ -266,6 +271,18 @@ export default function ChatWindow() {
               setThinkingState(false);
               break;
 
+            case "artifact":
+              artifacts.push({
+                id: event.artifact_id,
+                type: event.artifact_type as ArtifactRef["type"],
+                title: event.title,
+                spec: event.spec,
+                url: event.url,
+                created_at: new Date().toISOString(),
+              });
+              setStreamingArtifacts([...artifacts]);
+              break;
+
             case "done":
               fullContent = event.content;
               // Capture session_id from backend, same as sendChat — this is
@@ -299,6 +316,7 @@ export default function ChatWindow() {
         content: fullContent,
         trace,
         warning,
+        artifacts,
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, assistantMsg]);
@@ -334,6 +352,7 @@ export default function ChatWindow() {
     setStreamingToolCalls([]);
     setStreamingTrace([]);
     setStreamingWarning(null);
+    setStreamingArtifacts([]);
     setThinkingState(true);
     setThinkingLabel("");
 
@@ -348,6 +367,7 @@ export default function ChatWindow() {
     setStreamingToolCalls([]);
     setStreamingTrace([]);
     setStreamingWarning(null);
+    setStreamingArtifacts([]);
     setThinkingState(false);
   }, [input, isStreaming, mode, sendAgent, sendChat, adoptSessionId]);
 
@@ -424,6 +444,7 @@ export default function ChatWindow() {
                     role: "assistant",
                     content: streamingContent,
                     timestamp: new Date(),
+                    artifacts: streamingArtifacts,
                   }}
                   isStreaming
                   streamingToolCalls={
