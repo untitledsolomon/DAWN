@@ -20,7 +20,10 @@ import json
 
 from decision_engine.registry import run_workflow, list_workflows, check_approval_required
 from decision_engine.simulate import Mutation, simulate_scenario
-from db.client import supabase
+import db.client as db
+
+
+supabase = db.get_db()   # call it inside the function
 
 router = APIRouter(prefix="/api", tags=["decision_intelligence"])
 
