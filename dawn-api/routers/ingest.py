@@ -27,7 +27,7 @@ import tempfile
 import shutil
 from dataclasses import dataclass, field
 from enum import Enum
-from ingestion.parsers import extract_preview, parse_file
+from ingestion.parsers import extract_preview, parse_file, parse_epub, parse_docx, parse_pptx, parse_odp, parse_ods
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -250,19 +250,19 @@ class IngestionQueue:
 
             result = await ingest_document_stream(title, gen, source_ref, tags)
         elif file_type == "Word":
-            sections = _parse_docx(file_bytes)
+            sections = parse_docx(file_bytes)
             result = await ingest_sections(title, sections, source_ref, tags)
         elif file_type == "PowerPoint":
-            sections = _parse_pptx(file_bytes)
+            sections = parse_pptx(file_bytes)
             result = await ingest_sections(title, sections, source_ref, tags)
         elif file_type == "Presentation":
-            sections = _parse_odp(file_bytes)
+            sections = parse_odp(file_bytes)
             result = await ingest_sections(title, sections, source_ref, tags)
         elif file_type == "Spreadsheet":
-            sections = _parse_ods(file_bytes)
+            sections = parse_ods(file_bytes)
             result = await ingest_sections(title, sections, source_ref, tags)
         elif file_type == "EPUB":
-            sections = _parse_epub(file_bytes)
+            sections = parse_epub(file_bytes)
             result = await ingest_sections(title, sections, source_ref, tags)
         else:
             extraction = _extract_content(file_bytes, file_type, source_ref, title)
