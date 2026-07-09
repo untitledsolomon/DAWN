@@ -135,7 +135,7 @@ class IngestionQueue:
                     finally:
                         job.completed_at = time.time()
                         self.queue.task_done()
-                        # Update book record if source_ref matches a book ID
+                        # Update or create book record on completion
                         await self._on_job_complete(job)
             except asyncio.CancelledError:
                 break
@@ -144,34 +144,70 @@ class IngestionQueue:
                 await asyncio.sleep(1)
 
     async def _on_job_complete(self, job: IngestionJob):
-        """After a job completes, update the associated book record if source_ref is a book ID."""
+        """After a job completes, update or create the associated book record."""
         if job.type not in ("document", "file"):
             return
         source_ref = job.params.get("source_ref", "")
         if not source_ref:
             return
-        # Check if source_ref looks like a UUID (book ID)
+
         import re as _re
-        if not _re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', source_ref):
-            return
+        is_uuid = bool(_re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', source_ref))
+
         try:
             supabase = db.get_db()
-            book_res = supabase.table("books").select("id").eq("id", source_ref).execute()
-            if not book_res.data:
-                return
-            if job.status == IngestionStatus.SUCCESS:
-                supabase.table("books").update({
-                    "ingestion_status": "complete",
+
+            if is_uuid:
+                # Existing book — update its status
+                book_res = supabase.table("books").select("id").eq("id", source_ref).execute()
+                if not book_res.data:
+                    return
+                if job.status == IngestionStatus.SUCCESS:
+                    supabase.table("books").update({
+                        "ingestion_status": "complete",
+                        "ingested": True,
+                    }).eq("id", source_ref).execute()
+                    logger.info(f"Book {source_ref[:8]} marked as ingested successfully")
+                elif job.status == IngestionStatus.FAILED:
+                    supabase.table("books").update({
+                        "ingestion_status": "error",
+                    }).eq("id", source_ref).execute()
+                    logger.warning(f"Book {source_ref[:8]} marked as ingestion error: {job.error}")
+            else:
+                # File upload — create a book record if one doesn't already exist for this source_ref
+                if job.status != IngestionStatus.SUCCESS:
+                    return
+
+                # Check if a book with this source_ref already exists
+                existing = supabase.table("books").select("id").eq("source_ref", source_ref).execute()
+                if existing.data:
+                    # Update existing record
+                    supabase.table("books").update({
+                        "ingestion_status": "complete",
+                        "ingested": True,
+                    }).eq("id", existing.data[0]["id"]).execute()
+                    logger.info(f"Book record updated for file: {source_ref}")
+                    return
+
+                # Create a new book record
+                title = job.params.get("title", source_ref)
+                tags = job.params.get("tags", [])
+                category = tags[0] if tags else None
+
+                book_data = {
+                    "title": title,
+                    "author": None,
+                    "category": category,
+                    "tags": tags,
+                    "source_ref": source_ref,
                     "ingested": True,
-                }).eq("id", source_ref).execute()
-                logger.info(f"Book {source_ref[:8]} marked as ingested successfully")
-            elif job.status == IngestionStatus.FAILED:
-                supabase.table("books").update({
-                    "ingestion_status": "error",
-                }).eq("id", source_ref).execute()
-                logger.warning(f"Book {source_ref[:8]} marked as ingestion error: {job.error}")
+                    "ingestion_status": "complete",
+                }
+                supabase.table("books").insert(book_data).execute()
+                logger.info(f"Book record created for uploaded file: {title}")
+
         except Exception as e:
-            logger.warning(f"Failed to update book status for {source_ref}: {e}")
+            logger.warning(f"Failed to update/create book record for {source_ref}: {e}")
 
     async def _execute_job(self, job: IngestionJob) -> dict:
         max_retries = 3
@@ -342,7 +378,7 @@ async def get_job_status(job_id: str, _: None = Depends(verify_key)):
     }
 
 
-# ─── Auto-Tagging (v2.1 — Hybrid Tagger) ─────────────────────────────────
+# ─── Auto-Tagging (v2.1 — Hybrid Tagger) ──────────────────────────────────────
 # Uses the HybridTagger from ingestion/tagger.py which implements:
 #   1. Top-K (always returns top 2 tags)
 #   2. Adaptive floor (0.1 minimum — garbage detection)
@@ -378,7 +414,7 @@ async def _auto_tag_content(content: str, title: str = "", top_n: int = 2, thres
     )
 
 
-# ─── Single File Upload ───────────────────────────────────────────────────
+# ─── Single File Upload ───────────────────────────────────────────────────────
 
 @router.post("/file")
 async def ingest_file(
@@ -458,7 +494,7 @@ async def ingest_file(
     }
 
 
-# ─── Multi-File / Zip Upload ──────────────────────────────────────────────
+# ─── Multi-File / Zip Upload ──────────────────────────────────────────────────
 
 @router.post("/files")
 async def ingest_files(
@@ -638,10 +674,9 @@ async def _process_zip_upload(
     return jobs, errors
 
 
-# ─── Content Preview Extraction (for auto-tagging) ────────────────────────
+# ─── Content Preview Extraction (for auto-tagging) ────────────────────────────
 
-
-# ── Content Preview Extraction (for auto-tagging) ─────────────────────────
+# ── Content Preview Extraction (for auto-tagging) ─────────────────────────────
 # Delegated to ingestion.parsers.extract_preview
 
 def _extract_preview(file_bytes: bytes, file_type: str, filename: str, max_chars: int = 1000) -> str:
@@ -663,7 +698,7 @@ def _extract_preview(file_bytes: bytes, file_type: str, filename: str, max_chars
     return extract_preview(file_bytes, filename, max_chars)
 
 
-# ── Stats & Log Endpoints ─────────────────────────────────────────────────
+# ─── Stats & Log Endpoints ────────────────────────────────────────────────────
 
 @router.get("/stats")
 async def ingestion_stats(_: None = Depends(verify_key)):
@@ -687,7 +722,7 @@ async def get_log(_: None = Depends(verify_key)):
 
 
 
-# ──── Admin: Back-Tag Existing Nodes ──────────────────────────────────────
+# ──── Admin: Back-Tag Existing Nodes ──────────────────────────────────────────
 # Re-runs auto-tagging on all nodes tagged "uncategorized" or with no tags.
 # Uses the HybridTagger with Top-K + adaptive floor + dynamic per-tag thresholds.
 # Also updates per-tag thresholds based on match scores for continuous learning.
@@ -845,7 +880,7 @@ async def admin_backtag(x_api_key: Optional[str] = Header(None)):
     }
 
 
-# ── File Type Detection ───────────────────────────────────────────────────
+# ── File Type Detection ───────────────────────────────────────────────────────
 # Delegated to ingestion.parsers.detect_file_type
 
 def detect_file_type(filename: str) -> Optional[str]:
@@ -901,7 +936,7 @@ def _extract_content(file_bytes: bytes, file_type: str, filename: str, doc_title
     }
 
 
-# ── PDF Parsing ───────────────────────────────────────────────────────────
+# ── PDF Parsing ───────────────────────────────────────────────────────────────
 # PDF is handled natively in this router because of OCR support
 
 def _parse_pdf(file_bytes: bytes) -> str:
@@ -1031,7 +1066,7 @@ def _iter_ocr_pdf_pages(file_bytes: bytes, max_pages: int = 5000):
         yield f"[OCR truncated: {total_pages} pages, only first {max_pages} OCR'd.]"
 
 
-# ── URL Ingestion ────────────────────────────────────────────────────────────────────────────────────────
+# ── URL Ingestion ─────────────────────────────────────────────────────────────
 # Fetches content from a URL and ingests it as a document.
 
 class UrlIngestRequest(BaseModel):
