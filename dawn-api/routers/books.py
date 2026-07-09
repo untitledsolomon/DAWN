@@ -1,6 +1,7 @@
 """
 Books & Learning endpoints — manage book library, learning sessions, knowledge gaps.
-v2.0 — Real ingestion pipeline: POST /books/{id}/ingest now delegates to the ingestor.
+v2.1 — Async ingestion: POST /books/{id}/ingest returns job_id immediately (no blocking poll).
+         Frontend polls GET /ingest/status/{job_id} to track completion.
          Delete cascade: deleting a book also removes its ingested knowledge graph nodes.
 """
 import logging
@@ -118,9 +119,9 @@ async def delete_book(book_id: str, _: None = Depends(verify_key)):
 async def ingest_book(book_id: str, _: None = Depends(verify_key)):
     """Trigger ingestion of a book into the knowledge graph.
 
-    Looks up the book, then delegates to the real ingestor pipeline.
-    If the book has a file attached or a source_ref, it ingests from that.
-    Otherwise, it ingests the book's title and notes as a document.
+    Returns a job_id immediately. Frontend polls GET /ingest/status/{job_id}
+    to track completion. When the job completes, the book's ingestion_status
+    is updated in the database.
     """
     try:
         supabase = db.get_db()
@@ -137,84 +138,57 @@ async def ingest_book(book_id: str, _: None = Depends(verify_key)):
             "ingestion_status": "ingesting",
         }).eq("id", book_id).execute()
 
-        try:
-            # Delegate to the real ingestor
-            from routers.ingest import ingestion_queue, IngestionJob
-            import uuid
+        # Delegate to the real ingestor
+        from routers.ingest import ingestion_queue, IngestionJob
+        import uuid
 
-            title = book.get("title", "Untitled")
-            tags = book.get("tags", [])
-            if book.get("category"):
-                tags = list(set(list(tags) + [book["category"]]))
+        title = book.get("title", "Untitled")
+        tags = book.get("tags", [])
+        if book.get("category"):
+            tags = list(set(list(tags) + [book["category"]]))
 
-            # Build content from available fields
-            content_parts = [title]
-            if book.get("author"):
-                content_parts.append(f"Author: {book['author']}")
-            if book.get("notes"):
-                content_parts.append(book["notes"])
-            if book.get("summary"):
-                content_parts.append(book["summary"])
+        # Build content from available fields
+        content_parts = [title]
+        if book.get("author"):
+            content_parts.append(f"Author: {book['author']}")
+        if book.get("notes"):
+            content_parts.append(book["notes"])
+        if book.get("summary"):
+            content_parts.append(book["summary"])
 
-            content = "\n\n".join(content_parts)
+        content = "\n\n".join(content_parts)
 
-            # Queue a document ingestion job
-            job = IngestionJob(
-                id=str(uuid.uuid4()),
-                type="document",
-                params={
-                    "title": title,
-                    "content": content,
-                    "source_ref": book_id,
-                    "tags": tags,
-                }
-            )
-            await ingestion_queue.enqueue(job)
-
-            # Wait briefly for the job to complete (it's fast for small text)
-            import asyncio
-            for _ in range(30):  # Wait up to 3 seconds
-                await asyncio.sleep(0.1)
-                status = ingestion_queue.get_status(job.id)
-                if status and status.status.value in ("success", "failed"):
-                    break
-
-            final_status = ingestion_queue.get_status(job.id)
-            if final_status and final_status.status.value == "success":
-                supabase.table("books").update({
-                    "ingestion_status": "complete",
-                    "ingested": True,
-                }).eq("id", book_id).execute()
-                return {
-                    "status": "ingestion_complete",
-                    "book_id": book_id,
-                    "nodes_created": (final_status.result or {}).get("nodes_created", 0),
-                }
-            else:
-                error_msg = (final_status.error if final_status else "Job not found")
-                supabase.table("books").update({
-                    "ingestion_status": "error",
-                }).eq("id", book_id).execute()
-                return {
-                    "status": "ingestion_failed",
-                    "book_id": book_id,
-                    "error": error_msg,
-                }
-
-        except Exception as inner_e:
-            logger.error(f"Ingestion pipeline failed for book {book_id}: {inner_e}")
-            supabase.table("books").update({
-                "ingestion_status": "error",
-            }).eq("id", book_id).execute()
-            return {
-                "status": "ingestion_failed",
-                "book_id": book_id,
-                "error": str(inner_e),
+        # Queue a document ingestion job
+        job = IngestionJob(
+            id=str(uuid.uuid4()),
+            type="document",
+            params={
+                "title": title,
+                "content": content,
+                "source_ref": book_id,
+                "tags": tags,
             }
+        )
+        await ingestion_queue.enqueue(job)
+
+        # Return immediately with the job_id — frontend polls for status
+        return {
+            "status": "queued",
+            "job_id": job.id,
+            "book_id": book_id,
+            "message": "Book ingestion queued. Poll GET /ingest/status/{job_id} for completion.",
+        }
 
     except HTTPException:
         raise
     except Exception as e:
+        # Mark as error if we couldn't even queue it
+        try:
+            supabase.table("books").update({
+                "ingestion_status": "error",
+            }).eq("id", book_id).execute()
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -32,6 +32,7 @@ import {
   type Book,
   type IngestFileResponse,
   type IngestJobStatus,
+  type IngestBookResponse,
 } from "@/lib/api";
 
 const CATEGORIES = [
@@ -129,7 +130,7 @@ export default function BooksPage() {
       }
       if (changed) {
         setActiveJobs(newActive);
-        load(); // Refresh book list
+        load(); // Refresh book list to update ingestion_status
       }
       if (newActive.size === 0) clearInterval(interval);
     }, 1500);
@@ -157,6 +158,22 @@ export default function BooksPage() {
       setBooks((prev) => prev.filter((b) => b.id !== id));
     } catch (e) {
       console.error("Failed to delete book:", e);
+    }
+  };
+
+  const handleIngestBook = async (book: Book) => {
+    try {
+      const result = await ingestBook(book.id);
+      const job: UploadJob = {
+        jobId: result.job_id,
+        title: book.title,
+        filename: `Book: ${book.title}`,
+        status: "queued",
+      };
+      setUploadJobs((prev) => [job, ...prev]);
+      setActiveJobs((prev) => new Set(prev).add(result.job_id));
+    } catch (e: any) {
+      console.error("Failed to queue book ingestion:", e);
     }
   };
 
@@ -476,7 +493,7 @@ export default function BooksPage() {
                         </div>
                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                           {!book.ingested && (
-                            <button onClick={() => ingestBook(book.id).then(load)}
+                            <button onClick={() => handleIngestBook(book)}
                               className="w-6 h-6 flex items-center justify-center rounded text-dawn hover:bg-dawn/10 transition-all" title="Ingest">
                               <RefreshCw size={10} />
                             </button>

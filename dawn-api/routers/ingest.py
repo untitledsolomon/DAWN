@@ -134,11 +134,43 @@ class IngestionQueue:
                     finally:
                         job.completed_at = time.time()
                         self.queue.task_done()
+                        # Update book record if source_ref matches a book ID
+                        await self._on_job_complete(job)
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Queue worker error: {e}")
                 await asyncio.sleep(1)
+
+    async def _on_job_complete(self, job: IngestionJob):
+        """After a job completes, update the associated book record if source_ref is a book ID."""
+        if job.type not in ("document", "file"):
+            return
+        source_ref = job.params.get("source_ref", "")
+        if not source_ref:
+            return
+        # Check if source_ref looks like a UUID (book ID)
+        import re as _re
+        if not _re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', source_ref):
+            return
+        try:
+            supabase = db.get_db()
+            book_res = supabase.table("books").select("id").eq("id", source_ref).execute()
+            if not book_res.data:
+                return
+            if job.status == IngestionStatus.SUCCESS:
+                supabase.table("books").update({
+                    "ingestion_status": "complete",
+                    "ingested": True,
+                }).eq("id", source_ref).execute()
+                logger.info(f"Book {source_ref[:8]} marked as ingested successfully")
+            elif job.status == IngestionStatus.FAILED:
+                supabase.table("books").update({
+                    "ingestion_status": "error",
+                }).eq("id", source_ref).execute()
+                logger.warning(f"Book {source_ref[:8]} marked as ingestion error: {job.error}")
+        except Exception as e:
+            logger.warning(f"Failed to update book status for {source_ref}: {e}")
 
     async def _execute_job(self, job: IngestionJob) -> dict:
         max_retries = 3
