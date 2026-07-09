@@ -119,7 +119,7 @@ def parse_epub(file_bytes: bytes) -> list[dict]:
     for item in book.get_items():
         item_map[item.get_id()] = {
             "href": item.get_name(),
-            "media_type": item.get_media_type(),
+            "media_type": getattr(item, "get_media_type", lambda: "image/unknown")(),
             "content": item.get_content(),
         }
 
