@@ -54,7 +54,12 @@ export default function BookDetailPage() {
         // Try to find the ingested document node
         if (b.ingested) {
           try {
-            const d = await getIngestedDocument(bookId);
+            // Nodes ingested via the "ingest existing book" button use
+            // source_ref = book id. Nodes from a direct file upload (which
+            // auto-creates the book) use source_ref = filename, stored on
+            // the book's own source_ref field. Try the book's source_ref
+            // first since it's authoritative, falling back to id.
+            const d = await getIngestedDocument(b.source_ref || bookId);
             setDoc(d);
           } catch {
             // No node found for this book's source_ref — that's fine
