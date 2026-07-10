@@ -427,9 +427,9 @@ async def ingest_file(
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     filename = file.filename or ""
-    file_type = detect_file_type(filename)
+    ext = os.path.splitext(filename.lower())[1]
+    file_type = SUPPORTED_EXTENSIONS.get(ext)
     if not file_type:
-        ext = os.path.splitext(filename.lower())[1]
         raise HTTPException(status_code=400,
             detail=f"Unsupported file type '{ext}'. Supported: {', '.join(sorted(set(SUPPORTED_EXTENSIONS.values())))}")
 
@@ -542,7 +542,7 @@ async def ingest_files(
             continue
 
         # ── Individual file handling ──
-        file_type = detect_file_type(filename)
+        file_type = SUPPORTED_EXTENSIONS.get(ext)
         if not file_type:
             errors.append({"file": filename, "error": f"Unsupported file type '{ext}'"})
             continue
@@ -1103,7 +1103,8 @@ async def ingest_url_endpoint(req: UrlIngestRequest, _: None = Depends(verify_ke
 
     # Detect file type from URL or content-type
     filename = url.split("/")[-1].split("?")[0]
-    file_type = detect_file_type(filename)
+    ext = os.path.splitext(filename.lower())[1]
+    file_type = SUPPORTED_EXTENSIONS.get(ext)
 
     if not file_type:
         # Try to detect from content-type
