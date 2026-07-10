@@ -339,6 +339,11 @@ async def ingest_sections(title: str, sections: list[dict], source_ref: str = ""
                            tags: list[str] = [], node_type: str = "document") -> dict:
     """Ingest sections from a parsed document.
 
+    v2.2 — Each section is auto-tagged independently based on its body content,
+    rather than applying the same book-level tags to every section. This means
+    a chapter about hacking gets "technology" while a chapter about inventory
+    gets "operations".
+
     For table-type documents (CSV/XLSX), the sections come in pairs:
     - table_summary: a natural-language summary (becomes the parent node body)
     - table_data: the full markdown table (becomes child node(s))
@@ -358,6 +363,7 @@ async def ingest_sections(title: str, sections: list[dict], source_ref: str = ""
             await db.archive_nodes_batch([(n["id"], n["title"]) for n in prior])
             nodes_archived = len(prior)
 
+    # Resolve book-level tag IDs (applied to parent node only)
     all_tags = await db.get_all_tags()
     tag_ids = []
     for tag_name in tags:
@@ -367,16 +373,17 @@ async def ingest_sections(title: str, sections: list[dict], source_ref: str = ""
             all_tags.append(tag)
         tag_ids.append(tag["id"])
 
+    # Build a name→id map for quick lookup during per-section auto-tagging
+    tag_name_to_id = {t["name"]: t["id"] for t in all_tags}
+
     # Detect if this is a table-type document (has table_summary sections)
     is_table_doc = any(s.get("type") == "table_summary" for s in sections)
 
     if is_table_doc:
         # ── Table document handling ──
-        # Group sections by type
         summary_sections = [s for s in sections if s.get("type") == "table_summary"]
         data_sections = [s for s in sections if s.get("type") == "table_data"]
 
-        # Build combined summary for the parent node
         summary_parts = []
         for s in summary_sections:
             body = (s.get("body") or "").strip()
@@ -385,7 +392,6 @@ async def ingest_sections(title: str, sections: list[dict], source_ref: str = ""
 
         parent_body = "\n".join(summary_parts) if summary_parts else f"{len(data_sections)} table(s) from {source_ref or title}"
 
-        # Create parent node with type "table"
         parent = await db.create_node({
             "title": title,
             "type": "table",
@@ -399,7 +405,6 @@ async def ingest_sections(title: str, sections: list[dict], source_ref: str = ""
         if tag_ids:
             await db.attach_tags_batch([parent["id"]], tag_ids)
 
-        # Create child nodes for each data section (full markdown table)
         pending_rows = []
 
         async def flush():
@@ -428,7 +433,7 @@ async def ingest_sections(title: str, sections: list[dict], source_ref: str = ""
             pending_rows.append({
                 "title": raw_title,
                 "type": "table",
-                "body": body,  # No truncation — full markdown table
+                "body": body,
                 "status": "active",
                 "source": "document",
                 "source_ref": source_ref,
@@ -454,9 +459,11 @@ async def ingest_sections(title: str, sections: list[dict], source_ref: str = ""
             await db.attach_tags_batch([parent["id"]], tag_ids)
 
         pending_rows = []
+        # Track per-node auto-tag results: list of (node_id, [tag_name, ...])
+        pending_auto_tags = []
 
         async def flush():
-            nonlocal nodes_created, edges_created, pending_rows
+            nonlocal nodes_created, edges_created, pending_rows, pending_auto_tags
             if not pending_rows:
                 return
             created = await db.create_nodes_batch(pending_rows)
@@ -467,17 +474,32 @@ async def ingest_sections(title: str, sections: list[dict], source_ref: str = ""
             if edge_rows:
                 created_edges = await db.create_edges_batch(edge_rows)
                 edges_created += len(created_edges)
-            if tag_ids and node_ids:
-                await db.attach_tags_batch(node_ids, tag_ids)
+
+            # ── v2.2: Apply per-section auto-tags ──
+            # Each node gets its own tags based on its body content,
+            # not the book-level tags.
+            for node, auto_tag_names in zip(created, pending_auto_tags):
+                nid = node.get("id")
+                if not nid or not auto_tag_names:
+                    continue
+                resolved_ids = [tag_name_to_id[t] for t in auto_tag_names if t in tag_name_to_id]
+                if resolved_ids:
+                    await db.attach_tags_batch([nid], resolved_ids)
+
             if node_ids:
                 await _embed_and_store(created)
             pending_rows = []
+            pending_auto_tags = []
 
         for section in sections:
             body = (section.get("body") or "").strip()
             if not body:
                 continue
             base_title = f"{title} - {section['title']}"[:200]
+
+            # ── v2.2: Auto-tag this section independently ──
+            section_tags = await _auto_tag_section(body, base_title, tag_name_to_id)
+
             # Chunk long section bodies instead of truncating
             if len(body) > _MAX_SECTION_BODY_CHARS:
                 for i in range(0, len(body), _MAX_SECTION_BODY_CHARS):
@@ -493,23 +515,44 @@ async def ingest_sections(title: str, sections: list[dict], source_ref: str = ""
                         "source_ref": source_ref,
                         "confidence": 0.85,
                     })
+                    pending_auto_tags.append(section_tags)
                     if len(pending_rows) >= _WRITE_BATCH:
                         await flush()
             else:
                 pending_rows.append({
                     "title": base_title,
                     "type": node_type,
-                    "body": body,  # Full body, no truncation
+                    "body": body,
                     "status": "active",
                     "source": "document",
                     "source_ref": source_ref,
                     "confidence": 0.85,
                 })
+                pending_auto_tags.append(section_tags)
                 if len(pending_rows) >= _WRITE_BATCH:
                     await flush()
         await flush()
 
     return {"nodes_created": nodes_created, "edges_created": edges_created, "nodes_archived": nodes_archived}
+
+
+async def _auto_tag_section(body: str, title: str, tag_name_to_id: dict[str, str]) -> list[str]:
+    """Auto-tag a single section body using the hybrid semantic tagger.
+
+    Returns a list of tag names (e.g. ["technology", "strategy"]).
+    Returns empty list if tagging fails or only matches "uncategorized".
+    """
+    if not body or len(body) < 30:
+        return []
+    try:
+        from routers.ingest import _auto_tag_content
+        matched = await _auto_tag_content(body[:2000], title)
+        if matched and matched != ["uncategorized"]:
+            # Only return tags that actually exist in the DB
+            return [t for t in matched if t in tag_name_to_id]
+    except Exception as e:
+        logger.debug(f"Section auto-tagging failed for '{title}': {e}")
+    return []
 
 
 def _chunk_text(text: str, max_chars: int = 500) -> list[str]:

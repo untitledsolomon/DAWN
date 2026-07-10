@@ -1,5 +1,7 @@
 """
 Books & Learning endpoints — manage book library, learning sessions, knowledge gaps.
+v2.2 — Auto-tag from actual EPUB content (not just metadata).
+         Each section gets individually tagged based on its body.
 v2.1 — Async ingestion: POST /books/{id}/ingest returns job_id immediately (no blocking poll).
          Frontend polls GET /ingest/status/{job_id} to track completion.
          Delete cascade: deleting a book also removes its ingested knowledge graph nodes.
@@ -119,6 +121,9 @@ async def delete_book(book_id: str, _: None = Depends(verify_key)):
 async def ingest_book(book_id: str, _: None = Depends(verify_key)):
     """Trigger ingestion of a book into the knowledge graph.
 
+    v2.2: If the book has an EPUB file attached, extracts a preview from it
+    and auto-tags from actual content rather than just metadata.
+
     Returns a job_id immediately. Frontend polls GET /ingest/status/{job_id}
     to track completion. When the job completes, the book's ingestion_status
     is updated in the database.
@@ -147,7 +152,43 @@ async def ingest_book(book_id: str, _: None = Depends(verify_key)):
         if book.get("category"):
             tags = list(set(list(tags) + [book["category"]]))
 
-        # Build content from available fields
+        # --- v2.2: Try to extract actual content for auto-tagging ---
+        # Check if the book has a file_attachments or file_url field with EPUB data
+        content_for_tagging = None
+        file_url = book.get("file_url") or book.get("epub_url") or ""
+        file_data = book.get("file_data") or book.get("epub_data") or None
+
+        if file_data:
+            # We have raw file bytes — extract a preview
+            try:
+                from ingestion.parsers import parse_epub, extract_preview
+                if isinstance(file_data, str):
+                    import base64
+                    file_bytes = base64.b64decode(file_data)
+                else:
+                    file_bytes = file_data
+                preview = extract_preview(file_bytes, "book.epub", max_chars=2000)
+                if preview and len(preview.strip()) > 50:
+                    content_for_tagging = preview
+            except Exception as e:
+                logger.debug(f"Could not extract EPUB preview for auto-tagging: {e}")
+
+        if content_for_tagging:
+            # Auto-tag from actual content
+            try:
+                from routers.ingest import _auto_tag_content
+                auto_tags = await _auto_tag_content(content_for_tagging, title)
+                if auto_tags and auto_tags != ["uncategorized"]:
+                    # Merge auto-tags with existing tags (book-level tags take priority)
+                    existing = set(tags)
+                    for t in auto_tags:
+                        if t not in existing:
+                            tags.append(t)
+                    logger.info(f"Auto-tagged book '{title}' from content: {auto_tags}")
+            except Exception as e:
+                logger.debug(f"Auto-tagging failed for book '{title}': {e}")
+
+        # Build content from available fields (fallback if no file content)
         content_parts = [title]
         if book.get("author"):
             content_parts.append(f"Author: {book['author']}")
@@ -158,7 +199,9 @@ async def ingest_book(book_id: str, _: None = Depends(verify_key)):
 
         content = "\n\n".join(content_parts)
 
-        # Queue a document ingestion job
+        # Queue a document ingestion job — pass tags so the ingestor
+        # applies them to the parent node. Individual sections will be
+        # auto-tagged independently in ingest_sections (v2.2).
         job = IngestionJob(
             id=str(uuid.uuid4()),
             type="document",
