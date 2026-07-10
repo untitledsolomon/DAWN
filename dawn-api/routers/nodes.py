@@ -47,11 +47,12 @@ async def list_nodes(
     status: str = Query("active"),
     type: Optional[str] = Query(None),
     tag: Optional[str] = Query(None),
+    source_ref: Optional[str] = Query(None),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
     _: None = Depends(verify_key),
 ):
-    return await db.list_nodes(status=status, node_type=type, tag=tag, limit=limit, offset=offset)
+    return await db.list_nodes(status=status, node_type=type, tag=tag, limit=limit, offset=offset, source_ref=source_ref)
 
 
 @router.get("/count")
