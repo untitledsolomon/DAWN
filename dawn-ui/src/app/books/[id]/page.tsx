@@ -54,11 +54,10 @@ export default function BookDetailPage() {
         // Try to find the ingested document node
         if (b.ingested) {
           try {
-            // The ingested doc might have the same ID or we search by title
             const d = await getIngestedDocument(bookId);
             setDoc(d);
           } catch {
-            // Document node not found by ID — that's fine
+            // No node found for this book's source_ref — that's fine
           }
         }
       } catch (e: any) {

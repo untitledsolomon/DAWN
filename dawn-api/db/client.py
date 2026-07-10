@@ -66,13 +66,16 @@ async def delete_node(node_id: str) -> bool:
 
 
 async def list_nodes(status: str = "active", node_type: Optional[str] = None,
-                      tag: Optional[str] = None, limit: int = 50, offset: int = 0) -> list[dict]:
+                      tag: Optional[str] = None, limit: int = 50, offset: int = 0,
+                      source_ref: Optional[str] = None) -> list[dict]:
     db = get_db()
     q = db.table("nodes").select(
-        "id, title, type, body, status, source, confidence, created_at, updated_at, node_tags(tags(name))"
+        "id, title, type, body, status, source, source_ref, confidence, created_at, updated_at, node_tags(tags(name))"
     ).eq("status", status).order("created_at", desc=True).limit(limit).offset(offset)
     if node_type:
         q = q.eq("type", node_type)
+    if source_ref:
+        q = q.eq("source_ref", source_ref)
     res = await _async_execute(lambda: q.execute())
     nodes = res.data or []
     for node in nodes:
@@ -164,6 +167,14 @@ async def get_all_tags() -> list[dict]:
 async def create_tag(name: str, description: str = "") -> dict:
     db = get_db()
     res = await _async_execute(lambda: db.table("tags").insert({"name": name, "description": description}).execute())
+    return res.data[0] if res.data else {}
+
+
+async def update_tag_description(name: str, description: str) -> dict:
+    db = get_db()
+    res = await _async_execute(
+        lambda: db.table("tags").update({"description": description}).eq("name", name).execute()
+    )
     return res.data[0] if res.data else {}
 
 

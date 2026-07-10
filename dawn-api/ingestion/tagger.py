@@ -167,10 +167,12 @@ class HybridTagger:
         top_tags = scores[:top_k]
 
         # ── Strategy 2: Adaptive floor ────────────────────────────────────────
-        # If even the top tag is below the absolute floor, it's garbage
+        # If even the top tag is below the absolute floor, the embedding match
+        # is garbage — ask the LLM instead of blindly falling back to "uncategorized".
         if top_tags[0][0] < min_similarity:
-            logger.debug(f"Tagger: top tag '{top_tags[0][1]}' score {top_tags[0][0]:.4f} below floor {min_similarity}, uncategorized")
-            return ["uncategorized"]
+            logger.debug(f"Tagger: top tag '{top_tags[0][1]}' score {top_tags[0][0]:.4f} below floor {min_similarity}, asking LLM")
+            llm_tags = await self._llm_tag(content, top_n=top_k)
+            return llm_tags or ["uncategorized"]
 
         # ── Strategy 3: Dynamic per-tag thresholds ────────────────────────────
         if use_dynamic_thresholds and self.tag_thresholds:
@@ -184,10 +186,16 @@ class HybridTagger:
             if matched:
                 logger.debug(f"Tagger: dynamic thresholds matched: {matched}")
                 return matched
-            # If dynamic thresholds filtered everything out, fall back to
-            # the single best match (better than uncategorizing good content)
-            logger.debug(f"Tagger: all top tags filtered by thresholds, falling back to '{top_tags[0][1]}' (score: {top_tags[0][0]:.4f})")
-            return [top_tags[0][1]]
+            # No existing tag cleared its threshold — the embedding-best match
+            # (e.g. "robert greene" for a book about electrical engineering) is
+            # not a real match, just the least-bad option. Ask the LLM instead
+            # of silently forcing it.
+            logger.debug(
+                f"Tagger: all top tags filtered by thresholds (best: '{top_tags[0][1]}' "
+                f"score {top_tags[0][0]:.4f}), asking LLM"
+            )
+            llm_tags = await self._llm_tag(content, top_n=top_k)
+            return llm_tags or [top_tags[0][1]]
 
         # Without dynamic thresholds, just return top-k
         result = [name for _, name in top_tags]
@@ -279,6 +287,94 @@ class HybridTagger:
     async def get_thresholds(self) -> dict[str, float]:
         """Return current per-tag thresholds (for diagnostics)."""
         return dict(self.tag_thresholds)
+
+    # ── LLM fallback ──────────────────────────────────────────────────────────
+
+    async def _llm_tag(self, content: str, top_n: int = 2) -> list[str]:
+        """Ask the LLM to tag content that the embedding tagger couldn't confidently match.
+
+        The LLM is shown the existing tag vocabulary (with descriptions) and asked
+        to either reuse an existing tag or, if none genuinely fit, propose a new
+        one with a short description. New tags are persisted to the DB and the
+        in-memory tag embeddings are refreshed so future content can match them
+        via the cheap embedding path instead of hitting the LLM again.
+        """
+        try:
+            from llm.engine import get_engine
+            import json as _json
+
+            existing = "\n".join(
+                f"- {name}: {desc}" if desc else f"- {name}"
+                for name, desc in self.tag_defs.items()
+                if name != "uncategorized"
+            )
+
+            prompt = (
+                "You are tagging content in a personal knowledge base. Here is the "
+                f"existing set of tags:\n{existing}\n\n"
+                f"Content to tag (may be truncated):\n\"\"\"\n{content[:1500]}\n\"\"\"\n\n"
+                f"Pick up to {top_n} tags that genuinely describe this content's subject matter.\n"
+                "- Prefer reusing an existing tag if it's a real fit.\n"
+                "- Only propose a NEW tag if none of the existing ones fit at all — "
+                "do not force an unrelated existing tag (e.g. do not tag an engineering "
+                "book as a personal-development author just because that's the closest option).\n"
+                "- New tags should be short, lowercase, general categories (e.g. 'engineering', "
+                "'science', 'fiction'), not hyper-specific to this one item.\n\n"
+                "Respond with ONLY a JSON object, no other text, in this exact shape:\n"
+                '{"tags": [{"name": "engineering", "existing": true, "description": ""}, '
+                '{"name": "science", "existing": false, "description": "Science, scientific method, '
+                'physics, chemistry, biology, natural phenomena"}]}\n'
+                "For existing tags, set \"existing\": true and description can be empty. "
+                "For new tags, set \"existing\": false and provide a one-sentence description."
+            )
+
+            engine = get_engine()
+            raw = await engine.complete([{"role": "user", "content": prompt}])
+            raw = raw.strip()
+            if raw.startswith("```"):
+                raw = raw.strip("`")
+                if raw.startswith("json"):
+                    raw = raw[4:]
+                raw = raw.strip()
+
+            parsed = _json.loads(raw)
+            proposed = parsed.get("tags", [])
+            if not proposed:
+                return []
+
+            result_names = []
+            new_tags_created = False
+            for item in proposed[:top_n]:
+                name = str(item.get("name", "")).strip().lower()
+                if not name:
+                    continue
+                is_existing = bool(item.get("existing"))
+                if is_existing and name not in self.tag_defs:
+                    # LLM claimed it was existing but it isn't — treat as new
+                    is_existing = False
+                if not is_existing and name not in self.tag_defs:
+                    desc = str(item.get("description", "")).strip()
+                    try:
+                        import db.client as db
+                        await db.create_tag(name, desc)
+                        new_tags_created = True
+                        logger.info(f"Tagger: LLM proposed and created new tag '{name}'")
+                    except Exception as e:
+                        logger.warning(f"Tagger: failed to create LLM-proposed tag '{name}': {e}")
+                        continue
+                result_names.append(name)
+
+            if new_tags_created:
+                # Reload embeddings so the new tag is available for future
+                # content via the cheap embedding path.
+                await self.refresh()
+
+            logger.info(f"Tagger: LLM fallback tagged content as {result_names}")
+            return result_names
+
+        except Exception as e:
+            logger.warning(f"Tagger: LLM fallback failed: {e}")
+            return []
 
     # ── Internal ──────────────────────────────────────────────────────────────
 

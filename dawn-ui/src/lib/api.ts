@@ -398,10 +398,16 @@ export async function listIngestedDocuments(params?: {
   return res.json();
 }
 
-export async function getIngestedDocument(docId: string): Promise<IngestedDocument> {
-  const res = await fetch(`${BASE}/nodes/${docId}`, { headers: headers() });
-  if (!res.ok) throw new Error(`Document not found: ${docId}`);
-  return res.json();
+export async function getIngestedDocument(bookId: string): Promise<IngestedDocument> {
+  // The document node's id is independent of the book id; the link between
+  // them is the node's source_ref, which is set to the book id at ingest time.
+  const res = await fetch(`${BASE}/nodes/?source_ref=${encodeURIComponent(bookId)}&limit=1`, { headers: headers() });
+  if (!res.ok) throw new Error(`Document not found: ${bookId}`);
+  const nodes = await res.json();
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    throw new Error(`Document not found: ${bookId}`);
+  }
+  return nodes[0];
 }
 
 export async function deleteIngestedDocument(docId: string): Promise<void> {
