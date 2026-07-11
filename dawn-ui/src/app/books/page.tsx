@@ -26,6 +26,7 @@ import {
   deleteBook,
   ingestBook,
   ingestFile,
+  ingestFiles,
   ingestUrl,
   getIngestionStatus,
   deleteIngestedDocument,
@@ -77,7 +78,7 @@ export default function BooksPage() {
 
   // Upload state
   const [uploadMode, setUploadMode] = useState<"file" | "url" | null>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [urlInput, setUrlInput] = useState("");
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadTags, setUploadTags] = useState("");
@@ -178,20 +179,52 @@ export default function BooksPage() {
   };
 
   const handleFileUpload = async () => {
-    if (!selectedFile) return;
+    if (selectedFiles.length === 0) return;
     setUploading(true);
-    const title = uploadTitle || selectedFile.name.replace(/\.[^/.]+$/, "");
+
+    if (selectedFiles.length === 1) {
+      const file = selectedFiles[0];
+      const title = uploadTitle || file.name.replace(/\.[^/.]+$/, "");
+      const tags = uploadTags.split(",").map((t) => t.trim()).filter(Boolean);
+      try {
+        const result = await ingestFile(file, title, tags);
+        const job: UploadJob = {
+          jobId: result.job_id,
+          title,
+          filename: file.name,
+          status: "queued",
+        };
+        setUploadJobs((prev) => [job, ...prev]);
+        setActiveJobs((prev) => new Set(prev).add(result.job_id));
+        resetUpload();
+      } catch (e: any) {
+        alert(`Upload failed: ${e.message}`);
+      } finally {
+        setUploading(false);
+      }
+      return;
+    }
+
+    // Multi-file path
     const tags = uploadTags.split(",").map((t) => t.trim()).filter(Boolean);
     try {
-      const result = await ingestFile(selectedFile, title, tags);
-      const job: UploadJob = {
-        jobId: result.job_id,
-        title,
-        filename: selectedFile.name,
+      const result = await ingestFiles(selectedFiles, tags);
+      const newJobs: UploadJob[] = result.jobs.map((j) => ({
+        jobId: j.job_id,
+        title: j.filename.replace(/\.[^/.]+$/, ""),
+        filename: j.filename,
         status: "queued",
-      };
-      setUploadJobs((prev) => [job, ...prev]);
-      setActiveJobs((prev) => new Set(prev).add(result.job_id));
+      }));
+      setUploadJobs((prev) => [...newJobs, ...prev]);
+      setActiveJobs((prev) => {
+        const next = new Set(prev);
+        newJobs.forEach((j) => next.add(j.jobId));
+        return next;
+      });
+      if (result.errors > 0 && result.error_details) {
+        const msg = result.error_details.map((e) => `${e.file}: ${e.error}`).join("\n");
+        alert(`${result.queued} file(s) queued, ${result.errors} failed:\n${msg}`);
+      }
       resetUpload();
     } catch (e: any) {
       alert(`Upload failed: ${e.message}`);
@@ -224,7 +257,7 @@ export default function BooksPage() {
   };
 
   const resetUpload = () => {
-    setSelectedFile(null);
+    setSelectedFiles([]);
     setUrlInput("");
     setUploadTitle("");
     setUploadTags("");
@@ -233,10 +266,12 @@ export default function BooksPage() {
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] || null;
-    setSelectedFile(file);
-    if (file && !uploadTitle) {
-      setUploadTitle(file.name.replace(/\.[^/.]+$/, ""));
+    const files = Array.from(e.target.files || []);
+    setSelectedFiles(files);
+    if (files.length === 1 && !uploadTitle) {
+      setUploadTitle(files[0].name.replace(/\.[^/.]+$/, ""));
+    } else if (files.length > 1) {
+      setUploadTitle(""); // Title is per-file for multi-upload, derived from filename
     }
   };
 
@@ -304,17 +339,29 @@ export default function BooksPage() {
 
               {uploadMode === "file" ? (
                 <div>
-                  <label className="text-text-muted text-2xs font-medium block mb-1">File</label>
+                  <label className="text-text-muted text-2xs font-medium block mb-1">
+                    File{selectedFiles.length > 1 ? "s" : ""}
+                  </label>
                   <input
                     ref={fileInputRef}
                     type="file"
+                    multiple
                     accept={ACCEPTED_FORMATS.join(",")}
                     onChange={handleFileSelect}
                     className="w-full text-xs text-text-primary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-dawn/10 file:text-dawn file:text-xs file:font-medium hover:file:bg-dawn/20"
                   />
-                  {selectedFile && (
+                  {selectedFiles.length > 0 && (
+                    <ul className="text-2xs text-text-muted mt-1 space-y-0.5 max-h-32 overflow-y-auto">
+                      {selectedFiles.map((f, i) => (
+                        <li key={i}>
+                          {f.name} ({(f.size / 1e6).toFixed(1)} MB)
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {selectedFiles.length > 1 && (
                     <p className="text-2xs text-text-muted mt-1">
-                      {selectedFile.name} ({(selectedFile.size / 1e6).toFixed(1)} MB)
+                      Titles will be derived from filenames for multi-file uploads.
                     </p>
                   )}
                 </div>
@@ -331,16 +378,18 @@ export default function BooksPage() {
               )}
 
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-text-muted text-2xs font-medium block mb-1">Title (optional)</label>
-                  <input
-                    value={uploadTitle}
-                    onChange={(e) => setUploadTitle(e.target.value)}
-                    placeholder="Auto from filename"
-                    className="w-full bg-surface border border-rim rounded-lg px-3 py-2 text-text-primary text-xs outline-none focus:border-dawn/50"
-                  />
-                </div>
-                <div>
+                {selectedFiles.length <= 1 && (
+                  <div>
+                    <label className="text-text-muted text-2xs font-medium block mb-1">Title (optional)</label>
+                    <input
+                      value={uploadTitle}
+                      onChange={(e) => setUploadTitle(e.target.value)}
+                      placeholder="Auto from filename"
+                      className="w-full bg-surface border border-rim rounded-lg px-3 py-2 text-text-primary text-xs outline-none focus:border-dawn/50"
+                    />
+                  </div>
+                )}
+                <div className={selectedFiles.length > 1 ? "col-span-2" : ""}>
                   <label className="text-text-muted text-2xs font-medium block mb-1">Tags (comma-separated)</label>
                   <input
                     value={uploadTags}
@@ -354,7 +403,7 @@ export default function BooksPage() {
               <div className="flex gap-2">
                 <button
                   onClick={uploadMode === "file" ? handleFileUpload : handleUrlIngest}
-                  disabled={uploading || (uploadMode === "file" ? !selectedFile : !urlInput.trim())}
+                  disabled={uploading || (uploadMode === "file" ? selectedFiles.length === 0 : !urlInput.trim())}
                   className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-dawn/90 hover:bg-dawn text-white text-xs font-medium transition-all disabled:opacity-30"
                 >
                   {uploading ? (
@@ -364,7 +413,13 @@ export default function BooksPage() {
                   ) : (
                     <Link size={12} />
                   )}
-                  {uploading ? "Ingesting..." : uploadMode === "file" ? "Upload & Ingest" : "Ingest URL"}
+                  {uploading
+                    ? "Ingesting..."
+                    : uploadMode === "file"
+                    ? selectedFiles.length > 1
+                      ? `Upload & Ingest ${selectedFiles.length} Files`
+                      : "Upload & Ingest"
+                    : "Ingest URL"}
                 </button>
                 <button onClick={resetUpload}
                   className="px-4 py-2 rounded-lg border border-rim text-text-muted hover:text-text-secondary text-xs font-medium transition-all">

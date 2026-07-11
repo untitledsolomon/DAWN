@@ -363,6 +363,31 @@ export async function ingestFile(file: File, title: string, tags: string[] = [])
 
 export const ingestPdf = ingestFile;
 
+export interface IngestFilesResponse {
+  status: string;
+  total_files: number;
+  queued: number;
+  errors: number;
+  jobs: Array<{ job_id: string; filename: string; file_type: string; tags: string[]; size_mb: number }>;
+  error_details: Array<{ file: string; error: string }> | null;
+}
+
+export async function ingestFiles(files: File[], tags: string[] = []): Promise<IngestFilesResponse> {
+  const form = new FormData();
+  for (const f of files) form.append("files", f);
+  form.append("tags", tags.join(","));
+  const res = await fetch(`${BASE}/ingest/files`, {
+    method: "POST",
+    headers: { "x-api-key": KEY },
+    body: form,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Upload failed" }));
+    throw new Error(err.detail || `Upload failed: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function ingestUrl(sourceUrl: string, title?: string, tags: string[] = []): Promise<IngestUrlResponse> {
   const res = await fetch(`${BASE}/ingest/url`, {
     method: "POST",
