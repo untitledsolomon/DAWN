@@ -1,47 +1,20 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import { CheckCircle, XCircle, RefreshCw, Upload, FileText, GitBranch, FileUp } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { CheckCircle, XCircle, RefreshCw, Upload, FileText, GitBranch } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
 import NodeCard from "@/components/nodes/NodeCard";
 import {
   getPendingNodes, approveNode, rejectNode,
-  getIngestionLog, ingestRepo, ingestDocument, ingestFile,
+  getIngestionLog, ingestRepo, ingestDocument,
 } from "@/lib/api";
 import type { DawnNode, IngestionLog } from "@/lib/types";
-
-const FILE_TYPE_MAP: Record<string, { label: string; color: string; bg: string; border: string; desc: string }> = {
-  ".pdf":      { label: "PDF",      color: "text-orange-400", bg: "bg-orange-400/10", border: "border-orange-400/30", desc: "Text extracted page by page, chunked into nodes" },
-  ".md":       { label: "Markdown", color: "text-blue-400",   bg: "bg-blue-400/10",   border: "border-blue-400/30",   desc: "Split on headings — each section becomes its own node" },
-  ".markdown": { label: "Markdown", color: "text-blue-400",   bg: "bg-blue-400/10",   border: "border-blue-400/30",   desc: "Split on headings — each section becomes its own node" },
-  ".csv":      { label: "CSV",      color: "text-green-400",  bg: "bg-green-400/10",  border: "border-green-400/30",  desc: "Each row becomes a fact node (max 500 rows)" },
-  ".xlsx":     { label: "Excel",    color: "text-emerald-400",bg: "bg-emerald-400/10",border: "border-emerald-400/30",desc: "Each sheet gets a parent node, rows become child nodes" },
-  ".xls":      { label: "Excel",    color: "text-emerald-400",bg: "bg-emerald-400/10",border: "border-emerald-400/30",desc: "Each sheet gets a parent node, rows become child nodes" },
-  ".svg":      { label: "SVG",      color: "text-purple-400", bg: "bg-purple-400/10", border: "border-purple-400/30", desc: "Text labels, titles and descriptions extracted" },
-};
-
-const ACCEPT = Object.keys(FILE_TYPE_MAP).join(",");
-
-function getFileExt(filename: string): string {
-  return filename.slice(filename.lastIndexOf(".")).toLowerCase();
-}
-
-function detectType(filename: string) {
-  return FILE_TYPE_MAP[getFileExt(filename)] ?? null;
-}
 
 export default function MemoryPage() {
   const [pending, setPending] = useState<DawnNode[]>([]);
   const [log, setLog] = useState<IngestionLog[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"review" | "upload" | "ingest" | "log">("review");
-
-  const [file, setFile] = useState<File | null>(null);
-  const [fileTitle, setFileTitle] = useState("");
-  const [fileTags, setFileTags] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const [uploadMsg, setUploadMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [tab, setTab] = useState<"review" | "ingest" | "log">("review");
 
   const [ingestType, setIngestType] = useState<"repo" | "document">("repo");
   const [repoPath, setRepoPath] = useState("");
@@ -74,40 +47,6 @@ export default function MemoryPage() {
     setPending((prev) => prev.filter((n) => n.id !== id));
   };
 
-  const setFileAndTitle = (f: File) => {
-    setFile(f);
-    if (!fileTitle) setFileTitle(f.name.replace(/\.[^.]+$/, ""));
-    setUploadMsg(null);
-  };
-
-  const handleFileDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    const f = e.dataTransfer.files[0];
-    if (f && detectType(f.name)) setFileAndTitle(f);
-    else setUploadMsg({ ok: false, text: "Unsupported file type. Supported: PDF, MD, CSV, XLSX, SVG" });
-  };
-
-  const handleFileUpload = async () => {
-    if (!file) return;
-    setUploading(true);
-    setUploadMsg(null);
-    const tags = fileTags.split(",").map((t) => t.trim()).filter(Boolean);
-    try {
-      const result = await ingestFile(file, fileTitle || file.name.replace(/\.[^.]+$/, ""), tags);
-      const sizeInfo = result.size_mb ? `${result.size_mb.toFixed(1)} MB` : "";
-      setUploadMsg({ ok: true, text: `✓ "${result.title}" queued — ${result.file_type}${sizeInfo ? ` (${sizeInfo})` : ""} sent for ingestion` });
-      setFile(null);
-      setFileTitle("");
-      setFileTags("");
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      setTimeout(load, 2000);
-    } catch (e: unknown) {
-      setUploadMsg({ ok: false, text: e instanceof Error ? e.message : "Upload failed" });
-    } finally {
-      setUploading(false);
-    }
-  };
-
   const handleIngest = async () => {
     setIngesting(true);
     setIngestMsg("");
@@ -128,11 +67,8 @@ export default function MemoryPage() {
     }
   };
 
-  const detectedType = file ? detectType(file.name) : null;
-
   const TABS = [
     { id: "review" as const, label: "Pending Review", count: pending.length },
-    { id: "upload" as const, label: "Upload File",    count: null },
     { id: "ingest" as const, label: "Ingest Data",    count: null },
     { id: "log" as const,    label: "Ingestion Log",  count: log.length },
   ];
@@ -143,7 +79,7 @@ export default function MemoryPage() {
         <header className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-rim flex-shrink-0">
           <div className="min-w-0">
             <h1 className="text-text-primary font-semibold text-sm tracking-tight">Memory</h1>
-            <p className="text-text-muted text-2xs">Review auto-extracted facts · Upload files · Ingest data</p>
+            <p className="text-text-muted text-2xs">Review auto-extracted facts · Ingest repos & documents</p>
           </div>
           <button onClick={load} className="w-8 h-8 flex items-center justify-center rounded-lg text-text-muted hover:text-dawn hover:bg-dawn/10 transition-all flex-shrink-0">
             <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
@@ -192,117 +128,6 @@ export default function MemoryPage() {
                 </div>
               )}
             </>
-          )}
-
-          {tab === "upload" && (
-            <div className="max-w-lg space-y-5">
-              <p className="text-text-secondary text-xs leading-relaxed">
-                Drop any supported file — DAWN detects the type automatically and ingests it into the knowledge graph.
-              </p>
-
-              <div className="flex flex-wrap gap-2">
-                {Object.entries(FILE_TYPE_MAP)
-                  .filter(([ext]) => !ext.startsWith(".markdown") && ext !== ".xls")
-                  .map(([ext, meta]) => (
-                    <span key={ext} className={`text-2xs font-mono px-2 py-1 rounded-lg border ${meta.color} ${meta.bg} ${meta.border}`}>
-                      {meta.label}
-                    </span>
-                  ))}
-              </div>
-
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={handleFileDrop}
-                className={`border-2 border-dashed rounded-xl px-4 sm:px-6 py-8 sm:py-10 text-center cursor-pointer transition-all ${
-                  file && detectedType
-                    ? `${detectedType.border.replace("border-", "border-")} ${detectedType.bg}`
-                    : "border-rim hover:border-dawn/30 hover:bg-elevated/30"
-                }`}
-              >
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept={ACCEPT}
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      if (detectType(f.name)) setFileAndTitle(f);
-                      else setUploadMsg({ ok: false, text: `Unsupported file type. Supported: PDF, MD, CSV, XLSX, DOCX, PPTX, XML, YAML, ODS, ODT, ODP, HTML, RTF, JSON, EPUB, TXT, LOG, INI, CFG` });
-                    }
-                  }}
-                />
-
-                {file && detectedType ? (
-                  <div className="flex flex-col items-center gap-3">
-                    <FileText size={24} className={detectedType.color} />
-                    <div className="text-center">
-                      <p className="text-text-primary text-sm font-medium break-all">{file.name}</p>
-                      <p className="text-text-muted text-xs mt-0.5">{(file.size / 1024).toFixed(0)} KB</p>
-                    </div>
-                    <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-mono ${detectedType.color} ${detectedType.bg} ${detectedType.border}`}>
-                      <span className="font-semibold">{detectedType.label} detected</span>
-                      <span className="text-2xs opacity-70">·</span>
-                      <span className="text-2xs opacity-70 hidden sm:inline">{detectedType.desc}</span>
-                    </div>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setFile(null); setFileTitle(""); setUploadMsg(null); }}
-                      className="text-text-muted text-xs hover:text-ember transition-colors"
-                    >
-                      Remove file
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center gap-2">
-                    <FileUp size={24} className="text-text-muted" />
-                    <p className="text-text-secondary text-sm">Drop a file here or click to browse</p>
-                    <p className="text-text-muted text-xs">PDF · MD · CSV · XLSX · SVG</p>
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <label className="text-text-secondary text-xs block mb-1.5">
-                  Title <span className="text-text-muted">(auto-filled from filename)</span>
-                </label>
-                <input
-                  value={fileTitle}
-                  onChange={(e) => setFileTitle(e.target.value)}
-                  placeholder="e.g. Tekowa Engineering Proposal"
-                  className="w-full bg-elevated/50 border border-rim rounded-lg px-3 py-2 text-text-primary text-sm placeholder:text-text-muted outline-none focus:border-dawn/50 transition-colors"
-                />
-              </div>
-
-              <div>
-                <label className="text-text-secondary text-xs block mb-1.5">Tags (comma-separated)</label>
-                <input
-                  value={fileTags}
-                  onChange={(e) => setFileTags(e.target.value)}
-                  placeholder="client, regent, finance"
-                  className="w-full bg-elevated/50 border border-rim rounded-lg px-3 py-2 text-text-primary text-sm placeholder:text-text-muted font-mono outline-none focus:border-dawn/50 transition-colors"
-                />
-              </div>
-
-              {uploadMsg && (
-                <p className={`text-xs px-3 py-2 rounded-lg border ${
-                  uploadMsg.ok
-                    ? "text-success bg-success/10 border-success/20"
-                    : "text-ember bg-ember/10 border-ember/20"
-                }`}>
-                  {uploadMsg.text}
-                </p>
-              )}
-
-              <button
-                onClick={handleFileUpload}
-                disabled={!file || uploading}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-dawn/90 hover:bg-dawn text-white text-sm font-medium disabled:opacity-40 transition-all w-full sm:w-auto justify-center"
-              >
-                <Upload size={14} />
-                {uploading ? "Uploading..." : "Ingest File"}
-              </button>
-            </div>
           )}
 
           {tab === "ingest" && (
