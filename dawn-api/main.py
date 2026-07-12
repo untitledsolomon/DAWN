@@ -160,6 +160,17 @@ async def start_background_services():
     except Exception as e:
         logger.error(f"Failed to start ingestion queue: {e}")
 
+    # Decision workflow cache — loads ontology_workflows into memory.
+    # Workflows are data (see decision_engine/registry.py), so this
+    # replaces what used to require a manual register_workflow() call
+    # per workflow module (which reroute_shipment never actually got,
+    # leaving it permanently unreachable via /api/decision/run).
+    try:
+        from decision_engine.registry import refresh_workflows
+        await refresh_workflows()
+    except Exception as e:
+        logger.error(f"Failed to load decision workflows: {e}")
+
 
 @app.on_event("shutdown")
 async def stop_background_services():

@@ -120,16 +120,28 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register PentestTool: {e}")
 
-    # v32.0 — Decision Intelligence tools
+    # Knowledge graph tool — was defined but never registered, so agent
+    # mode had no path to the same graph/memory retrieval chat mode uses
+    # automatically via build_context(). See tools/knowledge_graph.py.
     try:
-        from tools.decision_workflow import DecisionWorkflowTool
+        from tools.knowledge_graph import KnowledgeGraphTool
+        registry.register(KnowledgeGraphTool())
+    except Exception as e:
+        logger.error(f"Failed to register KnowledgeGraphTool: {e}")
+
+    # v32.0 — Decision Intelligence tools (rebuilt on the generic,
+    # data-driven ontology/workflow engine — see decision_engine/)
+    try:
+        from tools.decision_workflow import DecisionWorkflowTool, DecisionWorkflowListTool
         registry.register(DecisionWorkflowTool())
+        registry.register(DecisionWorkflowListTool())
     except Exception as e:
         logger.error(f"Failed to register DecisionWorkflowTool: {e}")
 
     try:
-        from tools.ontology import OntologyQueryTool
+        from tools.ontology import OntologyQueryTool, OntologyListObjectsTool
         registry.register(OntologyQueryTool())
+        registry.register(OntologyListObjectsTool())
     except Exception as e:
         logger.error(f"Failed to register OntologyQueryTool: {e}")
 

@@ -1,0 +1,2283 @@
+diff --git a/dawn-api/decision_engine/__init__.py b/dawn-api/decision_engine/__init__.py
+index 3031f72..2faaf9d 100644
+--- a/dawn-api/decision_engine/__init__.py
++++ b/dawn-api/decision_engine/__init__.py
+@@ -1,12 +1,19 @@
+ """Decision Intelligence Engine
+ 
+-Constraint-based decision workflows with deterministic scoring,
+-simulation capabilities, and audit trail integration.
++Data-driven, generic decision workflows and ontology object model.
++Workflows and object types are rows in the database (ontology_workflows,
++ontology_objects, ontology_relationships) — never one Python file per
++workflow or one hardcoded table map per object type. Onboarding a new
++client's domain, or a new workflow, is a data change.
+ 
+ Architecture:
+-  - constraints.py: Hard/soft constraint evaluation primitives
+-  - scoring.py: Weighted ranking with tradeoff summaries
+-  - registry.py: Workflow registry with approval gate enforcement
+-  - simulate.py: What-if scenario execution (reuses constraint engine)
+-  - workflows/: Concrete decision workflow implementations
++  - ontology_engine.py: Generic object/relationship query engine, driven
++      entirely by ontology_objects / ontology_relationships.
++  - constraint_interpreter.py: Interprets JSON constraint specs (hard/soft
++      rules) against candidate options — no per-workflow Python evaluators.
++  - candidates.py: Generic candidate sourcing for workflows, including
++      simulation snapshot support.
++  - registry.py: Loads workflows from ontology_workflows into an in-memory
++      cache and runs them via the constraint interpreter.
++  - simulate.py: What-if scenario execution (reuses the same engine twice).
+ """
+diff --git a/dawn-api/decision_engine/candidates.py b/dawn-api/decision_engine/candidates.py
+new file mode 100644
+index 0000000..d4813d7
+--- /dev/null
++++ b/dawn-api/decision_engine/candidates.py
+@@ -0,0 +1,67 @@
++"""Generic candidate sourcing for data-driven workflows.
++
++candidate_source (from ontology_workflows) describes how to get the
++list of option dicts a workflow should rank. Two strategies today:
++
++  {"strategy": "inputs_field", "field": "candidate_routes"}
++      Candidates come directly from workflow_inputs[field] — used when
++      the caller (agent, UI, or a simulation) already assembled the
++      candidate list. This is what reroute_shipment uses.
++
++  {"strategy": "ontology_query", "object": "Route",
++   "filters_from_inputs": {"available": true}}
++      Candidates come from a live ontology_query() call. filters_from_inputs
++      maps ontology filter keys to either a literal value or
++      {"input": "<workflow_input_key>"} to pull from workflow_inputs.
++
++Simulation support: if workflow_inputs contains "_snapshot" (a dict of
++lists, e.g. {"routes": [...], "vendors": [...]}), and the strategy is
++"inputs_field", candidates are read from the snapshot's matching key
++first. This is what makes what-if simulation actually change the
++ranking — the previous hardcoded reroute_shipment.handler() accepted
++_snapshot but never read it, so simulated mutations had no effect.
++"""
++from typing import Any
++
++
++def _resolve_filter_value(value: Any, inputs: dict) -> Any:
++    if isinstance(value, dict) and "input" in value:
++        return inputs.get(value["input"])
++    return value
++
++
++async def get_candidates(candidate_source: dict, workflow_inputs: dict) -> list[dict]:
++    strategy = candidate_source.get("strategy")
++
++    if strategy == "inputs_field":
++        field = candidate_source.get("field")
++        snapshot = workflow_inputs.get("_snapshot")
++
++        if snapshot is not None:
++            # Simulation path: prefer the mutated snapshot's matching
++            # collection over the raw workflow input, so mutations
++            # applied by decision_engine/simulate.py actually take effect.
++            snapshot_key = candidate_source.get("snapshot_key", field)
++            if snapshot_key in snapshot:
++                return snapshot.get(snapshot_key) or []
++
++        return workflow_inputs.get(field, []) or []
++
++    if strategy == "ontology_query":
++        from decision_engine.ontology_engine import query_object
++
++        object_type = candidate_source.get("object")
++        filters_spec = candidate_source.get("filters_from_inputs", {})
++        filters = {k: _resolve_filter_value(v, workflow_inputs) for k, v in filters_spec.items()}
++        expand = candidate_source.get("expand", [])
++
++        result = await query_object(
++            object_type,
++            filters=filters,
++            expand=expand,
++            limit=candidate_source.get("limit", 50),
++            client_id=workflow_inputs.get("_client_id"),
++        )
++        return result.get("data", [])
++
++    raise ValueError(f"Unknown candidate_source strategy: {strategy!r}")
+diff --git a/dawn-api/decision_engine/constraint_interpreter.py b/dawn-api/decision_engine/constraint_interpreter.py
+new file mode 100644
+index 0000000..18ead46
+--- /dev/null
++++ b/dawn-api/decision_engine/constraint_interpreter.py
+@@ -0,0 +1,169 @@
++"""Generic constraint interpreter.
++
++Replaces the previous pattern (decision_engine/workflows/reroute_shipment.py)
++of one hand-written Python evaluator lambda per constraint per workflow.
++Constraints are now data — a JSON spec per constraint, stored on
++ontology_workflows.constraints — interpreted here by a small, fixed set
++of rule types. Adding a new workflow, or a new constraint on an existing
++workflow, is a data change: no new Python file, no new evaluator function.
++
++Supported rule types (extend this list, not per-workflow files, when a
++genuinely new comparison shape is needed):
++  - field_truthy      : hard/soft — field on the option must be truthy
++  - field_lte          : hard/soft — option[field] <= compare_to
++  - field_gte          : hard/soft — option[field] >= compare_to
++  - minimize_ratio      : soft — score = 1 - (option[field] / max_value)
++  - maximize_field      : soft — score = option[field] directly (already 0-1)
++
++compare_to / max_value can be a literal number, or
++  {"input": "<workflow_input_key>", "multiplier": <float, optional>}
++to reference a value from the workflow's inputs dict at evaluation time
++(e.g. "15% of shipment_value", where shipment_value is a workflow input).
++"""
++from dataclasses import dataclass
++from typing import Any, Optional
++
++
++@dataclass
++class ConstraintResult:
++    name: str
++    passed: bool
++    score: Optional[float] = None
++    weight: Optional[float] = None
++    explanation: str = ""
++
++
++class ConstraintSpecError(Exception):
++    """Raised when a constraint spec is malformed or references an unknown rule."""
++
++
++def _resolve_value(value: Any, option: dict, inputs: dict) -> float:
++    """Resolve a compare_to/max_value spec to a concrete number.
++
++    Either a literal number, or {"input": key, "multiplier": m} pulling
++    from the workflow's inputs dict (falls back to 0 if the input key is
++    missing, so a malformed spec fails a comparison rather than crashing).
++    """
++    if isinstance(value, (int, float)):
++        return float(value)
++    if isinstance(value, dict) and "input" in value:
++        base = inputs.get(value["input"], 0) or 0
++        multiplier = value.get("multiplier", 1)
++        return float(base) * float(multiplier)
++    return 0.0
++
++
++def _format_explanation(spec: dict, field_value: Any, compare_value: Optional[float] = None) -> str:
++    template = spec.get("explanation_template")
++    if template:
++        try:
++            return template.format(field=field_value, compare_to=compare_value)
++        except Exception:
++            pass
++    return f"{spec.get('field', spec.get('name'))}: {field_value}"
++
++
++def evaluate_constraint(spec: dict, option: dict, inputs: dict) -> ConstraintResult:
++    """Evaluate a single constraint spec against a single candidate option."""
++    name = spec.get("name", "unnamed_constraint")
++    ctype = spec.get("type", "soft")
++    rule = spec.get("rule")
++    field = spec.get("field")
++
++    if rule == "field_truthy":
++        value = bool(option.get(field))
++        return ConstraintResult(
++            name=name,
++            passed=value,
++            explanation=spec.get("explanation_true") if value else spec.get("explanation_false", f"{field} is falsy"),
++        )
++
++    if rule == "field_lte":
++        field_value = option.get(field, 0) or 0
++        compare_value = _resolve_value(spec.get("compare_to"), option, inputs)
++        passed = float(field_value) <= compare_value
++        return ConstraintResult(
++            name=name,
++            passed=passed,
++            explanation=_format_explanation(spec, field_value, compare_value),
++        )
++
++    if rule == "field_gte":
++        field_value = option.get(field, 0) or 0
++        compare_value = _resolve_value(spec.get("compare_to"), option, inputs)
++        passed = float(field_value) >= compare_value
++        return ConstraintResult(
++            name=name,
++            passed=passed,
++            explanation=_format_explanation(spec, field_value, compare_value),
++        )
++
++    if rule == "minimize_ratio":
++        field_value = option.get(field, 0) or 0
++        max_value = spec.get("max_value")
++        if max_value is None and spec.get("max_value_field"):
++            max_value = option.get(spec["max_value_field"], spec.get("max_value_default", 1))
++        max_value = max_value or spec.get("max_value_default", 1)
++        score = max(0.0, 1.0 - (float(field_value) / float(max_value))) if max_value else 0.0
++        return ConstraintResult(
++            name=name,
++            passed=True,
++            score=score,
++            weight=spec.get("weight"),
++            explanation=_format_explanation(spec, field_value) + f" (score: {score:.2f})",
++        )
++
++    if rule == "maximize_field":
++        field_value = option.get(field, 0) or 0
++        score = max(0.0, min(1.0, float(field_value)))
++        return ConstraintResult(
++            name=name,
++            passed=True,
++            score=score,
++            weight=spec.get("weight"),
++            explanation=_format_explanation(spec, field_value),
++        )
++
++    raise ConstraintSpecError(f"Unknown constraint rule type: {rule!r} (constraint '{name}')")
++
++
++def evaluate_constraints(
++    option: dict,
++    constraint_specs: list[dict],
++    inputs: dict,
++) -> tuple[bool, list[ConstraintResult]]:
++    """Evaluate every constraint spec against one option.
++
++    Returns (hard_constraints_passed, results). A malformed constraint
++    spec is treated as a failed hard constraint with a visible error
++    explanation, rather than crashing the whole ranking — one bad
++    constraint definition shouldn't take down every candidate.
++    """
++    results: list[ConstraintResult] = []
++    all_hard_passed = True
++
++    for spec in constraint_specs:
++        try:
++            result = evaluate_constraint(spec, option, inputs)
++        except ConstraintSpecError as e:
++            result = ConstraintResult(
++                name=spec.get("name", "unnamed_constraint"),
++                passed=False,
++                explanation=f"Constraint spec error: {e}",
++            )
++
++        results.append(result)
++        if spec.get("type", "soft") == "hard" and not result.passed:
++            all_hard_passed = False
++
++    return all_hard_passed, results
++
++
++def compute_soft_score(results: list[ConstraintResult]) -> float:
++    total_weight = 0.0
++    weighted_sum = 0.0
++    for r in results:
++        if r.weight is not None and r.score is not None:
++            total_weight += r.weight
++            weighted_sum += r.weight * r.score
++    return weighted_sum / total_weight if total_weight > 0 else 0.0
+diff --git a/dawn-api/decision_engine/constraints.py b/dawn-api/decision_engine/constraints.py
+deleted file mode 100644
+index 97ab5c7..0000000
+--- a/dawn-api/decision_engine/constraints.py
++++ /dev/null
+@@ -1,78 +0,0 @@
+-"""Constraint evaluation primitives for decision workflows.
+-
+-Supports two constraint types:
+-  - hard: Must pass. If any hard constraint fails, the option is eliminated.
+-  - soft: Weighted scoring. Higher weight = more important to the decision.
+-
+-Each constraint is a callable that takes an option dict and returns a
+-ConstraintResult with pass/fail, score, and explanation.
+-"""
+-
+-from dataclasses import dataclass, field
+-from typing import Any, Callable, Optional
+-
+-
+-@dataclass
+-class ConstraintResult:
+-    name: str
+-    passed: bool
+-    score: Optional[float] = None  # 0.0 to 1.0, only for soft constraints
+-    weight: Optional[float] = None  # only for soft constraints
+-    explanation: str = ""
+-
+-
+-@dataclass
+-class Constraint:
+-    name: str
+-    constraint_type: str  # "hard" or "soft"
+-    weight: Optional[float] = None  # required for soft
+-    rule: Optional[str] = None
+-    evaluator: Optional[Callable[[dict], ConstraintResult]] = None
+-
+-    def evaluate(self, option: dict) -> ConstraintResult:
+-        if self.evaluator:
+-            return self.evaluator(option)
+-        return ConstraintResult(
+-            name=self.name,
+-            passed=True,
+-            score=1.0 if self.constraint_type == "soft" else None,
+-            weight=self.weight,
+-            explanation=f"Constraint '{self.name}' passed (no custom evaluator)"
+-        )
+-
+-
+-def evaluate_constraints(
+-    option: dict,
+-    constraints: list[Constraint]
+-) -> tuple[bool, list[ConstraintResult]]:
+-    """Evaluate all constraints against an option.
+-
+-    Returns (passed, results) where passed is False if any hard constraint failed.
+-    """
+-    results = []
+-    all_hard_passed = True
+-
+-    for constraint in constraints:
+-        result = constraint.evaluate(option)
+-        results.append(result)
+-
+-        if constraint.constraint_type == "hard" and not result.passed:
+-            all_hard_passed = False
+-
+-    return all_hard_passed, results
+-
+-
+-def compute_soft_score(results: list[ConstraintResult]) -> float:
+-    """Compute weighted score from soft constraint results.
+-
+-    Returns 0.0 if no soft constraints with weights exist.
+-    """
+-    total_weight = 0.0
+-    weighted_sum = 0.0
+-
+-    for r in results:
+-        if r.weight is not None and r.score is not None:
+-            total_weight += r.weight
+-            weighted_sum += r.weight * r.score
+-
+-    return weighted_sum / total_weight if total_weight > 0 else 0.0
+diff --git a/dawn-api/decision_engine/ontology_engine.py b/dawn-api/decision_engine/ontology_engine.py
+new file mode 100644
+index 0000000..dd12dd1
+--- /dev/null
++++ b/dawn-api/decision_engine/ontology_engine.py
+@@ -0,0 +1,288 @@
++"""Generic ontology query engine.
++
++Replaces the previous hardcoded approach in routers/decision_intelligence.py
++(a Python dict mapping "Shipment" -> "ontology_shipments", and an
++if/elif chain per relationship name). Every object type and relationship
++this module can query comes from the ontology_objects / ontology_relationships
++tables — adding a new object type or relationship is a data change
++(INSERT into the registry + a backing table/view), never a code change.
++
++Multi-tenancy: object types and relationships may carry a client_id.
++NULL client_id = shared/global (today's default). When a client_id is
++passed to query_object(), rows are additionally scoped by whatever
++default_filter the object-type registry entry specifies for that client.
++This module doesn't assume a particular tenancy shape (shared table vs.
++schema-per-client) — it just applies default_filter as literal
++column=value equality filters, which works for the "shared table +
++client_id column" model today and can be extended later.
++"""
++from dataclasses import dataclass
++from typing import Any, Optional
++import logging
++
++import db.client as db
++
++logger = logging.getLogger(__name__)
++
++
++class OntologyError(Exception):
++    """Raised for unknown object types, unknown relationships, or bad specs."""
++
++
++@dataclass
++class ObjectTypeSpec:
++    object_type: str
++    source_table: str
++    source_kind: str
++    primary_key_column: str
++    properties: dict
++    default_filter: dict
++    client_id: Optional[str]
++
++
++@dataclass
++class RelationshipSpec:
++    from_object: str
++    to_object: str
++    relationship_name: str
++    join_definition: dict
++
++
++async def _get_object_spec(object_type: str, client_id: Optional[str] = None) -> ObjectTypeSpec:
++    """Look up an object type from the registry. Never hardcode object
++    type names in calling code — everything needed to query it lives here."""
++    supabase = db.get_db()
++    query = supabase.table("ontology_objects").select("*").eq("object_type", object_type)
++    resp = await db._async_execute(lambda: query.execute())
++    rows = resp.data or []
++
++    if not rows:
++        raise OntologyError(f"Unknown object type: {object_type}")
++
++    # Prefer a client-specific registration over the shared/global one,
++    # if both happen to exist for this object type.
++    row = None
++    if client_id:
++        row = next((r for r in rows if r.get("client_id") == client_id), None)
++    if row is None:
++        row = next((r for r in rows if r.get("client_id") is None), rows[0])
++
++    return ObjectTypeSpec(
++        object_type=row["object_type"],
++        source_table=row["source_table"],
++        source_kind=row.get("source_kind", "table"),
++        primary_key_column=row["primary_key_column"],
++        properties=row.get("properties", {}),
++        default_filter=row.get("default_filter", {}) or {},
++        client_id=row.get("client_id"),
++    )
++
++
++async def _get_relationship_specs(from_object: str, client_id: Optional[str] = None) -> list[RelationshipSpec]:
++    supabase = db.get_db()
++    query = supabase.table("ontology_relationships").select("*").eq("from_object", from_object)
++    resp = await db._async_execute(lambda: query.execute())
++    rows = resp.data or []
++
++    specs = []
++    for row in rows:
++        row_client = row.get("client_id")
++        if row_client is not None and client_id is not None and row_client != client_id:
++            continue
++        specs.append(RelationshipSpec(
++            from_object=row["from_object"],
++            to_object=row["to_object"],
++            relationship_name=row["relationship_name"],
++            join_definition=row.get("join_definition", {}),
++        ))
++    return specs
++
++
++async def query_object(
++    object_type: str,
++    filters: Optional[dict] = None,
++    expand: Optional[list[str]] = None,
++    limit: int = 20,
++    client_id: Optional[str] = None,
++) -> dict:
++    """Query any registered object type, generically.
++
++    This is the single entry point that replaces the old hardcoded
++    table_map + if/elif expansion chain. Behavior for ANY object type
++    (existing or newly registered) is identical — driven entirely by
++    what's in ontology_objects / ontology_relationships.
++    """
++    filters = filters or {}
++    expand = expand or []
++
++    spec = await _get_object_spec(object_type, client_id=client_id)
++
++    if spec.source_kind != "table":
++        # 'view' behaves identically to 'table' via supabase-py today;
++        # 'api' would need a distinct fetch path — not implemented until
++        # a real API-backed object type is registered. Fail loudly rather
++        # than silently returning nothing.
++        if spec.source_kind == "api":
++            raise OntologyError(
++                f"Object type '{object_type}' is API-backed (source_kind='api'), "
++                "which isn't wired up yet — add a fetcher in ontology_engine.py "
++                "before registering API-backed object types."
++            )
++
++    supabase = db.get_db()
++    query = supabase.table(spec.source_table).select("*")
++
++    # Registry-level default filter first (e.g. tenant scoping), then
++    # caller-supplied filters. Caller filters can't bypass the default
++    # filter since both are applied as AND conditions.
++    for key, value in {**spec.default_filter, **filters}.items():
++        query = query.eq(key, value)
++
++    resp = await db._async_execute(lambda q=query: q.limit(limit).execute())
++    data = resp.data or []
++
++    if expand:
++        rel_specs = await _get_relationship_specs(object_type, client_id=client_id)
++        rel_by_name = {r.relationship_name: r for r in rel_specs}
++        data = await _expand_relationships(data, expand, rel_by_name, client_id=client_id)
++
++    return {
++        "object": object_type,
++        "data": data,
++        "count": len(data),
++        "source_table": spec.source_table,
++    }
++
++
++async def _expand_relationships(
++    rows: list[dict],
++    expand: list[str],
++    rel_by_name: dict[str, RelationshipSpec],
++    client_id: Optional[str] = None,
++) -> list[dict]:
++    """Generic relationship expansion, driven by join_definition.
++
++    join_definition shape (from ontology_relationships):
++      {"from_column": "current_route_id", "to_column": "id", "cardinality": "one"}
++      {"from_column": "id", "to_column": "shipment_id", "cardinality": "many"}
++
++    cardinality "one"  -> fetch a single related row, from_column on the
++                          source row points at to_column on the target table.
++    cardinality "many" -> fetch all related rows where target.to_column
++                          equals source.from_column's value.
++
++    Unknown relationship names in `expand` are ignored rather than
++    raising, since a caller may ask to expand several relationships and
++    only some may exist for this particular object type.
++    """
++    enriched_rows = [dict(r) for r in rows]
++
++    for rel_name in expand:
++        rel = rel_by_name.get(rel_name)
++        if not rel:
++            logger.debug(f"Relationship '{rel_name}' not registered — skipping expansion")
++            continue
++
++        target_spec = await _get_object_spec(rel.to_object, client_id=client_id)
++        join = rel.join_definition
++        from_col = join.get("from_column")
++        to_col = join.get("to_column")
++        cardinality = join.get("cardinality", "one")
++
++        if not from_col or not to_col:
++            logger.warning(f"Relationship '{rel_name}' has an incomplete join_definition — skipping")
++            continue
++
++        supabase = db.get_db()
++
++        if cardinality == "one":
++            for row in enriched_rows:
++                fk_value = row.get(from_col)
++                if fk_value is None:
++                    row[rel_name] = None
++                    continue
++                q = supabase.table(target_spec.source_table).select("*").eq(to_col, fk_value)
++                resp = await db._async_execute(lambda q=q: q.execute())
++                row[rel_name] = resp.data[0] if resp.data else None
++        else:  # "many"
++            for row in enriched_rows:
++                pk_value = row.get(from_col)
++                if pk_value is None:
++                    row[rel_name] = []
++                    continue
++                q = supabase.table(target_spec.source_table).select("*").eq(to_col, pk_value)
++                resp = await db._async_execute(lambda q=q: q.execute())
++                row[rel_name] = resp.data or []
++
++    return enriched_rows
++
++
++async def list_object_types(client_id: Optional[str] = None) -> list[dict]:
++    supabase = db.get_db()
++    resp = await db._async_execute(lambda: supabase.table("ontology_objects").select("*").execute())
++    rows = resp.data or []
++    if client_id:
++        rows = [r for r in rows if r.get("client_id") in (None, client_id)]
++    return rows
++
++
++async def list_relationships(client_id: Optional[str] = None) -> list[dict]:
++    supabase = db.get_db()
++    resp = await db._async_execute(lambda: supabase.table("ontology_relationships").select("*").execute())
++    rows = resp.data or []
++    if client_id:
++        rows = [r for r in rows if r.get("client_id") in (None, client_id)]
++    return rows
++
++
++async def register_object_type(
++    object_type: str,
++    source_table: str,
++    primary_key_column: str,
++    properties: dict,
++    source_kind: str = "table",
++    default_filter: Optional[dict] = None,
++    client_id: Optional[str] = None,
++) -> dict:
++    """Register a new object type — the ONE way new domains get added.
++
++    This is the operation that proves the engine is generic: onboarding
++    a new client's domain model (or a new object type for an existing
++    client) is this single call plus a backing table/view existing —
++    never a code change to this module or to routers/decision_intelligence.py.
++    """
++    supabase = db.get_db()
++    row = {
++        "object_type": object_type,
++        "source_table": source_table,
++        "primary_key_column": primary_key_column,
++        "properties": properties,
++        "source_kind": source_kind,
++        "default_filter": default_filter or {},
++        "client_id": client_id,
++    }
++    resp = await db._async_execute(
++        lambda: supabase.table("ontology_objects").upsert(row, on_conflict="object_type").execute()
++    )
++    return resp.data[0] if resp.data else row
++
++
++async def register_relationship(
++    from_object: str,
++    to_object: str,
++    relationship_name: str,
++    join_definition: dict,
++    client_id: Optional[str] = None,
++) -> dict:
++    """Register a new relationship between two object types — a data
++    change, never a code change to the expansion logic above."""
++    supabase = db.get_db()
++    row = {
++        "from_object": from_object,
++        "to_object": to_object,
++        "relationship_name": relationship_name,
++        "join_definition": join_definition,
++        "client_id": client_id,
++    }
++    resp = await db._async_execute(lambda: supabase.table("ontology_relationships").insert(row).execute())
++    return resp.data[0] if resp.data else row
+diff --git a/dawn-api/decision_engine/registry.py b/dawn-api/decision_engine/registry.py
+index 37e765c..3f5df7b 100644
+--- a/dawn-api/decision_engine/registry.py
++++ b/dawn-api/decision_engine/registry.py
+@@ -1,79 +1,175 @@
+-"""Decision workflow registry with approval gate enforcement.
+-
+-Each workflow is registered with:
+-  - name: Unique identifier
+-  - requires_approval: Whether human approval is needed before execution
+-  - handler: Callable that runs the workflow logic
+-  - constraints: List of Constraint objects
+-  - input_schema: Expected input parameters
+-
+-The approval gate is enforced here, not at the UI layer.
++"""Data-driven workflow registry.
++
++Previously: every workflow required a hand-written Python module under
++decision_engine/workflows/ with a handler() function, AND a call to
++register_workflow() somewhere to put it in the in-memory registry —
++the second half never actually happened for reroute_shipment, which is
++why /api/decision/run raised "Unknown workflow" for it.
++
++Now: workflows are rows in ontology_workflows (name, candidate_object_type,
++candidate_source, constraints, input_schema). At startup (or on first
++use), this module loads them from the DB into an in-memory cache. Adding
++a workflow is an INSERT into ontology_workflows — never a new Python file,
++never a manual register_workflow() call to remember.
++
++Multi-tenancy: a workflow row with client_id set is only visible when
++querying with that client_id (or no client_id filter at all, i.e. an
++admin view). A NULL client_id workflow is shared/global and visible to
++every client — this is the default for the seeded reroute_shipment
++example today, since there's only one tenant in practice so far.
+ """
+-
+ from dataclasses import dataclass, field
+-from typing import Any, Callable, Optional
++from typing import Any, Optional
+ from datetime import datetime, timezone
++import logging
++
++import db.client as db
++from decision_engine.constraint_interpreter import evaluate_constraints, compute_soft_score
++from decision_engine.candidates import get_candidates
++
++logger = logging.getLogger(__name__)
+ 
+ 
+ @dataclass
+ class DecisionWorkflow:
+     name: str
+     description: str
+-    requires_approval: bool = True
+-    handler: Optional[Callable] = None
++    requires_approval: bool
++    candidate_object_type: Optional[str]
++    candidate_source: dict
+     constraints: list = field(default_factory=list)
+     input_schema: dict = field(default_factory=dict)
+-
+-
+-_registry: dict[str, DecisionWorkflow] = {}
+-
+-
+-def register_workflow(workflow: DecisionWorkflow) -> None:
+-    """Register a decision workflow."""
+-    _registry[workflow.name] = workflow
+-
+-
+-def get_workflow(name: str) -> Optional[DecisionWorkflow]:
+-    """Get a registered workflow by name."""
+-    return _registry.get(name)
+-
+-
+-def list_workflows() -> list[DecisionWorkflow]:
+-    """List all registered workflows."""
+-    return list(_registry.values())
+-
+-
+-def run_workflow(name: str, inputs: dict) -> dict:
++    client_id: Optional[str] = None
++
++
++# In-memory cache of workflows loaded from ontology_workflows. Not a
++# hand-populated registry — refresh_workflows() is the only writer.
++_cache: dict[str, DecisionWorkflow] = {}
++_loaded = False
++
++
++async def refresh_workflows() -> None:
++    """(Re)load all workflows from ontology_workflows into the cache.
++    Call this at startup and after any admin edit to the workflows table."""
++    global _cache, _loaded
++    supabase = db.get_db()
++    resp = await db._async_execute(lambda: supabase.table("ontology_workflows").select("*").execute())
++    rows = resp.data or []
++
++    new_cache: dict[str, DecisionWorkflow] = {}
++    for row in rows:
++        new_cache[row["name"]] = DecisionWorkflow(
++            name=row["name"],
++            description=row.get("description", ""),
++            requires_approval=row.get("requires_approval", True),
++            candidate_object_type=row.get("candidate_object_type"),
++            candidate_source=row.get("candidate_source", {}) or {},
++            constraints=row.get("constraints", []) or [],
++            input_schema=row.get("input_schema", {}) or {},
++            client_id=row.get("client_id"),
++        )
++
++    _cache = new_cache
++    _loaded = True
++    logger.info(f"Loaded {len(_cache)} workflow(s) from ontology_workflows: {list(_cache.keys())}")
++
++
++async def _ensure_loaded() -> None:
++    if not _loaded:
++        await refresh_workflows()
++
++
++async def get_workflow(name: str, client_id: Optional[str] = None) -> Optional[DecisionWorkflow]:
++    await _ensure_loaded()
++    wf = _cache.get(name)
++    if wf is None:
++        return None
++    # A client-scoped workflow is only visible to that client (or an
++    # unscoped lookup, e.g. an admin view where client_id=None is passed
++    # deliberately to mean "any"). A shared (client_id=None) workflow is
++    # visible to everyone.
++    if wf.client_id is not None and client_id is not None and wf.client_id != client_id:
++        return None
++    return wf
++
++
++async def list_workflows(client_id: Optional[str] = None) -> list[DecisionWorkflow]:
++    await _ensure_loaded()
++    if client_id is None:
++        return list(_cache.values())
++    return [wf for wf in _cache.values() if wf.client_id in (None, client_id)]
++
++
++async def run_workflow(name: str, inputs: dict, client_id: Optional[str] = None) -> dict:
+     """Run a workflow by name with given inputs.
+ 
+-    Returns a structured result dict with:
+-      - workflow_name
+-      - ranked_options
+-      - recommended
+-      - requires_approval
+-      - decision_log_id (set after logging)
++    Returns a structured result dict with ranked_options, recommended,
++    requires_approval, explanation, timestamp — same shape callers
++    (routers/decision_intelligence.py, tools/decision_workflow.py)
++    already expect, so this is a drop-in replacement.
+     """
+-    workflow = get_workflow(name)
++    workflow = await get_workflow(name, client_id=client_id)
+     if not workflow:
+         raise ValueError(f"Unknown workflow: {name}")
+ 
+-    if not workflow.handler:
+-        raise ValueError(f"Workflow '{name}' has no handler registered")
+-
+-    result = workflow.handler(inputs)
++    candidates = await get_candidates(workflow.candidate_source, inputs)
++
++    if not candidates:
++        return {
++            "workflow_name": name,
++            "ranked_options": [],
++            "recommended": None,
++            "requires_approval": workflow.requires_approval,
++            "explanation": f"No candidate options available for workflow '{name}'.",
++            "decision_log_id": None,
++            "timestamp": datetime.now(timezone.utc).isoformat(),
++        }
++
++    ranked = _rank_candidates(candidates, workflow.constraints, inputs)
++
++    if ranked and ranked[0]["hard_constraints_passed"]:
++        rec = ranked[0]
++        explanation = (
++            f"Recommended option (score: {rec['soft_score']:.2f}): "
++            + " | ".join(cr["explanation"] for cr in rec["constraint_results"] if cr.get("weight"))
++        )
++    else:
++        explanation = "No viable options found — all candidates failed hard constraints."
+ 
+     return {
+         "workflow_name": name,
+-        "ranked_options": result.get("ranked_options", []),
+-        "recommended": result.get("recommended"),
++        "ranked_options": ranked,
++        "recommended": {
++            "option": ranked[0]["option"],
++            "score": ranked[0]["soft_score"],
++        } if ranked and ranked[0]["hard_constraints_passed"] else None,
+         "requires_approval": workflow.requires_approval,
+-        "explanation": result.get("explanation", ""),
++        "explanation": explanation,
+         "decision_log_id": None,
+-        "timestamp": datetime.now(timezone.utc).isoformat()
++        "timestamp": datetime.now(timezone.utc).isoformat(),
+     }
+ 
+ 
+-def check_approval_required(workflow_name: str) -> bool:
+-    """Check if a workflow requires human approval."""
+-    workflow = get_workflow(workflow_name)
++def _rank_candidates(candidates: list[dict], constraint_specs: list[dict], inputs: dict, top_n: int = 5) -> list[dict]:
++    ranked = []
++    for option in candidates:
++        hard_passed, results = evaluate_constraints(option, constraint_specs, inputs)
++        soft_score = compute_soft_score(results) if hard_passed else 0.0
++
++        ranked.append({
++            "option": option,
++            "constraint_results": [
++                {"name": r.name, "passed": r.passed, "score": r.score, "weight": r.weight, "explanation": r.explanation}
++                for r in results
++            ],
++            "hard_constraints_passed": hard_passed,
++            "soft_score": soft_score,
++        })
++
++    ranked.sort(key=lambda r: (r["hard_constraints_passed"], r["soft_score"]), reverse=True)
++    return ranked[:top_n]
++
++
++async def check_approval_required(workflow_name: str, client_id: Optional[str] = None) -> bool:
++    workflow = await get_workflow(workflow_name, client_id=client_id)
+     return workflow.requires_approval if workflow else True
+diff --git a/dawn-api/decision_engine/scoring.py b/dawn-api/decision_engine/scoring.py
+deleted file mode 100644
+index b29be28..0000000
+--- a/dawn-api/decision_engine/scoring.py
++++ /dev/null
+@@ -1,81 +0,0 @@
+-"""Weighted scoring and ranking for decision workflow options."""
+-
+-from dataclasses import dataclass, field
+-from typing import Any, Optional
+-
+-from .constraints import ConstraintResult, compute_soft_score
+-
+-
+-@dataclass
+-class RankedOption:
+-    option: dict
+-    constraint_results: list[ConstraintResult]
+-    hard_constraints_passed: bool
+-    soft_score: float = 0.0
+-    tradeoff_summary: str = ""
+-
+-
+-@dataclass
+-class WorkflowResult:
+-    workflow_name: str
+-    ranked_options: list[RankedOption]
+-    recommended: Optional[RankedOption] = None
+-    explanation: str = ""
+-
+-
+-def rank_options(
+-    options: list[dict],
+-    constraints: list,
+-    top_n: int = 5
+-) -> list[RankedOption]:
+-    """Evaluate and rank options by constraint satisfaction.
+-
+-    Steps:
+-    1. Evaluate all constraints for each option
+-    2. Filter out options failing hard constraints
+-    3. Score remaining options on soft constraints
+-    4. Sort by score descending
+-    """
+-    from .constraints import evaluate_constraints
+-
+-    ranked = []
+-
+-    for option in options:
+-        hard_passed, results = evaluate_constraints(option, constraints)
+-        soft_score = compute_soft_score(results) if hard_passed else 0.0
+-
+-        # Build tradeoff summary
+-        tradeoff_parts = []
+-        for r in results:
+-            if r.weight and r.score is not None:
+-                tradeoff_parts.append(f"{r.name}: {r.score:.2f} (w={r.weight})")
+-            elif not r.passed:
+-                tradeoff_parts.append(f"{r.name}: FAILED")
+-
+-        ranked.append(RankedOption(
+-            option=option,
+-            constraint_results=results,
+-            hard_constraints_passed=hard_passed,
+-            soft_score=soft_score,
+-            tradeoff_summary=" | ".join(tradeoff_parts)
+-        ))
+-
+-    # Sort: hard-passing options first, then by soft score descending
+-    ranked.sort(key=lambda r: (r.hard_constraints_passed, r.soft_score), reverse=True)
+-
+-    return ranked[:top_n]
+-
+-
+-def build_workflow_result(
+-    workflow_name: str,
+-    ranked: list[RankedOption],
+-    llm_explanation: str = ""
+-) -> WorkflowResult:
+-    """Build a structured workflow result with recommendation."""
+-    recommended = ranked[0] if ranked else None
+-    return WorkflowResult(
+-        workflow_name=workflow_name,
+-        ranked_options=ranked,
+-        recommended=recommended,
+-        explanation=llm_explanation
+-    )
+diff --git a/dawn-api/decision_engine/simulate.py b/dawn-api/decision_engine/simulate.py
+index 8a56122..70df22c 100644
+--- a/dawn-api/decision_engine/simulate.py
++++ b/dawn-api/decision_engine/simulate.py
+@@ -1,14 +1,21 @@
+ """What-if simulation engine.
+ 
+ Takes a snapshot of the current ontology state, applies hypothetical
+-mutations, and re-runs the decision workflow to show how the
+-recommendation changes.
+-
+-Key design decision: Simulation reuses the Phase 2 constraint engine
+-entirely. It is not a separate reasoning system — it runs the same
++mutations, and re-runs the workflow to show how the recommendation
++changes.
++
++Fix vs. the original implementation: the previous reroute_shipment.handler()
++accepted a "_snapshot" input but only ever read "candidate_routes" — so a
++mutated snapshot never actually changed anything, and baseline/scenario
++were always identical. decision_engine/candidates.py now reads from
++_snapshot when present, so mutations here actually flow through to the
++ranking.
++
++Key design decision unchanged from before: simulation reuses the same
++constraint engine (decision_engine/constraint_interpreter.py + registry.py)
++entirely. It's not a separate reasoning system — it runs the same
+ deterministic engine twice against different inputs and returns a diff.
+ """
+-
+ from dataclasses import dataclass, field
+ from copy import deepcopy
+ from typing import Any, Optional
+@@ -16,13 +23,16 @@ from typing import Any, Optional
+ 
+ @dataclass
+ class Mutation:
+-    """A hypothetical change to apply to the ontology state.
++    """A hypothetical change to apply to the ontology snapshot.
+ 
+     Types:
+-      - vendor_reliability: Change a vendor's on_time_rate
++      - vendor_reliability: Change a vendor's on_time_rate (or any property)
+       - vendor_cost: Change a vendor's cost structure
+       - route_unavailable: Mark a route as unavailable
+       - contract_term: Change a contract term (e.g., penalty clause)
++      - field_set: Generic — set any property on any snapshot collection item
++                   by id. Prefer this for new object types instead of adding
++                   another mutation_type branch.
+     """
+     mutation_type: str
+     target_id: str
+@@ -40,46 +50,51 @@ class SimulationResult:
+ 
+ 
+ def apply_mutations(snapshot: dict, mutations: list[Mutation]) -> dict:
+-    """Apply mutations to a deep-copied snapshot.
+-
+-    Returns the mutated snapshot. Does not modify the original.
+-    """
++    """Apply mutations to a deep-copied snapshot. Does not modify the original."""
+     result = deepcopy(snapshot)
+-
+     for mutation in mutations:
+         _apply_mutation(result, mutation)
+-
+     return result
+ 
+ 
+-def _apply_mutation(snapshot: dict, mutation: Mutation) -> None:
+-    """Apply a single mutation to the snapshot in-place."""
+-    if mutation.mutation_type == "vendor_reliability":
+-        for vendor in snapshot.get("vendors", []):
+-            if vendor.get("id") == mutation.target_id:
+-                vendor[mutation.property] = mutation.new_value
+-
+-    elif mutation.mutation_type == "vendor_cost":
+-        for vendor in snapshot.get("vendors", []):
+-            if vendor.get("id") == mutation.target_id:
+-                vendor[mutation.property] = mutation.new_value
+-
+-    elif mutation.mutation_type == "route_unavailable":
+-        for route in snapshot.get("routes", []):
+-            if route.get("id") == mutation.target_id:
+-                route["available"] = False
++_COLLECTION_BY_MUTATION_TYPE = {
++    "vendor_reliability": "vendors",
++    "vendor_cost": "vendors",
++    "route_unavailable": "routes",
++    "contract_term": "contracts",
++}
+ 
+-    elif mutation.mutation_type == "contract_term":
+-        for contract in snapshot.get("contracts", []):
+-            if contract.get("id") == mutation.target_id:
+-                contract[mutation.property] = mutation.new_value
+ 
+-
+-def simulate_scenario(
++def _apply_mutation(snapshot: dict, mutation: Mutation) -> None:
++    if mutation.mutation_type == "field_set":
++        # Generic path: caller specifies which collection via `property`
++        # as "collection.field", e.g. property="routes.risk_score".
++        if "." not in mutation.property:
++            return
++        collection_key, field_name = mutation.property.split(".", 1)
++        for item in snapshot.get(collection_key, []):
++            if item.get("id") == mutation.target_id:
++                item[field_name] = mutation.new_value
++        return
++
++    collection_key = _COLLECTION_BY_MUTATION_TYPE.get(mutation.mutation_type)
++    if not collection_key:
++        return
++
++    for item in snapshot.get(collection_key, []):
++        if item.get("id") == mutation.target_id:
++            if mutation.mutation_type == "route_unavailable":
++                item["available"] = False
++            else:
++                item[mutation.property] = mutation.new_value
++
++
++async def simulate_scenario(
+     object_snapshot: dict,
+     mutations: list[Mutation],
+     workflow_name: str,
+-    workflow_inputs: dict
++    workflow_inputs: dict,
++    client_id: Optional[str] = None,
+ ) -> SimulationResult:
+     """Run a what-if simulation.
+ 
+@@ -88,32 +103,30 @@ def simulate_scenario(
+     3. Run the workflow on the mutated snapshot (scenario)
+     4. Return both results plus a diff
+     """
+-    from .registry import run_workflow
++    from decision_engine.registry import run_workflow
+ 
+-    baseline = run_workflow(workflow_name, {**workflow_inputs, "_snapshot": object_snapshot})
++    baseline = await run_workflow(
++        workflow_name, {**workflow_inputs, "_snapshot": object_snapshot}, client_id=client_id
++    )
+ 
+     mutated = apply_mutations(object_snapshot, mutations)
+-    scenario = run_workflow(workflow_name, {**workflow_inputs, "_snapshot": mutated})
++    scenario = await run_workflow(
++        workflow_name, {**workflow_inputs, "_snapshot": mutated}, client_id=client_id
++    )
+ 
+     diff = _compute_diff(baseline, scenario)
+ 
+-    return SimulationResult(
+-        baseline=baseline,
+-        scenario=scenario,
+-        diff=diff,
+-        mutations=mutations
+-    )
++    return SimulationResult(baseline=baseline, scenario=scenario, diff=diff, mutations=mutations)
+ 
+ 
+ def _compute_diff(baseline: dict, scenario: dict) -> dict:
+-    """Compute what changed between baseline and scenario."""
+-    baseline_rec = baseline.get("recommended", {})
+-    scenario_rec = scenario.get("recommended", {})
++    baseline_rec = baseline.get("recommended") or {}
++    scenario_rec = scenario.get("recommended") or {}
+ 
+     return {
+         "recommendation_changed": baseline_rec.get("option") != scenario_rec.get("option"),
+         "baseline_recommendation": baseline_rec,
+         "scenario_recommendation": scenario_rec,
+         "baseline_ranked": baseline.get("ranked_options", []),
+-        "scenario_ranked": scenario.get("ranked_options", [])
++        "scenario_ranked": scenario.get("ranked_options", []),
+     }
+diff --git a/dawn-api/decision_engine/workflows/__init__.py b/dawn-api/decision_engine/workflows/__init__.py
+deleted file mode 100644
+index 390eda5..0000000
+--- a/dawn-api/decision_engine/workflows/__init__.py
++++ /dev/null
+@@ -1 +0,0 @@
+-"""Decision workflow implementations."""
+diff --git a/dawn-api/decision_engine/workflows/reroute_shipment.py b/dawn-api/decision_engine/workflows/reroute_shipment.py
+deleted file mode 100644
+index c2b8c64..0000000
+--- a/dawn-api/decision_engine/workflows/reroute_shipment.py
++++ /dev/null
+@@ -1,188 +0,0 @@
+-"""Reroute Shipment decision workflow.
+-
+-Given a shipment that needs rerouting (due to delay, cost, risk, or
+-vendor failure), this workflow:
+-  1. Identifies candidate routes + carriers
+-  2. Evaluates hard constraints (contract compliance, budget ceiling)
+-  3. Scores soft constraints (transit time, reliability, cost)
+-  4. Returns ranked options with tradeoff summaries
+-"""
+-
+-from decision_engine.constraints import Constraint
+-from decision_engine.scoring import rank_options, build_workflow_result
+-
+-
+-def build_constraints() -> list[Constraint]:
+-    """Build the constraint set for reroute decisions."""
+-    return [
+-        Constraint(
+-            name="contract_compliance",
+-            constraint_type="hard",
+-            rule="candidate route's carrier must have active contract covering shipment cargo_type",
+-            evaluator=lambda opt: _check_contract_compliance(opt)
+-        ),
+-        Constraint(
+-            name="budget_ceiling",
+-            constraint_type="hard",
+-            rule="candidate route total cost <= shipment.value_usd * 0.15",
+-            evaluator=lambda opt: _check_budget_ceiling(opt)
+-        ),
+-        Constraint(
+-            name="transit_time",
+-            constraint_type="soft",
+-            weight=0.4,
+-            rule="minimize typical_transit_days",
+-            evaluator=lambda opt: _score_transit_time(opt)
+-        ),
+-        Constraint(
+-            name="reliability",
+-            constraint_type="soft",
+-            weight=0.4,
+-            rule="maximize carrier.on_time_rate",
+-            evaluator=lambda opt: _score_reliability(opt)
+-        ),
+-        Constraint(
+-            name="cost",
+-            constraint_type="soft",
+-            weight=0.2,
+-            rule="minimize projected_total_cost",
+-            evaluator=lambda opt: _score_cost(opt)
+-        ),
+-    ]
+-
+-
+-def _check_contract_compliance(option: dict) -> "ConstraintResult":
+-    from decision_engine.constraints import ConstraintResult
+-    has_contract = option.get("has_active_contract", False)
+-    return ConstraintResult(
+-        name="contract_compliance",
+-        passed=has_contract,
+-        explanation="Carrier has active contract" if has_contract else "No active contract for this cargo type"
+-    )
+-
+-
+-def _check_budget_ceiling(option: dict) -> "ConstraintResult":
+-    from decision_engine.constraints import ConstraintResult
+-    cost = option.get("projected_cost", 0)
+-    shipment_value = option.get("shipment_value", 1)
+-    ceiling = shipment_value * 0.15
+-    passed = cost <= ceiling
+-    return ConstraintResult(
+-        name="budget_ceiling",
+-        passed=passed,
+-        explanation=f"${cost:.0f} <= ${ceiling:.0f} (15% of ${shipment_value:.0f})" if passed
+-                    else f"${cost:.0f} exceeds ceiling of ${ceiling:.0f}"
+-    )
+-
+-
+-def _score_transit_time(option: dict) -> "ConstraintResult":
+-    from decision_engine.constraints import ConstraintResult
+-    days = option.get("transit_days", 30)
+-    # Lower is better: score = 1 - (days / max_expected_days)
+-    max_days = 30
+-    score = max(0.0, 1.0 - (days / max_days))
+-    return ConstraintResult(
+-        name="transit_time",
+-        passed=True,
+-        score=score,
+-        weight=0.4,
+-        explanation=f"{days} days transit (score: {score:.2f})"
+-    )
+-
+-
+-def _score_reliability(option: dict) -> "ConstraintResult":
+-    from decision_engine.constraints import ConstraintResult
+-    rate = option.get("on_time_rate", 0.5)
+-    return ConstraintResult(
+-        name="reliability",
+-        passed=True,
+-        score=rate,
+-        weight=0.4,
+-        explanation=f"On-time rate: {rate:.0%}"
+-    )
+-
+-
+-def _score_cost(option: dict) -> "ConstraintResult":
+-    from decision_engine.constraints import ConstraintResult
+-    cost = option.get("projected_cost", 0)
+-    max_cost = option.get("max_acceptable_cost", 100000)
+-    score = max(0.0, 1.0 - (cost / max_cost))
+-    return ConstraintResult(
+-        name="cost",
+-        passed=True,
+-        score=score,
+-        weight=0.2,
+-        explanation=f"${cost:.0f} (score: {score:.2f})"
+-    )
+-
+-
+-def handler(inputs: dict) -> dict:
+-    """Handle a reroute_shipment workflow invocation.
+-
+-    Expected inputs:
+-      - shipment_id: str
+-      - reason: str (cost|delay|risk|vendor_failure)
+-      - candidate_routes: list[dict] (optional, from ontology_query)
+-      - _snapshot: dict (optional, for simulation)
+-    """
+-    shipment_id = inputs.get("shipment_id", "unknown")
+-    reason = inputs.get("reason", "unknown")
+-    candidates = inputs.get("candidate_routes", [])
+-
+-    # If no candidates provided, return empty result
+-    if not candidates:
+-        return {
+-            "workflow_name": "reroute_shipment",
+-            "ranked_options": [],
+-            "recommended": None,
+-            "explanation": f"No candidate routes available for shipment {shipment_id}.",
+-            "input_summary": {
+-                "shipment_id": shipment_id,
+-                "reason": reason
+-            }
+-        }
+-
+-    constraints = build_constraints()
+-    ranked = rank_options(candidates, constraints)
+-
+-    # Build explanation
+-    if ranked and ranked[0].hard_constraints_passed:
+-        rec = ranked[0]
+-        explanation = (
+-            f"Recommended: {rec.option.get('route_name', 'Unknown')} via "
+-            f"{rec.option.get('carrier_name', 'Unknown')} — "
+-            f"{rec.option.get('transit_days', '?')} days, "
+-            f"${rec.option.get('projected_cost', 0):.0f}, "
+-            f"{rec.option.get('on_time_rate', 0):.0%} on-time. "
+-            f"Score: {rec.soft_score:.2f}"
+-        )
+-    else:
+-        explanation = "No viable options found — all candidates failed hard constraints."
+-
+-    return {
+-        "workflow_name": "reroute_shipment",
+-        "ranked_options": [
+-            {
+-                "option": r.option,
+-                "constraint_results": [
+-                    {"name": cr.name, "passed": cr.passed, "score": cr.score,
+-                     "weight": cr.weight, "explanation": cr.explanation}
+-                    for cr in r.constraint_results
+-                ],
+-                "hard_constraints_passed": r.hard_constraints_passed,
+-                "soft_score": r.soft_score,
+-                "tradeoff_summary": r.tradeoff_summary
+-            }
+-            for r in ranked
+-        ],
+-        "recommended": {
+-            "option": ranked[0].option,
+-            "score": ranked[0].soft_score,
+-            "tradeoff_summary": ranked[0].tradeoff_summary
+-        } if ranked and ranked[0].hard_constraints_passed else None,
+-        "explanation": explanation,
+-        "input_summary": {
+-            "shipment_id": shipment_id,
+-            "reason": reason
+-        }
+-    }
+\ No newline at end of file
+diff --git a/dawn-api/main.py b/dawn-api/main.py
+index 982c250..ce26d5f 100644
+--- a/dawn-api/main.py
++++ b/dawn-api/main.py
+@@ -160,6 +160,17 @@ async def start_background_services():
+     except Exception as e:
+         logger.error(f"Failed to start ingestion queue: {e}")
+ 
++    # Decision workflow cache — loads ontology_workflows into memory.
++    # Workflows are data (see decision_engine/registry.py), so this
++    # replaces what used to require a manual register_workflow() call
++    # per workflow module (which reroute_shipment never actually got,
++    # leaving it permanently unreachable via /api/decision/run).
++    try:
++        from decision_engine.registry import refresh_workflows
++        await refresh_workflows()
++    except Exception as e:
++        logger.error(f"Failed to load decision workflows: {e}")
++
+ 
+ @app.on_event("shutdown")
+ async def stop_background_services():
+diff --git a/dawn-api/migrations/008_generic_ontology_engine.sql b/dawn-api/migrations/008_generic_ontology_engine.sql
+new file mode 100644
+index 0000000..a5dd15d
+--- /dev/null
++++ b/dawn-api/migrations/008_generic_ontology_engine.sql
+@@ -0,0 +1,199 @@
++-- ============================================================
++-- MIGRATION 008: Generic Ontology Engine + Data-Driven Workflows
++-- ============================================================
++-- Replaces the hardcoded Shipment/Route/Vendor object model with a
++-- metadata-driven object/relationship layer, and replaces one-file-
++-- per-workflow Python with data-defined workflows interpreted by a
++-- generic constraint engine.
++--
++-- Design principles:
++--   1. ontology_objects / ontology_relationships are the ONLY source
++--      of truth for what object types and relationships exist. No
++--      object-type name should ever be hardcoded in application code.
++--   2. Tenancy: every object-type and workflow row gets a nullable
++--      client_id. NULL = shared/global (today's single-tenant reality).
++--      A real client_id can be added later without a schema change —
++--      only a column being populated. `clients` table is minimal on
++--      purpose; expand later if you need billing/plan/etc.
++--   3. Old ontology_shipments / ontology_routes / etc. tables from
++--      migration 003_decision_intelligence.sql are left in place as
++--      the BACKING DATA for the seeded 'Shipment' etc. object types —
++--      they are now just one example dataset, not the model itself.
++-- ============================================================
++
++-- ============================================================
++-- Tenancy groundwork
++-- ============================================================
++
++CREATE TABLE IF NOT EXISTS clients (
++    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
++    name TEXT NOT NULL UNIQUE,
++    slug TEXT NOT NULL UNIQUE,
++    active BOOLEAN DEFAULT true,
++    created_at TIMESTAMPTZ DEFAULT now()
++);
++
++-- Implicit default client so existing single-tenant data has somewhere
++-- to point once client_id starts being enforced. Not required today —
++-- NULL client_id is treated as "shared/global" everywhere below — but
++-- having a row ready means switching a given object type over to real
++-- per-client scoping later is a data change, not a migration.
++INSERT INTO clients (name, slug)
++VALUES ('Regent', 'regent')
++ON CONFLICT (slug) DO NOTHING;
++
++ALTER TABLE ontology_objects
++    ADD COLUMN IF NOT EXISTS client_id UUID REFERENCES clients(id);
++
++ALTER TABLE ontology_relationships
++    ADD COLUMN IF NOT EXISTS client_id UUID REFERENCES clients(id);
++
++-- ============================================================
++-- Generic object registry — extend existing ontology_objects
++-- ============================================================
++-- source_table already exists (migration 003). Add source_kind so the
++-- registry can eventually back an object type with something other
++-- than a 1:1 dedicated table (a shared multi-tenant table filtered by
++-- client_id, a view, or an external API) without another migration.
++
++ALTER TABLE ontology_objects
++    ADD COLUMN IF NOT EXISTS source_kind TEXT NOT NULL DEFAULT 'table'
++        CHECK (source_kind IN ('table', 'view', 'api'));
++
++-- Default filter applied on every query for this object type, e.g.
++-- {"client_id": "<uuid>"} for a shared table scoped to one tenant.
++-- NULL/empty = no implicit filter (today's default).
++ALTER TABLE ontology_objects
++    ADD COLUMN IF NOT EXISTS default_filter JSONB NOT NULL DEFAULT '{}';
++
++COMMENT ON TABLE ontology_objects IS
++    'Generic object-type registry. query_ontology() reads source_table, '
++    'primary_key_column, properties, and default_filter from here at query '
++    'time — no object type name should be hardcoded in application code. '
++    'Adding a new object type is an INSERT here (+ backing table/view), '
++    'never a code change.';
++
++COMMENT ON TABLE ontology_relationships IS
++    'Generic relationship registry. join_definition (from_column, '
++    'to_column, cardinality, optional via) is executed generically by '
++    'the ontology query engine — relationship names are never hardcoded '
++    'in application code.';
++
++-- ============================================================
++-- Data-driven workflows (replaces one .py file per workflow)
++-- ============================================================
++-- A workflow is now a row: a name, the object type it operates over,
++-- a list of constraints (hard + soft, as data), and how to build
++-- candidate options. The constraint engine (decision_engine/) is
++-- rewritten to interpret these generically instead of importing a
++-- hand-written Python handler per workflow.
++
++CREATE TABLE IF NOT EXISTS ontology_workflows (
++    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
++    name TEXT NOT NULL UNIQUE,
++    description TEXT,
++    client_id UUID REFERENCES clients(id),  -- NULL = shared/global workflow
++    requires_approval BOOLEAN NOT NULL DEFAULT true,
++    -- Which object type this workflow ranks candidates of, e.g. "Route".
++    candidate_object_type TEXT REFERENCES ontology_objects(object_type),
++    -- How to fetch candidates given workflow inputs. Interpreted generically
++    -- by decision_engine/candidates.py. Example:
++    -- {"strategy": "ontology_query", "object": "Route",
++    --  "filters_from_inputs": {"available": true}}
++    candidate_source JSONB NOT NULL DEFAULT '{}',
++    -- List of constraint specs, each interpreted generically by
++    -- decision_engine/constraint_interpreter.py. Example entry:
++    -- {"name": "budget_ceiling", "type": "hard",
++    --  "rule": "field_lte", "field": "projected_cost",
++    --  "compare_to": {"input": "shipment_value", "multiplier": 0.15}}
++    constraints JSONB NOT NULL DEFAULT '[]',
++    input_schema JSONB NOT NULL DEFAULT '{}',
++    created_at TIMESTAMPTZ DEFAULT now(),
++    updated_at TIMESTAMPTZ DEFAULT now()
++);
++
++CREATE INDEX IF NOT EXISTS idx_ontology_workflows_client ON ontology_workflows(client_id);
++
++-- ============================================================
++-- Seed: the existing reroute_shipment logic, expressed as data
++-- ============================================================
++-- This is the proof that the generic engine reproduces the original
++-- hardcoded workflow with zero Python beyond the interpreter itself.
++-- client_id is NULL (shared/global) since there's only one tenant today.
++
++INSERT INTO ontology_workflows (
++    name, description, requires_approval, candidate_object_type,
++    candidate_source, constraints, input_schema
++) VALUES (
++    'reroute_shipment',
++    'Given a shipment needing rerouting, rank candidate routes/carriers by contract compliance, budget, transit time, reliability, and cost.',
++    true,
++    'Route',
++    '{"strategy": "inputs_field", "field": "candidate_routes"}',
++    '[
++        {
++            "name": "contract_compliance",
++            "type": "hard",
++            "rule": "field_truthy",
++            "field": "has_active_contract",
++            "explanation_true": "Carrier has active contract",
++            "explanation_false": "No active contract for this cargo type"
++        },
++        {
++            "name": "budget_ceiling",
++            "type": "hard",
++            "rule": "field_lte",
++            "field": "projected_cost",
++            "compare_to": {"input": "shipment_value", "multiplier": 0.15},
++            "explanation_template": "${field} vs ceiling ${compare_to} (15% of shipment value)"
++        },
++        {
++            "name": "transit_time",
++            "type": "soft",
++            "weight": 0.4,
++            "rule": "minimize_ratio",
++            "field": "transit_days",
++            "max_value": 30,
++            "explanation_template": "{field} days transit"
++        },
++        {
++            "name": "reliability",
++            "type": "soft",
++            "weight": 0.4,
++            "rule": "maximize_field",
++            "field": "on_time_rate",
++            "explanation_template": "On-time rate: {field}"
++        },
++        {
++            "name": "cost",
++            "type": "soft",
++            "weight": 0.2,
++            "rule": "minimize_ratio",
++            "field": "projected_cost",
++            "max_value_field": "max_acceptable_cost",
++            "max_value_default": 100000,
++            "explanation_template": "${field} projected cost"
++        }
++    ]'::jsonb,
++    '{"shipment_id": {"type": "string", "required": true}, "reason": {"type": "string", "required": false}, "candidate_routes": {"type": "array", "required": true}}'::jsonb
++)
++ON CONFLICT (name) DO NOTHING;
++
++-- ============================================================
++-- Fix: undefined 'preference' node type referenced in application code
++-- (routers/chat.py, tools/knowledge_graph.py, routers/dev_experience.py)
++-- but never added to the enum. Add it so those checks/inserts work.
++-- ============================================================
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_enum
++    WHERE enumlabel = 'preference'
++      AND enumtypid = (SELECT oid FROM pg_type WHERE typname = 'node_type')
++  ) THEN
++    ALTER TYPE node_type ADD VALUE 'preference';
++  END IF;
++END $$;
++
++NOTIFY pgrst, 'reload schema';
+diff --git a/dawn-api/routers/decision_intelligence.py b/dawn-api/routers/decision_intelligence.py
+index 2b40278..44488be 100644
+--- a/dawn-api/routers/decision_intelligence.py
++++ b/dawn-api/routers/decision_intelligence.py
+@@ -6,10 +6,22 @@ Endpoints:
+   GET  /api/decision/log — List decision history
+   GET  /api/decision/log/{id} — Get full decision trace
+   POST /api/decision/simulate — Run a what-if simulation
+-  GET  /api/ontology/query — Query the ontology
+-  GET  /api/ontology/objects — List registered ontology objects
+-  GET  /api/ontology/relationships — List ontology relationships
++  POST /api/ontology/query — Query the ontology (any registered object type)
++  GET  /api/ontology/objects — List registered ontology object types
++  GET  /api/ontology/relationships — List registered ontology relationships
++  POST /api/ontology/objects — Register a new object type (data-driven onboarding)
++  POST /api/ontology/relationships — Register a new relationship
+   GET  /api/admin/data-sources — Data source health status
++
++This router is now a thin HTTP layer over two generic engines:
++  - decision_engine/registry.py + constraint_interpreter.py + candidates.py
++    for workflows (data-driven, not one Python file per workflow)
++  - decision_engine/ontology_engine.py for object/relationship queries
++    (driven by the ontology_objects / ontology_relationships tables,
++    never a hardcoded table_map or per-relationship if/elif chain)
++
++Adding a new client's domain model, or a new workflow, should never
++require touching this file.
+ """
+ 
+ from fastapi import APIRouter, HTTPException
+@@ -20,20 +32,33 @@ import json
+ 
+ from decision_engine.registry import run_workflow, list_workflows, check_approval_required
+ from decision_engine.simulate import Mutation, simulate_scenario
++from decision_engine.ontology_engine import (
++    query_object,
++    list_object_types,
++    list_relationships,
++    register_object_type,
++    register_relationship,
++    OntologyError,
++)
+ import db.client as db
+ 
+ 
+-supabase = db.get_db()   # call it inside the function
+-
+ router = APIRouter(prefix="/api", tags=["decision_intelligence"])
+ 
+ 
++def _get_supabase():
++    # Resolved per-call rather than at import time, matching the pattern
++    # used elsewhere in dawn-api (see db/client.py's get_db()).
++    return db.get_db()
++
++
+ # ─── Request/Response Models ───────────────────────────────────────
+ 
+ class RunWorkflowRequest(BaseModel):
+     workflow_name: str
+     inputs: dict = {}
+     triggered_by: str = "system"
++    client_id: Optional[str] = None
+ 
+ 
+ class ApproveRequest(BaseModel):
+@@ -46,6 +71,7 @@ class SimulateRequest(BaseModel):
+     workflow_name: str
+     inputs: dict = {}
+     mutations: list[dict] = []
++    client_id: Optional[str] = None
+ 
+ 
+ class OntologyQueryRequest(BaseModel):
+@@ -53,6 +79,25 @@ class OntologyQueryRequest(BaseModel):
+     filters: dict = {}
+     expand: list[str] = []
+     limit: int = 20
++    client_id: Optional[str] = None
++
++
++class RegisterObjectTypeRequest(BaseModel):
++    object_type: str
++    source_table: str
++    primary_key_column: str = "id"
++    properties: dict = {}
++    source_kind: str = "table"
++    default_filter: dict = {}
++    client_id: Optional[str] = None
++
++
++class RegisterRelationshipRequest(BaseModel):
++    from_object: str
++    to_object: str
++    relationship_name: str
++    join_definition: dict
++    client_id: Optional[str] = None
+ 
+ 
+ # ─── Decision Workflow Endpoints ───────────────────────────────────
+@@ -60,12 +105,12 @@ class OntologyQueryRequest(BaseModel):
+ @router.post("/decision/run")
+ async def run_decision_workflow(req: RunWorkflowRequest):
+     """Run a decision workflow and log the result."""
++    supabase = _get_supabase()
+     try:
+-        result = run_workflow(req.workflow_name, req.inputs)
++        result = await run_workflow(req.workflow_name, req.inputs, client_id=req.client_id)
+     except ValueError as e:
+         raise HTTPException(status_code=404, detail=str(e))
+ 
+-    # Log to decision_log table
+     log_entry = {
+         "workflow_name": req.workflow_name,
+         "triggered_by": req.triggered_by,
+@@ -77,7 +122,7 @@ async def run_decision_workflow(req: RunWorkflowRequest):
+         "recommended_option": json.dumps(result.get("recommended")),
+         "llm_explanation": result.get("explanation", ""),
+         "data_freshness": json.dumps({}),
+-        "executed": False
++        "executed": False,
+     }
+ 
+     try:
+@@ -95,6 +140,8 @@ async def run_decision_workflow(req: RunWorkflowRequest):
+ @router.post("/decision/{decision_id}/approve")
+ async def approve_decision(decision_id: str, req: ApproveRequest):
+     """Approve, reject, or override a decision."""
++    supabase = _get_supabase()
++
+     if req.decision not in ("approved", "rejected", "overridden"):
+         raise HTTPException(status_code=400, detail="decision must be 'approved', 'rejected', or 'overridden'")
+ 
+@@ -105,9 +152,8 @@ async def approve_decision(decision_id: str, req: ApproveRequest):
+         "human_decision": req.decision,
+         "human_decision_by": req.by,
+         "human_decision_at": datetime.now(timezone.utc).isoformat(),
+-        "executed": req.decision == "approved"
++        "executed": req.decision == "approved",
+     }
+-
+     if req.override_reason:
+         update_data["override_reason"] = req.override_reason
+ 
+@@ -127,17 +173,16 @@ async def list_decision_log(
+     workflow: Optional[str] = None,
+     decision: Optional[str] = None,
+     limit: int = 50,
+-    offset: int = 0
++    offset: int = 0,
+ ):
+     """List decision history with optional filters."""
++    supabase = _get_supabase()
+     try:
+         query = supabase.table("decision_log").select("*").order("created_at", desc=True)
+-
+         if workflow:
+             query = query.eq("workflow_name", workflow)
+         if decision:
+             query = query.eq("human_decision", decision)
+-
+         resp = query.range(offset, offset + limit - 1).execute()
+         return {"data": resp.data or [], "total": len(resp.data or [])}
+     except Exception as e:
+@@ -147,6 +192,7 @@ async def list_decision_log(
+ @router.get("/decision/log/{decision_id}")
+ async def get_decision_trace(decision_id: str):
+     """Get the full trace of a single decision."""
++    supabase = _get_supabase()
+     try:
+         resp = supabase.table("decision_log").select("*").eq("id", decision_id).execute()
+         if not resp.data:
+@@ -158,6 +204,25 @@ async def get_decision_trace(decision_id: str):
+         raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
++@router.get("/decision/workflows")
++async def list_decision_workflows(client_id: Optional[str] = None):
++    """List all registered workflows (data-driven — reads ontology_workflows)."""
++    workflows = await list_workflows(client_id=client_id)
++    return {
++        "data": [
++            {
++                "name": wf.name,
++                "description": wf.description,
++                "requires_approval": wf.requires_approval,
++                "candidate_object_type": wf.candidate_object_type,
++                "input_schema": wf.input_schema,
++                "client_id": wf.client_id,
++            }
++            for wf in workflows
++        ]
++    }
++
++
+ # ─── Simulation Endpoints ──────────────────────────────────────────
+ 
+ @router.post("/decision/simulate")
+@@ -169,47 +234,52 @@ async def run_simulation(req: SimulateRequest):
+             target_id=m.get("target_id", ""),
+             property=m.get("property", ""),
+             new_value=m.get("new_value"),
+-            label=m.get("label", "")
++            label=m.get("label", ""),
+         )
+         for m in req.mutations
+     ]
+ 
+-    # Build a snapshot from the current ontology state
+-    snapshot = _build_snapshot(req.inputs)
++    snapshot = await _build_snapshot()
+ 
+     try:
+-        result = simulate_scenario(snapshot, mutations, req.workflow_name, req.inputs)
++        result = await simulate_scenario(
++            snapshot, mutations, req.workflow_name, req.inputs, client_id=req.client_id
++        )
+         return {
+             "baseline": result.baseline,
+             "scenario": result.scenario,
+             "diff": result.diff,
+-            "mutations": [{"type": m.mutation_type, "target": m.target_id, "label": m.label} for m in mutations]
++            "mutations": [{"type": m.mutation_type, "target": m.target_id, "label": m.label} for m in mutations],
+         }
++    except ValueError as e:
++        raise HTTPException(status_code=404, detail=str(e))
+     except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+-def _build_snapshot(inputs: dict) -> dict:
+-    """Build an ontology snapshot from current DB state."""
+-    snapshot = {"vendors": [], "routes": [], "contracts": [], "shipments": []}
+-    try:
+-        vendors = supabase.table("ontology_vendors").select("*").limit(100).execute()
+-        if vendors.data:
+-            snapshot["vendors"] = vendors.data
+-    except Exception:
+-        pass
+-    try:
+-        routes = supabase.table("ontology_routes").select("*").limit(100).execute()
+-        if routes.data:
+-            snapshot["routes"] = routes.data
+-    except Exception:
+-        pass
+-    try:
+-        contracts = supabase.table("ontology_contracts").select("*").limit(100).execute()
+-        if contracts.data:
+-            snapshot["contracts"] = contracts.data
+-    except Exception:
+-        pass
++async def _build_snapshot() -> dict:
++    """Build a generic ontology snapshot from every registered object type
++    with backing collection data (vendors, routes, contracts, ...).
++
++    Unlike the previous version, this doesn't hardcode which object
++    types exist — it reads whatever is in ontology_objects and builds a
++    snapshot keyed by a lowercase-plural convention (Vendor -> "vendors")
++    so decision_engine/candidates.py's snapshot_key lookup keeps working
++    for the seeded reroute_shipment example. New object types are picked
++    up automatically without touching this function.
++    """
++    object_types = await list_object_types()
++    snapshot: dict[str, list] = {}
++
++    for obj in object_types:
++        object_type = obj["object_type"]
++        collection_key = object_type.lower() + "s"  # Vendor -> vendors, Route -> routes
++        try:
++            result = await query_object(object_type, limit=200)
++            snapshot[collection_key] = result.get("data", [])
++        except OntologyError:
++            snapshot[collection_key] = []
++
+     return snapshot
+ 
+ 
+@@ -217,83 +287,87 @@ def _build_snapshot(inputs: dict) -> dict:
+ 
+ @router.post("/ontology/query")
+ async def query_ontology(req: OntologyQueryRequest):
+-    """Query the ontology for typed objects with expanded relationships."""
+-    try:
+-        table_map = {
+-            "Shipment": "ontology_shipments",
+-            "Route": "ontology_routes",
+-            "Vendor": "ontology_vendors",
+-            "Contract": "ontology_contracts",
+-            "CostRecord": "ontology_cost_records",
+-            "DelayEvent": "ontology_delay_events",
+-            "CostCenter": "ontology_cost_centers",
+-        }
+-
+-        table = table_map.get(req.object_type)
+-        if not table:
+-            raise HTTPException(status_code=400, detail=f"Unknown object type: {req.object_type}")
+-
+-        query = supabase.table(table).select("*")
+-
+-        for key, value in req.filters.items():
+-            query = query.eq(key, value)
+-
+-        resp = query.limit(req.limit).execute()
+-        data = resp.data or []
+-
+-        # Expand relationships if requested
+-        expansions = {}
+-        for rel in req.expand:
+-            parts = rel.split(".")
+-            expansions[parts[0]] = parts
+-
+-        # Simple expansion: for each item, fetch related objects
+-        result = []
+-        for item in data:
+-            enriched = dict(item)
+-            for rel_name, rel_path in expansions.items():
+-                if rel_name == "current_route" and item.get("current_route_id"):
+-                    route = supabase.table("ontology_routes").select("*").eq("id", item["current_route_id"]).execute()
+-                    enriched["current_route"] = route.data[0] if route.data else None
+-                elif rel_name == "carrier" and item.get("carrier_vendor_id"):
+-                    vendor = supabase.table("ontology_vendors").select("*").eq("id", item["carrier_vendor_id"]).execute()
+-                    enriched["carrier"] = vendor.data[0] if vendor.data else None
+-                elif rel_name == "governing_contract" and item.get("governing_contract_id"):
+-                    contract = supabase.table("ontology_contracts").select("*").eq("id", item["governing_contract_id"]).execute()
+-                    enriched["governing_contract"] = contract.data[0] if contract.data else None
+-            result.append(enriched)
++    """Query the ontology for typed objects with expanded relationships.
+ 
++    Works for ANY registered object type — driven entirely by
++    ontology_objects / ontology_relationships. No object type name is
++    hardcoded here; unknown object types return a 400, everything else
++    is handled identically regardless of domain.
++    """
++    try:
++        result = await query_object(
++            req.object_type,
++            filters=req.filters,
++            expand=req.expand,
++            limit=req.limit,
++            client_id=req.client_id,
++        )
+         return {
+-            "object": req.object_type,
+-            "data": result,
+-            "count": len(result),
++            **result,
+             "data_freshness": {
+-                "source": table,
+-                "queried_at": datetime.now(timezone.utc).isoformat()
+-            }
++                "source": result["source_table"],
++                "queried_at": datetime.now(timezone.utc).isoformat(),
++            },
+         }
+-    except HTTPException:
+-        raise
++    except OntologyError as e:
++        raise HTTPException(status_code=400, detail=str(e))
+     except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+ @router.get("/ontology/objects")
+-async def list_ontology_objects():
++async def list_ontology_objects(client_id: Optional[str] = None):
+     """List all registered ontology object types."""
+     try:
+-        resp = supabase.table("ontology_objects").select("*").execute()
+-        return {"data": resp.data or []}
++        return {"data": await list_object_types(client_id=client_id)}
++    except Exception as e:
++        raise HTTPException(status_code=500, detail=str(e))
++
++
++@router.post("/ontology/objects")
++async def create_ontology_object(req: RegisterObjectTypeRequest):
++    """Register a new object type.
++
++    This is the whole mechanism for onboarding a new client's domain
++    model or extending an existing one — no code change required, only
++    this call plus the backing table (or view) existing in the database.
++    """
++    try:
++        row = await register_object_type(
++            object_type=req.object_type,
++            source_table=req.source_table,
++            primary_key_column=req.primary_key_column,
++            properties=req.properties,
++            source_kind=req.source_kind,
++            default_filter=req.default_filter,
++            client_id=req.client_id,
++        )
++        return {"data": row}
+     except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+ @router.get("/ontology/relationships")
+-async def list_ontology_relationships():
++async def list_ontology_relationships(client_id: Optional[str] = None):
+     """List all registered ontology relationships."""
+     try:
+-        resp = supabase.table("ontology_relationships").select("*").execute()
+-        return {"data": resp.data or []}
++        return {"data": await list_relationships(client_id=client_id)}
++    except Exception as e:
++        raise HTTPException(status_code=500, detail=str(e))
++
++
++@router.post("/ontology/relationships")
++async def create_ontology_relationship(req: RegisterRelationshipRequest):
++    """Register a new relationship between two object types."""
++    try:
++        row = await register_relationship(
++            from_object=req.from_object,
++            to_object=req.to_object,
++            relationship_name=req.relationship_name,
++            join_definition=req.join_definition,
++            client_id=req.client_id,
++        )
++        return {"data": row}
+     except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+ 
+@@ -301,37 +375,32 @@ async def list_ontology_relationships():
+ # ─── Admin Endpoints ───────────────────────────────────────────────
+ 
+ @router.get("/admin/data-sources")
+-async def data_source_health():
+-    """Get health status of all data sources."""
++async def data_source_health(client_id: Optional[str] = None):
++    """Get health status of all data sources — driven by whatever object
++    types are currently registered, not a hardcoded table list."""
++    supabase = _get_supabase()
+     sources = []
+-    tables = [
+-        ("ontology_shipments", "Shipment Tracking"),
+-        ("ontology_routes", "Route Data"),
+-        ("ontology_vendors", "Vendor Registry"),
+-        ("ontology_contracts", "Contract Management"),
+-        ("ontology_cost_records", "Cost Data"),
+-        ("ontology_delay_events", "Delay Tracking"),
+-        ("ontology_cost_centers", "Cost Centers"),
+-    ]
+ 
+-    for table, label in tables:
++    object_types = await list_object_types(client_id=client_id)
++    for obj in object_types:
++        table = obj["source_table"]
+         try:
+             resp = supabase.table(table).select("count", count="exact").limit(0).execute()
+-            count = resp.count if hasattr(resp, 'count') else 0
++            count = resp.count if hasattr(resp, "count") else 0
+             sources.append({
+-                "name": label,
++                "name": obj["object_type"],
+                 "table": table,
+                 "status": "live" if count > 0 else "empty",
+                 "record_count": count,
+-                "last_sync": datetime.now(timezone.utc).isoformat()
++                "last_sync": datetime.now(timezone.utc).isoformat(),
+             })
+         except Exception as e:
+             sources.append({
+-                "name": label,
++                "name": obj["object_type"],
+                 "table": table,
+                 "status": "error",
+                 "error": str(e),
+-                "record_count": 0
++                "record_count": 0,
+             })
+ 
+     return {"sources": sources}
+diff --git a/dawn-api/tools/decision_workflow.py b/dawn-api/tools/decision_workflow.py
+index 57b2e86..ee6a895 100644
+--- a/dawn-api/tools/decision_workflow.py
++++ b/dawn-api/tools/decision_workflow.py
+@@ -5,6 +5,10 @@ The LLM's job is limited to:
+   1. Parsing the human's ambiguous request into a structured workflow invocation
+   2. Narrating the already-computed results (never inventing numbers)
+   3. Flagging anomalies the structured engine wouldn't catch
++
++Workflows themselves are data (ontology_workflows table), not Python
++files — see decision_engine/registry.py. This tool never needs to know
++what workflows exist; it just passes the name through.
+ """
+ 
+ from tools.base import BaseTool, ToolResult
+@@ -19,7 +23,7 @@ class DecisionWorkflowTool(BaseTool):
+         "properties": {
+             "workflow_name": {
+                 "type": "string",
+-                "description": "Name of the workflow (e.g., 'reroute_shipment')"
++                "description": "Name of the workflow (e.g., 'reroute_shipment'). Call decision_workflow_list first if unsure what's available."
+             },
+             "inputs": {
+                 "type": "object",
+@@ -30,6 +34,11 @@ class DecisionWorkflowTool(BaseTool):
+                 "type": "string",
+                 "description": "Who/what triggered this workflow",
+                 "default": "agent"
++            },
++            "client_id": {
++                "type": "string",
++                "description": "Client/tenant scope, if applicable. Omit for the shared/default tenant.",
++                "default": None
+             }
+         },
+         "required": ["workflow_name"]
+@@ -37,9 +46,10 @@ class DecisionWorkflowTool(BaseTool):
+ 
+     async def run(self, **kwargs) -> ToolResult:
+         try:
+-            result = run_workflow(
++            result = await run_workflow(
+                 kwargs.get("workflow_name", ""),
+-                kwargs.get("inputs", {})
++                kwargs.get("inputs", {}),
++                client_id=kwargs.get("client_id"),
+             )
+             result["triggered_by"] = kwargs.get("triggered_by", "agent")
+             return ToolResult(success=True, output=result)
+@@ -52,4 +62,36 @@ class DecisionWorkflowTool(BaseTool):
+                 "explanation": f"Workflow not found or failed: {str(e)}"
+             })
+         except Exception as e:
+-            return ToolResult(success=False, error=str(e))
+\ No newline at end of file
++            return ToolResult(success=False, error=str(e))
++
++
++class DecisionWorkflowListTool(BaseTool):
++    name = "decision_workflow_list"
++    description = "List available decision workflows and what inputs each expects. Call this before decision_workflow_run if you don't already know the workflow's name and input schema."
++    input_schema = {
++        "type": "object",
++        "properties": {
++            "client_id": {
++                "type": "string",
++                "description": "Client/tenant scope, if applicable. Omit for the shared/default tenant.",
++                "default": None
++            }
++        },
++        "required": []
++    }
++
++    async def run(self, **kwargs) -> ToolResult:
++        from decision_engine.registry import list_workflows
++        try:
++            workflows = await list_workflows(client_id=kwargs.get("client_id"))
++            return ToolResult(success=True, output=[
++                {
++                    "name": wf.name,
++                    "description": wf.description,
++                    "input_schema": wf.input_schema,
++                    "requires_approval": wf.requires_approval,
++                }
++                for wf in workflows
++            ])
++        except Exception as e:
++            return ToolResult(success=False, error=str(e))
+diff --git a/dawn-api/tools/ontology.py b/dawn-api/tools/ontology.py
+index 24af68b..9154f0e 100644
+--- a/dawn-api/tools/ontology.py
++++ b/dawn-api/tools/ontology.py
+@@ -2,21 +2,31 @@
+ 
+ This tool replaces raw SQL queries for business objects. It returns
+ typed object graphs with expanded relationships, not flat tables.
++
++Calls decision_engine/ontology_engine.py directly — that module is the
++single source of truth for what object types and relationships exist
++(driven by the ontology_objects / ontology_relationships tables), so
++this tool works identically for any registered domain, not just the
++seeded Shipment/Route/Vendor example.
+ """
+ 
+ from tools.base import BaseTool, ToolResult
+-from routers.decision_intelligence import OntologyQueryRequest, query_ontology
++from decision_engine.ontology_engine import query_object, list_object_types, OntologyError
+ 
+ 
+ class OntologyQueryTool(BaseTool):
+     name = "ontology_query"
+-    description = "Query the ontology for typed business objects (Shipments, Routes, Vendors, Contracts, etc.)"
++    description = (
++        "Query the ontology for typed business objects. Call ontology_list_objects first "
++        "if you don't know what object types are currently registered — they vary by "
++        "deployment and are never fixed in advance."
++    )
+     input_schema = {
+         "type": "object",
+         "properties": {
+             "object": {
+                 "type": "string",
+-                "description": "Object type: Shipment, Route, Vendor, Contract, CostRecord, DelayEvent, or CostCenter"
++                "description": "Registered object type name, e.g. 'Shipment', 'Route'. Call ontology_list_objects to see what's available."
+             },
+             "filters": {
+                 "type": "object",
+@@ -26,13 +36,18 @@ class OntologyQueryTool(BaseTool):
+             "expand": {
+                 "type": "array",
+                 "items": {"type": "string"},
+-                "description": "Relationship paths to expand (e.g., [\"current_route\", \"carrier\"])",
++                "description": "Relationship names to expand (e.g., [\"current_route\", \"carrier\"])",
+                 "default": []
+             },
+             "limit": {
+                 "type": "integer",
+                 "description": "Max results to return",
+                 "default": 20
++            },
++            "client_id": {
++                "type": "string",
++                "description": "Client/tenant scope, if applicable. Omit for the shared/default tenant.",
++                "default": None
+             }
+         },
+         "required": ["object"]
+@@ -40,13 +55,38 @@ class OntologyQueryTool(BaseTool):
+ 
+     async def run(self, **kwargs) -> ToolResult:
+         try:
+-            req = OntologyQueryRequest(
++            result = await query_object(
+                 object_type=kwargs.get("object", ""),
+                 filters=kwargs.get("filters", {}),
+                 expand=kwargs.get("expand", []),
+-                limit=kwargs.get("limit", 20)
++                limit=kwargs.get("limit", 20),
++                client_id=kwargs.get("client_id"),
+             )
+-            result = await query_ontology(req)
+             return ToolResult(success=True, output=result)
++        except OntologyError as e:
++            return ToolResult(success=False, error=str(e))
++        except Exception as e:
++            return ToolResult(success=False, error=str(e))
++
++
++class OntologyListObjectsTool(BaseTool):
++    name = "ontology_list_objects"
++    description = "List all registered ontology object types and their properties. Call this before ontology_query if you don't already know what's available."
++    input_schema = {
++        "type": "object",
++        "properties": {
++            "client_id": {
++                "type": "string",
++                "description": "Client/tenant scope, if applicable. Omit for the shared/default tenant.",
++                "default": None
++            }
++        },
++        "required": []
++    }
++
++    async def run(self, **kwargs) -> ToolResult:
++        try:
++            objects = await list_object_types(client_id=kwargs.get("client_id"))
++            return ToolResult(success=True, output=objects)
+         except Exception as e:
+-            return ToolResult(success=False, error=str(e))
+\ No newline at end of file
++            return ToolResult(success=False, error=str(e))
+diff --git a/dawn-api/tools/registry.py b/dawn-api/tools/registry.py
+index a73a175..d9bdb5c 100644
+--- a/dawn-api/tools/registry.py
++++ b/dawn-api/tools/registry.py
+@@ -120,16 +120,28 @@ def _register_default_tools(registry: ToolRegistry) -> None:
+     except Exception as e:
+         logger.error(f"Failed to register PentestTool: {e}")
+ 
+-    # v32.0 — Decision Intelligence tools
++    # Knowledge graph tool — was defined but never registered, so agent
++    # mode had no path to the same graph/memory retrieval chat mode uses
++    # automatically via build_context(). See tools/knowledge_graph.py.
+     try:
+-        from tools.decision_workflow import DecisionWorkflowTool
++        from tools.knowledge_graph import KnowledgeGraphTool
++        registry.register(KnowledgeGraphTool())
++    except Exception as e:
++        logger.error(f"Failed to register KnowledgeGraphTool: {e}")
++
++    # v32.0 — Decision Intelligence tools (rebuilt on the generic,
++    # data-driven ontology/workflow engine — see decision_engine/)
++    try:
++        from tools.decision_workflow import DecisionWorkflowTool, DecisionWorkflowListTool
+         registry.register(DecisionWorkflowTool())
++        registry.register(DecisionWorkflowListTool())
+     except Exception as e:
+         logger.error(f"Failed to register DecisionWorkflowTool: {e}")
+ 
+     try:
+-        from tools.ontology import OntologyQueryTool
++        from tools.ontology import OntologyQueryTool, OntologyListObjectsTool
+         registry.register(OntologyQueryTool())
++        registry.register(OntologyListObjectsTool())
+     except Exception as e:
+         logger.error(f"Failed to register OntologyQueryTool: {e}")
+ 
