@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { GitBranch, Plus, RefreshCw, X } from "lucide-react";
+import AppShell from "@/components/layout/AppShell";
 import {
   listOntologyObjects,
   listOntologyRelationships,
@@ -15,6 +17,7 @@ export default function OntologyPage() {
   const [relationships, setRelationships] = useState<OntologyRelationship[]>([]);
   const [loading, setLoading] = useState(true);
   const [queryResult, setQueryResult] = useState<any>(null);
+  const [queryLoading, setQueryLoading] = useState(false);
   const [queryObject, setQueryObject] = useState("Shipment");
   const [queryFilter, setQueryFilter] = useState("");
   const [queryExpand, setQueryExpand] = useState("");
@@ -48,7 +51,7 @@ export default function OntologyPage() {
   };
 
   const runQuery = async () => {
-    setLoading(true);
+    setQueryLoading(true);
     setQueryError(null);
     try {
       const filters: Record<string, string> = {};
@@ -66,7 +69,7 @@ export default function OntologyPage() {
       setQueryError(err.message || "Query failed");
       setQueryResult(null);
     } finally {
-      setLoading(false);
+      setQueryLoading(false);
     }
   };
 
@@ -100,192 +103,203 @@ export default function OntologyPage() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Ontology Manager</h1>
-
-      {/* Object Types */}
-      <section className="mb-8">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-            Registered Object Types ({objects.length})
-          </h2>
-          <button
-            onClick={() => setShowRegisterForm((v) => !v)}
-            className="px-3 py-1.5 text-sm font-medium text-blue-700 dark:text-blue-400 border border-blue-300 dark:border-blue-700 rounded-md hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
-          >
-            {showRegisterForm ? "Cancel" : "+ Register object type"}
-          </button>
-        </div>
-
-        {showRegisterForm && (
-          <form
-            onSubmit={handleRegisterObject}
-            className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 mb-4 bg-gray-50 dark:bg-gray-900 space-y-3"
-          >
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-              Registers a new object type against an existing table. This is a data change only —
-              no code deploy needed to make the object queryable via ontology_query.
-            </p>
-            <div className="grid sm:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                  Object type name
-                </label>
-                <input
-                  type="text"
-                  value={newObjectType}
-                  onChange={(e) => setNewObjectType(e.target.value)}
-                  placeholder="e.g. Client"
-                  className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                  Backing table
-                </label>
-                <input
-                  type="text"
-                  value={newSourceTable}
-                  onChange={(e) => setNewSourceTable(e.target.value)}
-                  placeholder="e.g. ontology_clients"
-                  className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                  Primary key column
-                </label>
-                <input
-                  type="text"
-                  value={newPrimaryKey}
-                  onChange={(e) => setNewPrimaryKey(e.target.value)}
-                  className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                />
-              </div>
-            </div>
-            {registerError && <p className="text-sm text-red-600 dark:text-red-400">{registerError}</p>}
+    <AppShell>
+      <div className="flex flex-col h-full">
+        <header className="flex items-center justify-between px-6 py-3 border-b border-rim flex-shrink-0">
+          <div>
+            <h1 className="text-text-primary font-semibold text-sm tracking-tight">Ontology</h1>
+            <p className="text-text-muted text-2xs">Registered object types, relationships, and live queries</p>
+          </div>
+          <div className="flex items-center gap-2">
             <button
-              type="submit"
-              disabled={registering}
-              className="px-4 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors disabled:opacity-50"
+              onClick={() => setShowRegisterForm((v) => !v)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-dawn/90 hover:bg-dawn text-white text-xs font-medium transition-all"
             >
-              {registering ? "Registering..." : "Register"}
+              <Plus size={12} /> Register object type
             </button>
-          </form>
-        )}
-
-        <div className="grid gap-3">
-          {objects.map((obj) => (
-            <div
-              key={obj.object_type}
-              className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-white dark:bg-gray-800"
+            <button
+              onClick={loadAll}
+              className="w-8 h-8 flex items-center justify-center rounded-lg text-text-muted hover:text-dawn hover:bg-dawn/10 transition-all"
             >
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-bold text-gray-900 dark:text-white">{obj.object_type}</span>
-                <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
-                  {obj.source_table}
-                  {obj.client_id && (
-                    <span className="ml-2 px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400 font-sans">
-                      client-scoped
-                    </span>
-                  )}
-                </span>
+              <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+            </button>
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
+          {showRegisterForm && (
+            <div className="bg-surface border border-rim rounded-xl p-4 max-w-2xl">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-text-primary text-xs font-semibold">Register a new object type</h2>
+                <button onClick={() => setShowRegisterForm(false)} className="text-text-muted hover:text-text-primary">
+                  <X size={14} />
+                </button>
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {Object.entries(obj.properties || {}).map(([prop, meta]: [string, any]) => (
-                  <span
-                    key={prop}
-                    className={`text-xs px-2 py-0.5 rounded ${
-                      meta.decision_relevant
-                        ? "bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400"
-                        : "bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400"
-                    }`}
-                  >
-                    {prop}
-                    {meta.decision_relevant && " ⚡"}
-                  </span>
-                ))}
-                {Object.keys(obj.properties || {}).length === 0 && (
-                  <span className="text-xs text-gray-400 dark:text-gray-500 italic">
-                    No property metadata registered yet
-                  </span>
-                )}
+              <p className="text-text-muted text-2xs mb-3">
+                A data change only — no deploy needed to make the object queryable via ontology_query.
+              </p>
+              <form onSubmit={handleRegisterObject} className="space-y-3">
+                <div className="grid sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-text-muted text-2xs font-medium block mb-1">Object type name</label>
+                    <input
+                      value={newObjectType}
+                      onChange={(e) => setNewObjectType(e.target.value)}
+                      placeholder="e.g. Client"
+                      className="w-full bg-surface border border-rim rounded-lg px-3 py-2 text-text-primary text-xs font-mono outline-none focus:border-dawn/50"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-text-muted text-2xs font-medium block mb-1">Backing table</label>
+                    <input
+                      value={newSourceTable}
+                      onChange={(e) => setNewSourceTable(e.target.value)}
+                      placeholder="e.g. ontology_clients"
+                      className="w-full bg-surface border border-rim rounded-lg px-3 py-2 text-text-primary text-xs font-mono outline-none focus:border-dawn/50"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-text-muted text-2xs font-medium block mb-1">Primary key column</label>
+                    <input
+                      value={newPrimaryKey}
+                      onChange={(e) => setNewPrimaryKey(e.target.value)}
+                      className="w-full bg-surface border border-rim rounded-lg px-3 py-2 text-text-primary text-xs font-mono outline-none focus:border-dawn/50"
+                    />
+                  </div>
+                </div>
+                {registerError && <p className="text-red-600 text-2xs">{registerError}</p>}
+                <button
+                  type="submit"
+                  disabled={registering}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-dawn/90 hover:bg-dawn text-white text-xs font-medium transition-all disabled:opacity-30"
+                >
+                  {registering ? "Registering..." : "Register"}
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* Object Types */}
+          <section>
+            <h2 className="text-text-muted text-2xs font-medium uppercase tracking-wider mb-3">
+              Registered Object Types ({objects.length})
+            </h2>
+            <div className="grid gap-3">
+              {objects.map((obj) => (
+                <div key={obj.object_type} className="bg-surface border border-rim rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-dawn/10 border border-dawn/20 flex items-center justify-center flex-shrink-0">
+                        <GitBranch size={12} className="text-dawn" />
+                      </div>
+                      <span className="text-text-primary text-sm font-semibold">{obj.object_type}</span>
+                      {obj.client_id && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-mono bg-ember/5 text-ember border border-ember/15">
+                          client-scoped
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-text-muted text-2xs font-mono">{obj.source_table}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.entries(obj.properties || {}).map(([prop, meta]: [string, any]) => (
+                      <span
+                        key={prop}
+                        className={`text-2xs px-2 py-0.5 rounded font-mono ${
+                          meta.decision_relevant
+                            ? "bg-dawn/10 text-dawn border border-dawn/15"
+                            : "bg-elevated text-text-secondary border border-rim"
+                        }`}
+                      >
+                        {prop}
+                        {meta.decision_relevant && " ⚡"}
+                      </span>
+                    ))}
+                    {Object.keys(obj.properties || {}).length === 0 && (
+                      <span className="text-text-muted text-2xs italic">No property metadata registered yet</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {objects.length === 0 && !loading && (
+                <p className="text-text-muted text-xs">No object types registered yet.</p>
+              )}
+            </div>
+          </section>
+
+          {/* Relationships */}
+          <section>
+            <h2 className="text-text-muted text-2xs font-medium uppercase tracking-wider mb-3">
+              Relationships ({relationships.length})
+            </h2>
+            <div className="grid gap-2">
+              {relationships.map((rel) => (
+                <div
+                  key={rel.id}
+                  className="bg-surface border border-rim rounded-lg px-4 py-2 text-xs flex items-center gap-2"
+                >
+                  <span className="text-text-primary font-medium">{rel.from_object}</span>
+                  <span className="text-text-muted">→</span>
+                  <span className="text-text-primary font-medium">{rel.to_object}</span>
+                  <span className="text-text-muted font-mono text-2xs">({rel.relationship_name})</span>
+                </div>
+              ))}
+              {relationships.length === 0 && !loading && (
+                <p className="text-text-muted text-xs">No relationships registered yet.</p>
+              )}
+            </div>
+          </section>
+
+          {/* Query Preview */}
+          <section className="pb-6">
+            <h2 className="text-text-muted text-2xs font-medium uppercase tracking-wider mb-3">
+              Preview Ontology Query
+            </h2>
+            <div className="bg-surface border border-rim rounded-xl p-4">
+              <div className="flex flex-wrap gap-3 mb-3">
+                <select
+                  value={queryObject}
+                  onChange={(e) => setQueryObject(e.target.value)}
+                  className="bg-surface border border-rim rounded-lg px-3 py-2 text-text-primary text-xs outline-none focus:border-dawn/50"
+                >
+                  {objects.map((obj) => (
+                    <option key={obj.object_type} value={obj.object_type}>
+                      {obj.object_type}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  value={queryFilter}
+                  onChange={(e) => setQueryFilter(e.target.value)}
+                  placeholder="Filter (e.g., status=in_transit)"
+                  className="flex-1 min-w-[180px] bg-surface border border-rim rounded-lg px-3 py-2 text-text-primary text-xs font-mono outline-none focus:border-dawn/50"
+                />
+                <input
+                  value={queryExpand}
+                  onChange={(e) => setQueryExpand(e.target.value)}
+                  placeholder="Expand (e.g., current_route, carrier)"
+                  className="flex-1 min-w-[180px] bg-surface border border-rim rounded-lg px-3 py-2 text-text-primary text-xs font-mono outline-none focus:border-dawn/50"
+                />
+                <button
+                  onClick={runQuery}
+                  disabled={queryLoading}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-dawn/90 hover:bg-dawn text-white text-xs font-medium transition-all disabled:opacity-30"
+                >
+                  {queryLoading ? "Running..." : "Run Query"}
+                </button>
               </div>
+
+              {queryError && <p className="text-red-600 text-2xs mb-2">{queryError}</p>}
+
+              {queryResult && (
+                <pre className="bg-elevated border border-rim rounded-lg p-3 text-2xs font-mono overflow-auto max-h-96 text-text-secondary">
+                  {JSON.stringify(queryResult, null, 2)}
+                </pre>
+              )}
             </div>
-          ))}
+          </section>
         </div>
-      </section>
-
-      {/* Relationships */}
-      <section className="mb-8">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
-          Relationships ({relationships.length})
-        </h2>
-        <div className="grid gap-2">
-          {relationships.map((rel) => (
-            <div
-              key={rel.id}
-              className="border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-2 bg-white dark:bg-gray-800 text-sm"
-            >
-              <span className="font-medium text-gray-900 dark:text-white">{rel.from_object}</span>
-              <span className="text-gray-500 dark:text-gray-400 mx-2">→</span>
-              <span className="font-medium text-gray-900 dark:text-white">{rel.to_object}</span>
-              <span className="text-gray-400 dark:text-gray-500 ml-2">({rel.relationship_name})</span>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Query Preview */}
-      <section>
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
-          Preview Graph Query
-        </h2>
-        <div className="flex flex-wrap gap-3 mb-4">
-          <select
-            value={queryObject}
-            onChange={(e) => setQueryObject(e.target.value)}
-            className="text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-          >
-            {objects.map((obj) => (
-              <option key={obj.object_type} value={obj.object_type}>
-                {obj.object_type}
-              </option>
-            ))}
-          </select>
-          <input
-            type="text"
-            value={queryFilter}
-            onChange={(e) => setQueryFilter(e.target.value)}
-            placeholder="Filter (e.g., status=in_transit)"
-            className="text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white flex-1 min-w-[200px]"
-          />
-          <input
-            type="text"
-            value={queryExpand}
-            onChange={(e) => setQueryExpand(e.target.value)}
-            placeholder="Expand (e.g., current_route, carrier)"
-            className="text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white flex-1 min-w-[200px]"
-          />
-          <button
-            onClick={runQuery}
-            disabled={loading}
-            className="px-4 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors disabled:opacity-50"
-          >
-            {loading ? "Running..." : "Run Query"}
-          </button>
-        </div>
-
-        {queryError && (
-          <p className="text-sm text-red-600 dark:text-red-400 mb-3">{queryError}</p>
-        )}
-
-        {queryResult && (
-          <pre className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-gray-50 dark:bg-gray-900 text-xs overflow-auto max-h-96 text-gray-800 dark:text-gray-200">
-            {JSON.stringify(queryResult, null, 2)}
-          </pre>
-        )}
-      </section>
-    </div>
+      </div>
+    </AppShell>
   );
 }

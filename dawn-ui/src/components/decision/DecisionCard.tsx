@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { Star, Check, X, AlertTriangle } from "lucide-react";
 
 interface ConstraintResult {
   name: string;
@@ -32,9 +33,9 @@ interface DecisionCardProps {
 
 // Derives a short human-readable summary from constraint results when the
 // backend doesn't provide a precomputed tradeoff_summary string — the
-// rewritten, data-driven constraint engine returns per-constraint
-// explanations instead of a single canned summary, so this stitches one
-// together client-side from the weighted (soft) constraints.
+// data-driven constraint engine returns per-constraint explanations
+// instead of a single canned summary, so this stitches one together
+// client-side from the weighted (soft) constraints.
 function deriveTradeoffSummary(results: ConstraintResult[]): string {
   const weighted = results.filter((r) => r.weight != null && r.score != null);
   if (weighted.length === 0) return "";
@@ -83,120 +84,98 @@ export default function DecisionCard({
 
   const formatPercent = (val: number) => `${(val * 100).toFixed(0)}%`;
 
+  const recommendedSummary =
+    recommended &&
+    (recommended.tradeoff_summary ||
+      deriveTradeoffSummary(
+        ranked_options.find((o) => o.option === recommended.option)?.constraint_results || []
+      ));
+
   return (
-    <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden shadow-sm">
+    <div className="bg-surface border border-rim rounded-xl overflow-hidden">
       {/* Header */}
-      <div className="bg-blue-50 dark:bg-blue-900/20 px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+      <div className="bg-dawn/5 px-4 py-3 border-b border-rim">
         <div className="flex items-center justify-between">
           <div>
-            <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wide">
-              Decision
-            </span>
-            <h3 className="text-sm font-bold text-gray-900 dark:text-white mt-0.5">
+            <span className="text-dawn text-2xs font-semibold uppercase tracking-wider">Decision</span>
+            <h3 className="text-text-primary text-sm font-semibold mt-0.5">
               {workflow_name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
             </h3>
           </div>
           {decision_log_id && (
-            <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
-              #{decision_log_id.slice(0, 8)}
-            </span>
+            <span className="text-text-muted text-2xs font-mono">#{decision_log_id.slice(0, 8)}</span>
           )}
         </div>
       </div>
 
       {/* Recommended Option */}
       {recommended && (
-        <div className="px-4 py-3 bg-green-50 dark:bg-green-900/10 border-b border-gray-200 dark:border-gray-700">
+        <div className="px-4 py-3 border-b border-rim">
           <div className="flex items-center gap-1 mb-2">
-            <span className="text-yellow-500 text-sm">⭐</span>
-            <span className="text-xs font-semibold text-green-700 dark:text-green-400 uppercase">
-              Recommended
-            </span>
+            <Star size={12} className="text-ember fill-ember" />
+            <span className="text-ember text-2xs font-semibold uppercase tracking-wider">Recommended</span>
           </div>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-            <span className="font-medium text-gray-900 dark:text-white">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+            <span className="text-text-primary font-medium">
               {recommended.option.route_name || recommended.option.name || "Option"}
             </span>
             {recommended.option.carrier_name && (
-              <span className="text-gray-600 dark:text-gray-400">
-                Carrier: {recommended.option.carrier_name}
-              </span>
+              <span className="text-text-secondary">Carrier: {recommended.option.carrier_name}</span>
             )}
             {recommended.option.transit_days && (
-              <span className="text-gray-600 dark:text-gray-400">
-                Transit: {recommended.option.transit_days} days
-              </span>
+              <span className="text-text-secondary">Transit: {recommended.option.transit_days} days</span>
             )}
             {recommended.option.projected_cost && (
-              <span className="text-gray-600 dark:text-gray-400">
-                Cost: {formatCurrency(recommended.option.projected_cost)}
-              </span>
+              <span className="text-text-secondary">Cost: {formatCurrency(recommended.option.projected_cost)}</span>
             )}
             {recommended.option.on_time_rate && (
-              <span className="text-gray-600 dark:text-gray-400">
-                On-time: {formatPercent(recommended.option.on_time_rate)}
-              </span>
+              <span className="text-text-secondary">On-time: {formatPercent(recommended.option.on_time_rate)}</span>
             )}
           </div>
-          <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+          <div className="mt-1 text-text-muted text-2xs">
             Score: {recommended.score.toFixed(2)}
-            {(recommended.tradeoff_summary ||
-              deriveTradeoffSummary(ranked_options.find((o) => o.option === recommended.option)?.constraint_results || [])) && (
-              <> — {recommended.tradeoff_summary || deriveTradeoffSummary(ranked_options.find((o) => o.option === recommended.option)?.constraint_results || [])}</>
-            )}
+            {recommendedSummary && <> — {recommendedSummary}</>}
           </div>
         </div>
       )}
 
       {/* Alternatives */}
       {ranked_options.length > 1 && (
-        <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-700">
-          <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">
-            Alternatives
-          </span>
+        <div className="px-4 py-2 border-b border-rim">
+          <span className="text-text-muted text-2xs font-semibold uppercase tracking-wider">Alternatives</span>
           {ranked_options.slice(1).map((opt, idx) => (
             <div
               key={idx}
-              className={`mt-2 py-2 px-3 rounded text-sm ${
-                !opt.hard_constraints_passed
-                  ? "bg-red-50 dark:bg-red-900/10 opacity-60"
-                  : "bg-gray-50 dark:bg-gray-800/50"
+              className={`mt-2 py-2 px-3 rounded-lg text-xs ${
+                !opt.hard_constraints_passed ? "bg-red-500/5 opacity-60" : "bg-elevated/60"
               }`}
             >
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                <span className="font-medium text-gray-900 dark:text-white">
+                <span className="text-text-primary font-medium">
                   {opt.option.route_name || opt.option.name || `Option ${idx + 2}`}
                 </span>
                 {opt.option.carrier_name && (
-                  <span className="text-gray-600 dark:text-gray-400">
-                    Carrier: {opt.option.carrier_name}
-                  </span>
+                  <span className="text-text-secondary">Carrier: {opt.option.carrier_name}</span>
                 )}
                 {opt.option.transit_days && (
-                  <span className="text-gray-600 dark:text-gray-400">
-                    Transit: {opt.option.transit_days} days
-                  </span>
+                  <span className="text-text-secondary">Transit: {opt.option.transit_days} days</span>
                 )}
                 {opt.option.projected_cost && (
-                  <span className="text-gray-600 dark:text-gray-400">
-                    Cost: {formatCurrency(opt.option.projected_cost)}
-                  </span>
+                  <span className="text-text-secondary">Cost: {formatCurrency(opt.option.projected_cost)}</span>
                 )}
                 {opt.option.on_time_rate && (
-                  <span className="text-gray-600 dark:text-gray-400">
-                    On-time: {formatPercent(opt.option.on_time_rate)}
-                  </span>
+                  <span className="text-text-secondary">On-time: {formatPercent(opt.option.on_time_rate)}</span>
                 )}
               </div>
               {/* Constraint pass/fail indicators */}
-              <div className="mt-1 flex flex-wrap gap-2">
+              <div className="mt-1 flex flex-wrap gap-1.5">
                 {opt.constraint_results.map((cr, ci) => (
                   <span
                     key={ci}
-                    className={`inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded ${
+                    className={`inline-flex items-center gap-0.5 text-2xs px-1.5 py-0.5 rounded font-mono ${
                       cr.passed
-                        ? "text-green-700 dark:text-green-400 bg-green-100 dark:bg-green-900/20"
-                        : "text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-900/20"
+                        ? "text-dawn bg-dawn/10 border border-dawn/15"
+                        : "text-red-700 bg-red-500/10 border border-red-500/15"
                     }`}
                   >
                     {cr.passed ? "✓" : "✗"} {cr.name.replace(/_/g, " ")}
@@ -204,9 +183,7 @@ export default function DecisionCard({
                 ))}
               </div>
               {!opt.hard_constraints_passed && (
-                <div className="mt-1 text-xs text-red-600 dark:text-red-400">
-                  Failed hard constraints — not eligible
-                </div>
+                <div className="mt-1 text-red-600 text-2xs">Failed hard constraints — not eligible</div>
               )}
             </div>
           ))}
@@ -215,55 +192,53 @@ export default function DecisionCard({
 
       {/* LLM Explanation */}
       {explanation && (
-        <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-          <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">
-            DAWN&apos;s Take
-          </span>
-          <p className="mt-1 text-sm text-gray-700 dark:text-gray-300">{explanation}</p>
+        <div className="px-4 py-3 border-b border-rim">
+          <span className="text-text-muted text-2xs font-semibold uppercase tracking-wider">DAWN&apos;s Take</span>
+          <p className="mt-1 text-text-secondary text-xs leading-relaxed">{explanation}</p>
         </div>
       )}
 
       {/* Action Buttons */}
       {requires_approval && !actionTaken && (
-        <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800/50 flex flex-wrap gap-2">
+        <div className="px-4 py-3 bg-elevated/50 flex flex-wrap gap-2">
           <button
             onClick={handleApprove}
-            className="px-4 py-1.5 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-md transition-colors"
+            className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-dawn/90 hover:bg-dawn text-white text-xs font-medium transition-all"
           >
-            Approve
+            <Check size={12} /> Approve
           </button>
           <button
             onClick={() => setShowOverrideInput(!showOverrideInput)}
-            className="px-4 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600 rounded-md transition-colors"
+            className="px-4 py-1.5 rounded-lg bg-surface border border-rim text-text-secondary hover:bg-elevated text-xs font-medium transition-all"
           >
             Choose Alternative
           </button>
           <button
             onClick={handleReject}
-            className="px-4 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600 rounded-md transition-colors"
+            className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-surface border border-rim text-text-secondary hover:bg-elevated text-xs font-medium transition-all"
           >
-            Reject
+            <X size={12} /> Reject
           </button>
         </div>
       )}
 
       {/* Override input */}
       {showOverrideInput && (
-        <div className="px-4 py-3 bg-yellow-50 dark:bg-yellow-900/10 border-t border-gray-200 dark:border-gray-700">
-          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+        <div className="px-4 py-3 bg-amber-500/5 border-t border-amber-500/20">
+          <label className="text-text-secondary text-2xs font-medium block mb-1">
             Reason for override (required):
           </label>
           <textarea
             value={overrideReason}
             onChange={(e) => setOverrideReason(e.target.value)}
-            className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+            className="w-full bg-surface border border-rim rounded-lg px-2 py-1.5 text-text-primary text-xs outline-none focus:border-dawn/50"
             rows={2}
             placeholder="Why are you choosing a different option?"
           />
           <button
             onClick={handleOverride}
             disabled={!overrideReason.trim()}
-            className="mt-2 px-4 py-1.5 text-sm font-medium text-white bg-yellow-600 hover:bg-yellow-700 rounded-md transition-colors disabled:opacity-50"
+            className="mt-2 px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium transition-all disabled:opacity-40"
           >
             Confirm Override
           </button>
@@ -272,10 +247,22 @@ export default function DecisionCard({
 
       {/* Action taken indicator */}
       {actionTaken && (
-        <div className="px-4 py-2 text-sm text-center text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50">
-          {actionTaken === "approved" && "✓ Approved"}
-          {actionTaken === "rejected" && "✗ Rejected"}
-          {actionTaken === "overridden" && "⚠ Overridden"}
+        <div className="px-4 py-2 text-center text-text-muted text-xs bg-elevated/50 flex items-center justify-center gap-1.5">
+          {actionTaken === "approved" && (
+            <>
+              <Check size={12} className="text-dawn" /> Approved
+            </>
+          )}
+          {actionTaken === "rejected" && (
+            <>
+              <X size={12} className="text-red-600" /> Rejected
+            </>
+          )}
+          {actionTaken === "overridden" && (
+            <>
+              <AlertTriangle size={12} className="text-amber-600" /> Overridden
+            </>
+          )}
         </div>
       )}
     </div>

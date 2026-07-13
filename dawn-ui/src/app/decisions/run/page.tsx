@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { PlayCircle } from "lucide-react";
+import AppShell from "@/components/layout/AppShell";
 import {
   listDecisionWorkflows,
   runDecisionWorkflow,
@@ -127,85 +129,87 @@ export default function RunDecisionPage() {
   const selectedWorkflow = workflows.find((w) => w.name === workflowName);
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Run Decision</h1>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
-        Run a decision workflow live against the ontology, review the recommendation, and
-        approve, reject, or override it. This logs an entry to the decision audit trail.
-      </p>
+    <AppShell>
+      <div className="flex flex-col h-full">
+        <header className="flex items-center justify-between px-6 py-3 border-b border-rim flex-shrink-0">
+          <div>
+            <h1 className="text-text-primary font-semibold text-sm tracking-tight">Run Decision</h1>
+            <p className="text-text-muted text-2xs">
+              Run a workflow live, review the recommendation, and approve, reject, or override it
+            </p>
+          </div>
+        </header>
 
-      <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-white dark:bg-gray-800 mb-6 space-y-3">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            Workflow
-          </label>
-          <select
-            value={workflowName}
-            onChange={(e) => handleWorkflowChange(e.target.value)}
-            className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-          >
-            {workflows.length === 0 && <option value="">No workflows registered</option>}
-            {workflows.map((wf) => (
-              <option key={wf.name} value={wf.name}>
-                {wf.name}
-              </option>
-            ))}
-          </select>
-          {selectedWorkflow?.description && (
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{selectedWorkflow.description}</p>
+        <div className="flex-1 overflow-y-auto px-6 py-4 max-w-3xl space-y-4">
+          <div className="bg-surface border border-rim rounded-xl p-4 space-y-3">
+            <div>
+              <label className="text-text-muted text-2xs font-medium block mb-1">Workflow</label>
+              <select
+                value={workflowName}
+                onChange={(e) => handleWorkflowChange(e.target.value)}
+                className="w-full bg-surface border border-rim rounded-lg px-3 py-2 text-text-primary text-xs outline-none focus:border-dawn/50"
+              >
+                {workflows.length === 0 && <option value="">No workflows registered</option>}
+                {workflows.map((wf) => (
+                  <option key={wf.name} value={wf.name}>
+                    {wf.name}
+                  </option>
+                ))}
+              </select>
+              {selectedWorkflow?.description && (
+                <p className="text-text-muted text-2xs mt-1">{selectedWorkflow.description}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="text-text-muted text-2xs font-medium block mb-1">Inputs (JSON)</label>
+              <textarea
+                value={inputsJson}
+                onChange={(e) => setInputsJson(e.target.value)}
+                rows={12}
+                className="w-full bg-elevated border border-rim rounded-lg px-3 py-2 text-text-primary text-2xs font-mono outline-none focus:border-dawn/50"
+              />
+              {inputsError && <p className="text-red-600 text-2xs mt-1">{inputsError}</p>}
+              {selectedWorkflow?.input_schema && Object.keys(selectedWorkflow.input_schema).length > 0 && (
+                <details className="mt-1">
+                  <summary className="text-text-muted text-2xs cursor-pointer hover:text-text-primary transition-colors">
+                    Expected input schema
+                  </summary>
+                  <pre className="text-2xs mt-1 text-text-secondary font-mono">
+                    {JSON.stringify(selectedWorkflow.input_schema, null, 2)}
+                  </pre>
+                </details>
+              )}
+            </div>
+
+            <button
+              onClick={handleRun}
+              disabled={loading || !workflowName}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-dawn/90 hover:bg-dawn text-white text-xs font-medium transition-all disabled:opacity-30"
+            >
+              <PlayCircle size={14} />
+              {loading ? "Running..." : "Run Workflow"}
+            </button>
+            {runError && <p className="text-red-600 text-2xs">{runError}</p>}
+          </div>
+
+          {actionError && <p className="text-red-600 text-2xs">{actionError}</p>}
+
+          {result && (
+            <DecisionCard
+              workflow_name={result.workflow_name}
+              ranked_options={result.ranked_options}
+              recommended={result.recommended}
+              explanation={result.explanation}
+              requires_approval={result.requires_approval}
+              decision_log_id={result.decision_log_id}
+              onApprove={handleApprove}
+              onReject={handleReject}
+              onOverride={handleOverride}
+            />
           )}
         </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            Inputs (JSON)
-          </label>
-          <textarea
-            value={inputsJson}
-            onChange={(e) => setInputsJson(e.target.value)}
-            rows={12}
-            className="w-full text-xs font-mono border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-          />
-          {inputsError && <p className="text-xs text-red-600 dark:text-red-400 mt-1">{inputsError}</p>}
-          {selectedWorkflow?.input_schema && Object.keys(selectedWorkflow.input_schema).length > 0 && (
-            <details className="mt-1">
-              <summary className="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
-                Expected input schema
-              </summary>
-              <pre className="text-xs mt-1 text-gray-600 dark:text-gray-400">
-                {JSON.stringify(selectedWorkflow.input_schema, null, 2)}
-              </pre>
-            </details>
-          )}
-        </div>
-
-        <button
-          onClick={handleRun}
-          disabled={loading || !workflowName}
-          className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors disabled:opacity-50"
-        >
-          {loading ? "Running..." : "Run Workflow"}
-        </button>
-        {runError && <p className="text-sm text-red-600 dark:text-red-400">{runError}</p>}
       </div>
-
-      {actionError && (
-        <p className="text-sm text-red-600 dark:text-red-400 mb-3">{actionError}</p>
-      )}
-
-      {result && (
-        <DecisionCard
-          workflow_name={result.workflow_name}
-          ranked_options={result.ranked_options}
-          recommended={result.recommended}
-          explanation={result.explanation}
-          requires_approval={result.requires_approval}
-          decision_log_id={result.decision_log_id}
-          onApprove={handleApprove}
-          onReject={handleReject}
-          onOverride={handleOverride}
-        />
-      )}
-    </div>
+    </AppShell>
   );
 }
