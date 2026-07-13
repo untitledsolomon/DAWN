@@ -1,0 +1,46 @@
+diff --git a/dawn-api/decision_engine/constraint_interpreter.py b/dawn-api/decision_engine/constraint_interpreter.py
+index 18ead46..5264ebb 100644
+--- a/dawn-api/decision_engine/constraint_interpreter.py
++++ b/dawn-api/decision_engine/constraint_interpreter.py
+@@ -40,16 +40,35 @@ class ConstraintSpecError(Exception):
+ def _resolve_value(value: Any, option: dict, inputs: dict) -> float:
+     """Resolve a compare_to/max_value spec to a concrete number.
+ 
+-    Either a literal number, or {"input": key, "multiplier": m} pulling
+-    from the workflow's inputs dict (falls back to 0 if the input key is
+-    missing, so a malformed spec fails a comparison rather than crashing).
++    Either a literal number, or a reference dict pulling from either the
++    candidate option or the workflow's inputs:
++      {"option_field": "shipment_value", "multiplier": 0.15}
++      {"input": "shipment_value", "multiplier": 0.15}
++
++    "option_field" is checked first when both keys could apply conceptually,
++    since values like a shipment's declared value naturally travel with the
++    candidate/option being evaluated, not as a flat top-level workflow input.
++    Falls back to 0 if the referenced key is missing anywhere, so a
++    malformed spec fails a comparison rather than crashing.
+     """
+     if isinstance(value, (int, float)):
+         return float(value)
+-    if isinstance(value, dict) and "input" in value:
+-        base = inputs.get(value["input"], 0) or 0
++    if isinstance(value, dict):
+         multiplier = value.get("multiplier", 1)
+-        return float(base) * float(multiplier)
++        if "option_field" in value:
++            base = option.get(value["option_field"], 0) or 0
++            return float(base) * float(multiplier)
++        if "input" in value:
++            # Check the option first — many workflow inputs conceptually
++            # describing a candidate (like shipment_value) get sent
++            # attached to the candidate itself rather than as a separate
++            # top-level input, and this avoids a silent 0.0 ceiling when
++            # that's how the caller structured their payload.
++            if value["input"] in option:
++                base = option.get(value["input"], 0) or 0
++            else:
++                base = inputs.get(value["input"], 0) or 0
++            return float(base) * float(multiplier)
+     return 0.0
+ 
+ 
