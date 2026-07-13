@@ -1,32 +1,27 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-
-interface DataSource {
-  name: string;
-  table: string;
-  status: string;
-  record_count: number;
-  last_sync: string | null;
-  error?: string;
-}
+import { RefreshCw, Database } from "lucide-react";
+import AppShell from "@/components/layout/AppShell";
+import { getDataSourceHealth, type DataSourceHealth } from "@/lib/api";
 
 export default function DataSourcesPage() {
-  const [sources, setSources] = useState<DataSource[]>([]);
+  const [sources, setSources] = useState<DataSourceHealth[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchSources();
+    void fetchSources();
   }, []);
 
   const fetchSources = async () => {
     setLoading(true);
+    setError(null);
     try {
-      const resp = await fetch("/api/admin/data-sources");
-      const data = await resp.json();
-      setSources(data.sources || []);
-    } catch (err) {
-      console.error("Failed to fetch data sources:", err);
+      const data = await getDataSourceHealth();
+      setSources(data);
+    } catch (err: any) {
+      setError(err.message || "Failed to fetch data sources");
     } finally {
       setLoading(false);
     }
@@ -35,13 +30,13 @@ export default function DataSourcesPage() {
   const getStatusDot = (status: string) => {
     switch (status) {
       case "live":
-        return <span className="inline-block w-2 h-2 rounded-full bg-green-500" title="Live" />;
+        return <span className="inline-block w-2 h-2 rounded-full bg-dawn" title="Live" />;
       case "empty":
-        return <span className="inline-block w-2 h-2 rounded-full bg-yellow-500" title="Empty" />;
+        return <span className="inline-block w-2 h-2 rounded-full bg-amber-500" title="Empty" />;
       case "error":
         return <span className="inline-block w-2 h-2 rounded-full bg-red-500" title="Error" />;
       default:
-        return <span className="inline-block w-2 h-2 rounded-full bg-gray-400" title="Unknown" />;
+        return <span className="inline-block w-2 h-2 rounded-full bg-text-muted" title="Unknown" />;
     }
   };
 
@@ -60,71 +55,79 @@ export default function DataSourcesPage() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Data Source Health</h1>
-        <button
-          onClick={fetchSources}
-          disabled={loading}
-          className="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
-        >
-          {loading ? "Refreshing..." : "Refresh"}
-        </button>
-      </div>
+    <AppShell>
+      <div className="flex flex-col h-full">
+        <header className="flex items-center justify-between px-6 py-3 border-b border-rim flex-shrink-0">
+          <div>
+            <h1 className="text-text-primary font-semibold text-sm tracking-tight">Data Source Health</h1>
+            <p className="text-text-muted text-2xs">Live status of every registered ontology object type</p>
+          </div>
+          <button
+            onClick={fetchSources}
+            disabled={loading}
+            className="w-8 h-8 flex items-center justify-center rounded-lg text-text-muted hover:text-dawn hover:bg-dawn/10 transition-all disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+          </button>
+        </header>
 
-      {loading ? (
-        <div className="text-center text-gray-500 dark:text-gray-400 py-8">Loading...</div>
-      ) : (
-        <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-700">
-                <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
-                  Source
-                </th>
-                <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
-                  Status
-                </th>
-                <th className="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
-                  Last Sync
-                </th>
-                <th className="text-right px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
-                  Records
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-              {sources.map((source) => (
-                <tr key={source.table} className="hover:bg-gray-50 dark:hover:bg-gray-750">
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-gray-900 dark:text-white">{source.name}</div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400 font-mono">
-                      {source.table}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      {getStatusDot(source.status)}
-                      <span className="text-sm text-gray-700 dark:text-gray-300 capitalize">
-                        {source.status}
-                      </span>
-                    </div>
-                    {source.error && (
-                      <div className="text-xs text-red-500 mt-0.5">{source.error}</div>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
-                    {formatDate(source.last_sync)}
-                  </td>
-                  <td className="px-4 py-3 text-right text-sm text-gray-900 dark:text-white font-mono">
-                    {source.record_count.toLocaleString()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          {error && <p className="text-red-600 text-xs mb-3">{error}</p>}
+
+          {loading ? (
+            <div className="flex items-center justify-center h-48">
+              <div className="w-5 h-5 border-2 border-rim border-t-dawn rounded-full animate-spin" />
+            </div>
+          ) : sources.length === 0 ? (
+            <div className="bg-surface border border-rim rounded-xl p-8 text-center">
+              <Database size={20} className="text-text-muted mx-auto mb-2" />
+              <p className="text-text-muted text-xs">No object types registered yet.</p>
+            </div>
+          ) : (
+            <div className="bg-surface border border-rim rounded-xl overflow-hidden max-w-4xl">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-elevated border-b border-rim">
+                    <th className="text-left px-4 py-3 font-medium text-text-muted text-2xs uppercase tracking-wider">
+                      Source
+                    </th>
+                    <th className="text-left px-4 py-3 font-medium text-text-muted text-2xs uppercase tracking-wider">
+                      Status
+                    </th>
+                    <th className="text-left px-4 py-3 font-medium text-text-muted text-2xs uppercase tracking-wider">
+                      Last Sync
+                    </th>
+                    <th className="text-right px-4 py-3 font-medium text-text-muted text-2xs uppercase tracking-wider">
+                      Records
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-rim">
+                  {sources.map((source) => (
+                    <tr key={source.table} className="hover:bg-elevated/50 transition-colors">
+                      <td className="px-4 py-3">
+                        <div className="text-text-primary font-medium">{source.name}</div>
+                        <div className="text-text-muted text-2xs font-mono">{source.table}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          {getStatusDot(source.status)}
+                          <span className="text-text-secondary capitalize">{source.status}</span>
+                        </div>
+                        {source.error && <div className="text-red-600 text-2xs mt-0.5">{source.error}</div>}
+                      </td>
+                      <td className="px-4 py-3 text-text-secondary">{formatDate(source.last_sync)}</td>
+                      <td className="px-4 py-3 text-right text-text-primary font-mono">
+                        {source.record_count.toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
-      )}
-    </div>
+      </div>
+    </AppShell>
   );
 }

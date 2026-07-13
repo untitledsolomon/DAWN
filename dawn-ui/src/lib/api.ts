@@ -891,3 +891,61 @@ export async function runDecisionSimulation(params: {
   return res.json();
 }
 
+// ── Data Source Health ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface DataSourceHealth {
+  name: string;
+  table: string;
+  status: "live" | "empty" | "error" | string;
+  record_count: number;
+  last_sync: string | null;
+  error?: string;
+}
+
+export async function getDataSourceHealth(clientId?: string): Promise<DataSourceHealth[]> {
+  const qs = new URLSearchParams();
+  if (clientId) qs.set("client_id", clientId);
+  const res = await fetch(`${BASE}/api/admin/data-sources?${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to fetch data source health: ${res.status}`);
+  const data = await res.json();
+  return data.sources ?? [];
+}
+
+// ── Decision Log ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface DecisionLogEntry {
+  id: string;
+  workflow_name: string;
+  triggered_by: string;
+  llm_explanation: string;
+  human_decision: string | null;
+  human_decision_by: string | null;
+  human_decision_at: string | null;
+  override_reason: string | null;
+  executed: boolean;
+  created_at: string;
+  ranked_options: any;
+  constraint_results: any;
+  recommended_option: any;
+  input_snapshot: any;
+  data_freshness: any;
+}
+
+export async function listDecisionLog(params?: {
+  workflow?: string;
+  decision?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<DecisionLogEntry[]> {
+  const qs = new URLSearchParams();
+  if (params?.workflow) qs.set("workflow", params.workflow);
+  if (params?.decision) qs.set("decision", params.decision);
+  qs.set("limit", String(params?.limit ?? 50));
+  if (params?.offset) qs.set("offset", String(params.offset));
+
+  const res = await fetch(`${BASE}/api/decision/log?${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to fetch decision log: ${res.status}`);
+  const data = await res.json();
+  return data.data ?? [];
+}
+
