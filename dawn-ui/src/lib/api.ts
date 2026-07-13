@@ -666,3 +666,228 @@ export async function createArtifact(data: {
 export async function deleteArtifact(id: string): Promise<void> {
   await fetch(`${BASE}/artifacts/${id}`, { method: "DELETE", headers: headers() });
 }
+
+// ── Ontology ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+// Fixed vs. the previous version: ontology/page.tsx and scenarios/page.tsx
+// previously called bare fetch("/api/ontology/...") with no BASE and no
+// API key — that only ever worked if the Next.js server happened to proxy
+// /api to dawn-api, which nothing in next.config.mjs sets up. All ontology
+// and decision calls now go through BASE + headers() like every other
+// endpoint in this file.
+
+export interface OntologyObjectType {
+  object_type: string;
+  source_table: string;
+  source_kind: string;
+  primary_key_column: string;
+  properties: Record<string, { column: string; type: string; decision_relevant: boolean }>;
+  default_filter: Record<string, unknown>;
+  client_id: string | null;
+}
+
+export interface OntologyRelationship {
+  id: string;
+  from_object: string;
+  to_object: string;
+  relationship_name: string;
+  join_definition: Record<string, unknown>;
+  client_id: string | null;
+}
+
+export async function listOntologyObjects(clientId?: string): Promise<OntologyObjectType[]> {
+  const qs = new URLSearchParams();
+  if (clientId) qs.set("client_id", clientId);
+  const res = await fetch(`${BASE}/api/ontology/objects?${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to list ontology objects: ${res.status}`);
+  const data = await res.json();
+  return data.data ?? [];
+}
+
+export async function listOntologyRelationships(clientId?: string): Promise<OntologyRelationship[]> {
+  const qs = new URLSearchParams();
+  if (clientId) qs.set("client_id", clientId);
+  const res = await fetch(`${BASE}/api/ontology/relationships?${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to list ontology relationships: ${res.status}`);
+  const data = await res.json();
+  return data.data ?? [];
+}
+
+export async function registerOntologyObject(data: {
+  object_type: string;
+  source_table: string;
+  primary_key_column?: string;
+  properties?: Record<string, unknown>;
+  source_kind?: string;
+  default_filter?: Record<string, unknown>;
+  client_id?: string;
+}): Promise<OntologyObjectType> {
+  const res = await fetch(`${BASE}/api/ontology/objects`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `Failed to register object type: ${res.status}`);
+  }
+  const result = await res.json();
+  return result.data;
+}
+
+export async function registerOntologyRelationship(data: {
+  from_object: string;
+  to_object: string;
+  relationship_name: string;
+  join_definition: Record<string, unknown>;
+  client_id?: string;
+}): Promise<OntologyRelationship> {
+  const res = await fetch(`${BASE}/api/ontology/relationships`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `Failed to register relationship: ${res.status}`);
+  }
+  const result = await res.json();
+  return result.data;
+}
+
+export async function queryOntology(params: {
+  object_type: string;
+  filters?: Record<string, unknown>;
+  expand?: string[];
+  limit?: number;
+  client_id?: string;
+}): Promise<{ object: string; data: Record<string, unknown>[]; count: number; source_table: string }> {
+  const res = await fetch(`${BASE}/api/ontology/query`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({
+      object_type: params.object_type,
+      filters: params.filters ?? {},
+      expand: params.expand ?? [],
+      limit: params.limit ?? 20,
+      client_id: params.client_id,
+    }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `Ontology query failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── Decision Workflows ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface DecisionWorkflowSummary {
+  name: string;
+  description: string;
+  requires_approval: boolean;
+  candidate_object_type: string | null;
+  input_schema: Record<string, { type: string; required?: boolean }>;
+  client_id: string | null;
+}
+
+export interface ConstraintResult {
+  name: string;
+  passed: boolean;
+  score: number | null;
+  weight: number | null;
+  explanation: string;
+}
+
+export interface RankedOption {
+  option: Record<string, any>;
+  constraint_results: ConstraintResult[];
+  hard_constraints_passed: boolean;
+  soft_score: number;
+}
+
+export interface DecisionRunResult {
+  workflow_name: string;
+  ranked_options: RankedOption[];
+  recommended: { option: Record<string, any>; score: number } | null;
+  requires_approval: boolean;
+  explanation: string;
+  decision_log_id: string | null;
+  timestamp: string;
+}
+
+export async function listDecisionWorkflows(clientId?: string): Promise<DecisionWorkflowSummary[]> {
+  const qs = new URLSearchParams();
+  if (clientId) qs.set("client_id", clientId);
+  const res = await fetch(`${BASE}/api/decision/workflows?${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to list workflows: ${res.status}`);
+  const data = await res.json();
+  return data.data ?? [];
+}
+
+export async function runDecisionWorkflow(params: {
+  workflow_name: string;
+  inputs?: Record<string, unknown>;
+  triggered_by?: string;
+  client_id?: string;
+}): Promise<DecisionRunResult> {
+  const res = await fetch(`${BASE}/api/decision/run`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({
+      workflow_name: params.workflow_name,
+      inputs: params.inputs ?? {},
+      triggered_by: params.triggered_by ?? "user",
+      client_id: params.client_id,
+    }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `Workflow run failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function approveDecision(
+  decisionId: string,
+  data: { decision: "approved" | "rejected" | "overridden"; by: string; override_reason?: string }
+): Promise<{ status: string; decision: string; id: string }> {
+  const res = await fetch(`${BASE}/api/decision/${decisionId}/approve`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `Approve action failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function runDecisionSimulation(params: {
+  workflow_name: string;
+  inputs?: Record<string, unknown>;
+  mutations?: Array<{ mutation_type: string; target_id: string; property: string; new_value: unknown; label?: string }>;
+  client_id?: string;
+}): Promise<{
+  baseline: DecisionRunResult;
+  scenario: DecisionRunResult;
+  diff: { recommendation_changed: boolean; baseline_recommendation: any; scenario_recommendation: any };
+  mutations: Array<{ type: string; target: string; label: string }>;
+}> {
+  const res = await fetch(`${BASE}/api/decision/simulate`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({
+      workflow_name: params.workflow_name,
+      inputs: params.inputs ?? {},
+      mutations: params.mutations ?? [],
+      client_id: params.client_id,
+    }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `Simulation failed: ${res.status}`);
+  }
+  return res.json();
+}
+

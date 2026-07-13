@@ -73,6 +73,7 @@ const BUSINESS_NAV: NavItem[] = [
 const DECISIONS_NAV: NavItem[] = [
   { href: "/ontology", icon: GitBranch, label: "Ontology" },
   { href: "/scenarios", icon: FlaskConical, label: "Scenarios" },
+  { href: "/decisions/run", icon: Route, label: "Run Decision" },
   { href: "/decisions", icon: ScrollText, label: "Decisions" },
   { href: "/admin/data-sources", icon: ActivitySquare, label: "Data Sources" },
 ];

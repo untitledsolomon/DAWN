@@ -1,6 +1,11 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import {
+  listDecisionWorkflows,
+  runDecisionSimulation,
+  type DecisionWorkflowSummary,
+} from "@/lib/api";
 
 interface Mutation {
   mutation_type: string;
@@ -11,19 +16,60 @@ interface Mutation {
 }
 
 export default function ScenariosPage() {
-  const [mutations, setMutations] = useState<Mutation[]>([]);
+  const [workflows, setWorkflows] = useState<DecisionWorkflowSummary[]>([]);
   const [workflowName, setWorkflowName] = useState("reroute_shipment");
+  const [mutations, setMutations] = useState<Mutation[]>([]);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Base workflow inputs, as raw JSON text. Fixed vs. the previous version,
+  // which always sent inputs: {} — reroute_shipment (and any inputs_field-
+  // sourced workflow) has nothing to rank without this, since candidates
+  // come from workflow inputs, not automatically from the ontology.
+  const [inputsJson, setInputsJson] = useState(
+    JSON.stringify(
+      {
+        shipment_id: "example-shipment-1",
+        reason: "Simulated delay",
+        candidate_routes: [
+          {
+            id: "route-a",
+            route_name: "Route A",
+            has_active_contract: true,
+            projected_cost: 8000,
+            shipment_value: 100000,
+            transit_days: 5,
+            on_time_rate: 0.9,
+            available: true,
+          },
+        ],
+      },
+      null,
+      2
+    )
+  );
+  const [inputsError, setInputsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    listDecisionWorkflows()
+      .then((wfs) => {
+        setWorkflows(wfs);
+        if (wfs.length > 0 && !wfs.some((w) => w.name === workflowName)) {
+          setWorkflowName(wfs[0].name);
+        }
+      })
+      .catch((err) => console.error("Failed to load workflows:", err));
+  }, []);
 
   const addMutation = () => {
     setMutations([
       ...mutations,
       {
-        mutation_type: "vendor_reliability",
-        target_id: "",
-        property: "on_time_rate",
-        new_value: 0.6,
+        mutation_type: "route_unavailable",
+        target_id: "route-a",
+        property: "available",
+        new_value: false,
         label: "",
       },
     ]);
@@ -40,27 +86,34 @@ export default function ScenariosPage() {
   };
 
   const runSimulation = async () => {
+    setError(null);
+    setInputsError(null);
+
+    let inputs: Record<string, unknown>;
+    try {
+      inputs = JSON.parse(inputsJson);
+    } catch {
+      setInputsError("Base inputs must be valid JSON.");
+      return;
+    }
+
     setLoading(true);
     try {
-      const resp = await fetch("/api/decision/simulate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          workflow_name: workflowName,
-          inputs: {},
-          mutations: mutations.map((m) => ({
-            mutation_type: m.mutation_type,
-            target_id: m.target_id,
-            property: m.property,
-            new_value: m.new_value,
-            label: m.label,
-          })),
-        }),
+      const data = await runDecisionSimulation({
+        workflow_name: workflowName,
+        inputs,
+        mutations: mutations.map((m) => ({
+          mutation_type: m.mutation_type,
+          target_id: m.target_id,
+          property: m.property,
+          new_value: m.new_value,
+          label: m.label,
+        })),
       });
-      const data = await resp.json();
       setResult(data);
-    } catch (err) {
-      console.error("Simulation failed:", err);
+    } catch (err: any) {
+      setError(err.message || "Simulation failed");
+      setResult(null);
     } finally {
       setLoading(false);
     }
@@ -71,6 +124,7 @@ export default function ScenariosPage() {
     { value: "vendor_cost", label: "Vendor Cost Change" },
     { value: "route_unavailable", label: "Route Unavailable" },
     { value: "contract_term", label: "Contract Term Change" },
+    { value: "field_set", label: "Generic field set (collection.field)" },
   ];
 
   return (
@@ -89,8 +143,30 @@ export default function ScenariosPage() {
               onChange={(e) => setWorkflowName(e.target.value)}
               className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
             >
-              <option value="reroute_shipment">Reroute Shipment</option>
+              {workflows.length === 0 && <option value="reroute_shipment">Reroute Shipment</option>}
+              {workflows.map((wf) => (
+                <option key={wf.name} value={wf.name}>
+                  {wf.description || wf.name}
+                </option>
+              ))}
             </select>
+          </div>
+
+          <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-white dark:bg-gray-800 mb-4">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Base inputs (JSON)
+            </label>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+              For workflows sourced from inputs (like reroute_shipment), candidates must be included
+              here — the ontology isn&apos;t queried automatically.
+            </p>
+            <textarea
+              value={inputsJson}
+              onChange={(e) => setInputsJson(e.target.value)}
+              rows={10}
+              className="w-full text-xs font-mono border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+            />
+            {inputsError && <p className="text-xs text-red-600 dark:text-red-400 mt-1">{inputsError}</p>}
           </div>
 
           <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-white dark:bg-gray-800">
@@ -106,7 +182,8 @@ export default function ScenariosPage() {
 
             {mutations.length === 0 && (
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                No conditions added. Click &quot;Add Condition&quot; to create a what-if scenario.
+                No conditions added yet. You can still run the baseline with zero mutations to see
+                the unmodified recommendation.
               </p>
             )}
 
@@ -142,7 +219,7 @@ export default function ScenariosPage() {
                     type="text"
                     value={mutation.target_id}
                     onChange={(e) => updateMutation(idx, "target_id", e.target.value)}
-                    placeholder="Target ID"
+                    placeholder="Target ID (must match an id in base inputs)"
                     className="text-xs border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   />
                   <input
@@ -170,15 +247,14 @@ export default function ScenariosPage() {
               </div>
             ))}
 
-            {mutations.length > 0 && (
-              <button
-                onClick={runSimulation}
-                disabled={loading}
-                className="w-full mt-3 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors disabled:opacity-50"
-              >
-                {loading ? "Running Simulation..." : "Run Simulation"}
-              </button>
-            )}
+            <button
+              onClick={runSimulation}
+              disabled={loading}
+              className="w-full mt-3 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors disabled:opacity-50"
+            >
+              {loading ? "Running Simulation..." : "Run Simulation"}
+            </button>
+            {error && <p className="text-sm text-red-600 dark:text-red-400 mt-2">{error}</p>}
           </div>
         </div>
 
@@ -202,10 +278,10 @@ export default function ScenariosPage() {
                   {result.baseline?.recommended ? (
                     <div className="text-sm">
                       <p className="font-medium text-gray-900 dark:text-white">
-                        {result.baseline.recommended.option?.route_name || "N/A"}
+                        {result.baseline.recommended.option?.route_name || result.baseline.recommended.option?.id || "N/A"}
                       </p>
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        Score: {result.baseline.recommended.score?.toFixed(2) || "N/A"}
+                        Score: {result.baseline.recommended.score?.toFixed(2) ?? "N/A"}
                       </p>
                     </div>
                   ) : (
@@ -219,10 +295,10 @@ export default function ScenariosPage() {
                   {result.scenario?.recommended ? (
                     <div className="text-sm">
                       <p className="font-medium text-gray-900 dark:text-white">
-                        {result.scenario.recommended.option?.route_name || "N/A"}
+                        {result.scenario.recommended.option?.route_name || result.scenario.recommended.option?.id || "N/A"}
                       </p>
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        Score: {result.scenario.recommended.score?.toFixed(2) || "N/A"}
+                        Score: {result.scenario.recommended.score?.toFixed(2) ?? "N/A"}
                       </p>
                     </div>
                   ) : (
@@ -232,10 +308,16 @@ export default function ScenariosPage() {
               </div>
 
               {/* Diff indicator */}
-              {result.diff?.recommendation_changed && (
+              {result.diff?.recommendation_changed ? (
                 <div className="border border-yellow-200 dark:border-yellow-700 rounded-lg p-3 bg-yellow-50 dark:bg-yellow-900/10">
                   <p className="text-sm font-medium text-yellow-800 dark:text-yellow-300">
                     ⚠ Recommendation changed under this scenario
+                  </p>
+                </div>
+              ) : (
+                <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3 bg-gray-50 dark:bg-gray-900/30">
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    No change in recommendation under this scenario.
                   </p>
                 </div>
               )}
@@ -245,11 +327,17 @@ export default function ScenariosPage() {
                 <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
                   Mutations Applied
                 </h3>
-                {result.mutations?.map((m: any, idx: number) => (
-                  <div key={idx} className="text-xs text-gray-700 dark:text-gray-300 mb-1">
-                    {m.label || `${m.type}: ${m.target}`}
-                  </div>
-                ))}
+                {result.mutations?.length ? (
+                  result.mutations.map((m: any, idx: number) => (
+                    <div key={idx} className="text-xs text-gray-700 dark:text-gray-300 mb-1">
+                      {m.label || `${m.type}: ${m.target}`}
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    No mutations applied — this was a baseline-only run.
+                  </p>
+                )}
               </div>
 
               {/* Full JSON */}

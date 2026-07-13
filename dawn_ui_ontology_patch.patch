@@ -1,0 +1,1070 @@
+diff --git a/dawn-ui/src/app/decisions/run/page.tsx b/dawn-ui/src/app/decisions/run/page.tsx
+new file mode 100644
+index 0000000..eba9cd1
+--- /dev/null
++++ b/dawn-ui/src/app/decisions/run/page.tsx
+@@ -0,0 +1,211 @@
++"use client";
++
++import React, { useEffect, useState } from "react";
++import {
++  listDecisionWorkflows,
++  runDecisionWorkflow,
++  approveDecision,
++  type DecisionWorkflowSummary,
++  type DecisionRunResult,
++} from "@/lib/api";
++import DecisionCard from "@/components/decision/DecisionCard";
++
++const EXAMPLE_INPUTS: Record<string, string> = {
++  reroute_shipment: JSON.stringify(
++    {
++      shipment_id: "example-shipment-1",
++      reason: "Carrier delay reported",
++      candidate_routes: [
++        {
++          id: "route-a",
++          route_name: "Route A — Mombasa Corridor",
++          carrier_name: "Carrier A",
++          has_active_contract: true,
++          projected_cost: 7500,
++          shipment_value: 100000,
++          transit_days: 4,
++          on_time_rate: 0.93,
++        },
++        {
++          id: "route-b",
++          route_name: "Route B — Northern Corridor",
++          carrier_name: "Carrier B",
++          has_active_contract: true,
++          projected_cost: 9200,
++          shipment_value: 100000,
++          transit_days: 3,
++          on_time_rate: 0.88,
++        },
++      ],
++    },
++    null,
++    2
++  ),
++};
++
++export default function RunDecisionPage() {
++  const [workflows, setWorkflows] = useState<DecisionWorkflowSummary[]>([]);
++  const [workflowName, setWorkflowName] = useState("");
++  const [inputsJson, setInputsJson] = useState("{}");
++  const [inputsError, setInputsError] = useState<string | null>(null);
++  const [result, setResult] = useState<DecisionRunResult | null>(null);
++  const [loading, setLoading] = useState(false);
++  const [runError, setRunError] = useState<string | null>(null);
++  const [actionError, setActionError] = useState<string | null>(null);
++
++  useEffect(() => {
++    listDecisionWorkflows()
++      .then((wfs) => {
++        setWorkflows(wfs);
++        if (wfs.length > 0) {
++          setWorkflowName(wfs[0].name);
++          setInputsJson(EXAMPLE_INPUTS[wfs[0].name] || "{}");
++        }
++      })
++      .catch((err) => setRunError(err.message || "Failed to load workflows"));
++  }, []);
++
++  const handleWorkflowChange = (name: string) => {
++    setWorkflowName(name);
++    setInputsJson(EXAMPLE_INPUTS[name] || "{}");
++    setResult(null);
++  };
++
++  const handleRun = async () => {
++    setRunError(null);
++    setInputsError(null);
++    setActionError(null);
++
++    let inputs: Record<string, unknown>;
++    try {
++      inputs = JSON.parse(inputsJson);
++    } catch {
++      setInputsError("Inputs must be valid JSON.");
++      return;
++    }
++
++    setLoading(true);
++    try {
++      const data = await runDecisionWorkflow({
++        workflow_name: workflowName,
++        inputs,
++        triggered_by: "ui_user",
++      });
++      setResult(data);
++    } catch (err: any) {
++      setRunError(err.message || "Workflow run failed");
++      setResult(null);
++    } finally {
++      setLoading(false);
++    }
++  };
++
++  const handleApprove = async (id: string) => {
++    try {
++      await approveDecision(id, { decision: "approved", by: "ui_user" });
++    } catch (err: any) {
++      setActionError(err.message || "Failed to approve");
++    }
++  };
++
++  const handleReject = async (id: string) => {
++    try {
++      await approveDecision(id, { decision: "rejected", by: "ui_user" });
++    } catch (err: any) {
++      setActionError(err.message || "Failed to reject");
++    }
++  };
++
++  const handleOverride = async (id: string, reason: string) => {
++    try {
++      await approveDecision(id, { decision: "overridden", by: "ui_user", override_reason: reason });
++    } catch (err: any) {
++      setActionError(err.message || "Failed to override");
++    }
++  };
++
++  const selectedWorkflow = workflows.find((w) => w.name === workflowName);
++
++  return (
++    <div className="max-w-4xl mx-auto px-4 py-8">
++      <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Run Decision</h1>
++      <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
++        Run a decision workflow live against the ontology, review the recommendation, and
++        approve, reject, or override it. This logs an entry to the decision audit trail.
++      </p>
++
++      <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-white dark:bg-gray-800 mb-6 space-y-3">
++        <div>
++          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
++            Workflow
++          </label>
++          <select
++            value={workflowName}
++            onChange={(e) => handleWorkflowChange(e.target.value)}
++            className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
++          >
++            {workflows.length === 0 && <option value="">No workflows registered</option>}
++            {workflows.map((wf) => (
++              <option key={wf.name} value={wf.name}>
++                {wf.name}
++              </option>
++            ))}
++          </select>
++          {selectedWorkflow?.description && (
++            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{selectedWorkflow.description}</p>
++          )}
++        </div>
++
++        <div>
++          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
++            Inputs (JSON)
++          </label>
++          <textarea
++            value={inputsJson}
++            onChange={(e) => setInputsJson(e.target.value)}
++            rows={12}
++            className="w-full text-xs font-mono border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
++          />
++          {inputsError && <p className="text-xs text-red-600 dark:text-red-400 mt-1">{inputsError}</p>}
++          {selectedWorkflow?.input_schema && Object.keys(selectedWorkflow.input_schema).length > 0 && (
++            <details className="mt-1">
++              <summary className="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
++                Expected input schema
++              </summary>
++              <pre className="text-xs mt-1 text-gray-600 dark:text-gray-400">
++                {JSON.stringify(selectedWorkflow.input_schema, null, 2)}
++              </pre>
++            </details>
++          )}
++        </div>
++
++        <button
++          onClick={handleRun}
++          disabled={loading || !workflowName}
++          className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors disabled:opacity-50"
++        >
++          {loading ? "Running..." : "Run Workflow"}
++        </button>
++        {runError && <p className="text-sm text-red-600 dark:text-red-400">{runError}</p>}
++      </div>
++
++      {actionError && (
++        <p className="text-sm text-red-600 dark:text-red-400 mb-3">{actionError}</p>
++      )}
++
++      {result && (
++        <DecisionCard
++          workflow_name={result.workflow_name}
++          ranked_options={result.ranked_options}
++          recommended={result.recommended}
++          explanation={result.explanation}
++          requires_approval={result.requires_approval}
++          decision_log_id={result.decision_log_id}
++          onApprove={handleApprove}
++          onReject={handleReject}
++          onOverride={handleOverride}
++        />
++      )}
++    </div>
++  );
++}
+diff --git a/dawn-ui/src/app/ontology/page.tsx b/dawn-ui/src/app/ontology/page.tsx
+index b507c1f..80025b0 100644
+--- a/dawn-ui/src/app/ontology/page.tsx
++++ b/dawn-ui/src/app/ontology/page.tsx
+@@ -1,93 +1,179 @@
+ "use client";
+ 
+ import React, { useEffect, useState } from "react";
+-
+-interface OntologyObject {
+-  object_type: string;
+-  source_table: string;
+-  properties: Record<string, any>;
+-}
+-
+-interface OntologyRelationship {
+-  id: string;
+-  from_object: string;
+-  to_object: string;
+-  relationship_name: string;
+-  join_definition: Record<string, any>;
+-}
++import {
++  listOntologyObjects,
++  listOntologyRelationships,
++  registerOntologyObject,
++  queryOntology,
++  type OntologyObjectType,
++  type OntologyRelationship,
++} from "@/lib/api";
+ 
+ export default function OntologyPage() {
+-  const [objects, setObjects] = useState<OntologyObject[]>([]);
++  const [objects, setObjects] = useState<OntologyObjectType[]>([]);
+   const [relationships, setRelationships] = useState<OntologyRelationship[]>([]);
+   const [loading, setLoading] = useState(true);
+   const [queryResult, setQueryResult] = useState<any>(null);
+   const [queryObject, setQueryObject] = useState("Shipment");
+   const [queryFilter, setQueryFilter] = useState("");
+   const [queryExpand, setQueryExpand] = useState("");
++  const [queryError, setQueryError] = useState<string | null>(null);
++
++  const [showRegisterForm, setShowRegisterForm] = useState(false);
++  const [registerError, setRegisterError] = useState<string | null>(null);
++  const [registering, setRegistering] = useState(false);
++  const [newObjectType, setNewObjectType] = useState("");
++  const [newSourceTable, setNewSourceTable] = useState("");
++  const [newPrimaryKey, setNewPrimaryKey] = useState("id");
+ 
+   useEffect(() => {
+-    fetchObjects();
+-    fetchRelationships();
++    void loadAll();
+   }, []);
+ 
+-  const fetchObjects = async () => {
++  const loadAll = async () => {
++    setLoading(true);
+     try {
+-      const resp = await fetch("/api/ontology/objects");
+-      const data = await resp.json();
+-      setObjects(data.data || []);
++      const [objs, rels] = await Promise.all([listOntologyObjects(), listOntologyRelationships()]);
++      setObjects(objs);
++      setRelationships(rels);
++      if (objs.length > 0 && !objs.some((o) => o.object_type === queryObject)) {
++        setQueryObject(objs[0].object_type);
++      }
+     } catch (err) {
+-      console.error("Failed to fetch ontology objects:", err);
++      console.error("Failed to load ontology:", err);
+     } finally {
+       setLoading(false);
+     }
+   };
+ 
+-  const fetchRelationships = async () => {
+-    try {
+-      const resp = await fetch("/api/ontology/relationships");
+-      const data = await resp.json();
+-      setRelationships(data.data || []);
+-    } catch (err) {
+-      console.error("Failed to fetch relationships:", err);
+-    }
+-  };
+-
+   const runQuery = async () => {
+     setLoading(true);
++    setQueryError(null);
+     try {
+       const filters: Record<string, string> = {};
+       if (queryFilter.trim()) {
+         const [key, value] = queryFilter.split("=").map((s) => s.trim());
+         if (key && value) filters[key] = value;
+       }
+-
+       const expand = queryExpand
+         ? queryExpand.split(",").map((s) => s.trim()).filter(Boolean)
+         : [];
+ 
+-      const resp = await fetch("/api/ontology/query", {
+-        method: "POST",
+-        headers: { "Content-Type": "application/json" },
+-        body: JSON.stringify({ object_type: queryObject, filters, expand, limit: 10 }),
+-      });
+-      const data = await resp.json();
++      const data = await queryOntology({ object_type: queryObject, filters, expand, limit: 10 });
+       setQueryResult(data);
+-    } catch (err) {
+-      console.error("Query failed:", err);
++    } catch (err: any) {
++      setQueryError(err.message || "Query failed");
++      setQueryResult(null);
+     } finally {
+       setLoading(false);
+     }
+   };
+ 
++  const handleRegisterObject = async (e: React.FormEvent) => {
++    e.preventDefault();
++    setRegisterError(null);
++
++    if (!newObjectType.trim() || !newSourceTable.trim()) {
++      setRegisterError("Object type and source table are required.");
++      return;
++    }
++
++    setRegistering(true);
++    try {
++      await registerOntologyObject({
++        object_type: newObjectType.trim(),
++        source_table: newSourceTable.trim(),
++        primary_key_column: newPrimaryKey.trim() || "id",
++        properties: {},
++      });
++      setNewObjectType("");
++      setNewSourceTable("");
++      setNewPrimaryKey("id");
++      setShowRegisterForm(false);
++      await loadAll();
++    } catch (err: any) {
++      setRegisterError(err.message || "Failed to register object type");
++    } finally {
++      setRegistering(false);
++    }
++  };
++
+   return (
+     <div className="max-w-6xl mx-auto px-4 py-8">
+       <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Ontology Manager</h1>
+ 
+       {/* Object Types */}
+       <section className="mb-8">
+-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
+-          Registered Object Types ({objects.length})
+-        </h2>
++        <div className="flex items-center justify-between mb-3">
++          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
++            Registered Object Types ({objects.length})
++          </h2>
++          <button
++            onClick={() => setShowRegisterForm((v) => !v)}
++            className="px-3 py-1.5 text-sm font-medium text-blue-700 dark:text-blue-400 border border-blue-300 dark:border-blue-700 rounded-md hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
++          >
++            {showRegisterForm ? "Cancel" : "+ Register object type"}
++          </button>
++        </div>
++
++        {showRegisterForm && (
++          <form
++            onSubmit={handleRegisterObject}
++            className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 mb-4 bg-gray-50 dark:bg-gray-900 space-y-3"
++          >
++            <p className="text-xs text-gray-500 dark:text-gray-400">
++              Registers a new object type against an existing table. This is a data change only —
++              no code deploy needed to make the object queryable via ontology_query.
++            </p>
++            <div className="grid sm:grid-cols-3 gap-3">
++              <div>
++                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
++                  Object type name
++                </label>
++                <input
++                  type="text"
++                  value={newObjectType}
++                  onChange={(e) => setNewObjectType(e.target.value)}
++                  placeholder="e.g. Client"
++                  className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
++                />
++              </div>
++              <div>
++                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
++                  Backing table
++                </label>
++                <input
++                  type="text"
++                  value={newSourceTable}
++                  onChange={(e) => setNewSourceTable(e.target.value)}
++                  placeholder="e.g. ontology_clients"
++                  className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
++                />
++              </div>
++              <div>
++                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
++                  Primary key column
++                </label>
++                <input
++                  type="text"
++                  value={newPrimaryKey}
++                  onChange={(e) => setNewPrimaryKey(e.target.value)}
++                  className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
++                />
++              </div>
++            </div>
++            {registerError && <p className="text-sm text-red-600 dark:text-red-400">{registerError}</p>}
++            <button
++              type="submit"
++              disabled={registering}
++              className="px-4 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors disabled:opacity-50"
++            >
++              {registering ? "Registering..." : "Register"}
++            </button>
++          </form>
++        )}
++
+         <div className="grid gap-3">
+           {objects.map((obj) => (
+             <div
+@@ -98,10 +184,15 @@ export default function OntologyPage() {
+                 <span className="font-bold text-gray-900 dark:text-white">{obj.object_type}</span>
+                 <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                   {obj.source_table}
++                  {obj.client_id && (
++                    <span className="ml-2 px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400 font-sans">
++                      client-scoped
++                    </span>
++                  )}
+                 </span>
+               </div>
+               <div className="flex flex-wrap gap-1.5">
+-                {Object.entries(obj.properties).map(([prop, meta]: [string, any]) => (
++                {Object.entries(obj.properties || {}).map(([prop, meta]: [string, any]) => (
+                   <span
+                     key={prop}
+                     className={`text-xs px-2 py-0.5 rounded ${
+@@ -114,6 +205,11 @@ export default function OntologyPage() {
+                     {meta.decision_relevant && " ⚡"}
+                   </span>
+                 ))}
++                {Object.keys(obj.properties || {}).length === 0 && (
++                  <span className="text-xs text-gray-400 dark:text-gray-500 italic">
++                    No property metadata registered yet
++                  </span>
++                )}
+               </div>
+             </div>
+           ))}
+@@ -180,6 +276,10 @@ export default function OntologyPage() {
+           </button>
+         </div>
+ 
++        {queryError && (
++          <p className="text-sm text-red-600 dark:text-red-400 mb-3">{queryError}</p>
++        )}
++
+         {queryResult && (
+           <pre className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-gray-50 dark:bg-gray-900 text-xs overflow-auto max-h-96 text-gray-800 dark:text-gray-200">
+             {JSON.stringify(queryResult, null, 2)}
+diff --git a/dawn-ui/src/app/scenarios/page.tsx b/dawn-ui/src/app/scenarios/page.tsx
+index 2d81ac2..69bd3bc 100644
+--- a/dawn-ui/src/app/scenarios/page.tsx
++++ b/dawn-ui/src/app/scenarios/page.tsx
+@@ -1,6 +1,11 @@
+ "use client";
+ 
+-import React, { useState } from "react";
++import React, { useEffect, useState } from "react";
++import {
++  listDecisionWorkflows,
++  runDecisionSimulation,
++  type DecisionWorkflowSummary,
++} from "@/lib/api";
+ 
+ interface Mutation {
+   mutation_type: string;
+@@ -11,19 +16,60 @@ interface Mutation {
+ }
+ 
+ export default function ScenariosPage() {
+-  const [mutations, setMutations] = useState<Mutation[]>([]);
++  const [workflows, setWorkflows] = useState<DecisionWorkflowSummary[]>([]);
+   const [workflowName, setWorkflowName] = useState("reroute_shipment");
++  const [mutations, setMutations] = useState<Mutation[]>([]);
+   const [result, setResult] = useState<any>(null);
+   const [loading, setLoading] = useState(false);
++  const [error, setError] = useState<string | null>(null);
++
++  // Base workflow inputs, as raw JSON text. Fixed vs. the previous version,
++  // which always sent inputs: {} — reroute_shipment (and any inputs_field-
++  // sourced workflow) has nothing to rank without this, since candidates
++  // come from workflow inputs, not automatically from the ontology.
++  const [inputsJson, setInputsJson] = useState(
++    JSON.stringify(
++      {
++        shipment_id: "example-shipment-1",
++        reason: "Simulated delay",
++        candidate_routes: [
++          {
++            id: "route-a",
++            route_name: "Route A",
++            has_active_contract: true,
++            projected_cost: 8000,
++            shipment_value: 100000,
++            transit_days: 5,
++            on_time_rate: 0.9,
++            available: true,
++          },
++        ],
++      },
++      null,
++      2
++    )
++  );
++  const [inputsError, setInputsError] = useState<string | null>(null);
++
++  useEffect(() => {
++    listDecisionWorkflows()
++      .then((wfs) => {
++        setWorkflows(wfs);
++        if (wfs.length > 0 && !wfs.some((w) => w.name === workflowName)) {
++          setWorkflowName(wfs[0].name);
++        }
++      })
++      .catch((err) => console.error("Failed to load workflows:", err));
++  }, []);
+ 
+   const addMutation = () => {
+     setMutations([
+       ...mutations,
+       {
+-        mutation_type: "vendor_reliability",
+-        target_id: "",
+-        property: "on_time_rate",
+-        new_value: 0.6,
++        mutation_type: "route_unavailable",
++        target_id: "route-a",
++        property: "available",
++        new_value: false,
+         label: "",
+       },
+     ]);
+@@ -40,27 +86,34 @@ export default function ScenariosPage() {
+   };
+ 
+   const runSimulation = async () => {
++    setError(null);
++    setInputsError(null);
++
++    let inputs: Record<string, unknown>;
++    try {
++      inputs = JSON.parse(inputsJson);
++    } catch {
++      setInputsError("Base inputs must be valid JSON.");
++      return;
++    }
++
+     setLoading(true);
+     try {
+-      const resp = await fetch("/api/decision/simulate", {
+-        method: "POST",
+-        headers: { "Content-Type": "application/json" },
+-        body: JSON.stringify({
+-          workflow_name: workflowName,
+-          inputs: {},
+-          mutations: mutations.map((m) => ({
+-            mutation_type: m.mutation_type,
+-            target_id: m.target_id,
+-            property: m.property,
+-            new_value: m.new_value,
+-            label: m.label,
+-          })),
+-        }),
++      const data = await runDecisionSimulation({
++        workflow_name: workflowName,
++        inputs,
++        mutations: mutations.map((m) => ({
++          mutation_type: m.mutation_type,
++          target_id: m.target_id,
++          property: m.property,
++          new_value: m.new_value,
++          label: m.label,
++        })),
+       });
+-      const data = await resp.json();
+       setResult(data);
+-    } catch (err) {
+-      console.error("Simulation failed:", err);
++    } catch (err: any) {
++      setError(err.message || "Simulation failed");
++      setResult(null);
+     } finally {
+       setLoading(false);
+     }
+@@ -71,6 +124,7 @@ export default function ScenariosPage() {
+     { value: "vendor_cost", label: "Vendor Cost Change" },
+     { value: "route_unavailable", label: "Route Unavailable" },
+     { value: "contract_term", label: "Contract Term Change" },
++    { value: "field_set", label: "Generic field set (collection.field)" },
+   ];
+ 
+   return (
+@@ -89,10 +143,32 @@ export default function ScenariosPage() {
+               onChange={(e) => setWorkflowName(e.target.value)}
+               className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+             >
+-              <option value="reroute_shipment">Reroute Shipment</option>
++              {workflows.length === 0 && <option value="reroute_shipment">Reroute Shipment</option>}
++              {workflows.map((wf) => (
++                <option key={wf.name} value={wf.name}>
++                  {wf.description || wf.name}
++                </option>
++              ))}
+             </select>
+           </div>
+ 
++          <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-white dark:bg-gray-800 mb-4">
++            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
++              Base inputs (JSON)
++            </label>
++            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
++              For workflows sourced from inputs (like reroute_shipment), candidates must be included
++              here — the ontology isn&apos;t queried automatically.
++            </p>
++            <textarea
++              value={inputsJson}
++              onChange={(e) => setInputsJson(e.target.value)}
++              rows={10}
++              className="w-full text-xs font-mono border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
++            />
++            {inputsError && <p className="text-xs text-red-600 dark:text-red-400 mt-1">{inputsError}</p>}
++          </div>
++
+           <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-white dark:bg-gray-800">
+             <div className="flex items-center justify-between mb-3">
+               <h2 className="text-sm font-semibold text-gray-900 dark:text-white">What If...</h2>
+@@ -106,7 +182,8 @@ export default function ScenariosPage() {
+ 
+             {mutations.length === 0 && (
+               <p className="text-sm text-gray-500 dark:text-gray-400">
+-                No conditions added. Click &quot;Add Condition&quot; to create a what-if scenario.
++                No conditions added yet. You can still run the baseline with zero mutations to see
++                the unmodified recommendation.
+               </p>
+             )}
+ 
+@@ -142,7 +219,7 @@ export default function ScenariosPage() {
+                     type="text"
+                     value={mutation.target_id}
+                     onChange={(e) => updateMutation(idx, "target_id", e.target.value)}
+-                    placeholder="Target ID"
++                    placeholder="Target ID (must match an id in base inputs)"
+                     className="text-xs border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                   />
+                   <input
+@@ -170,15 +247,14 @@ export default function ScenariosPage() {
+               </div>
+             ))}
+ 
+-            {mutations.length > 0 && (
+-              <button
+-                onClick={runSimulation}
+-                disabled={loading}
+-                className="w-full mt-3 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors disabled:opacity-50"
+-              >
+-                {loading ? "Running Simulation..." : "Run Simulation"}
+-              </button>
+-            )}
++            <button
++              onClick={runSimulation}
++              disabled={loading}
++              className="w-full mt-3 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors disabled:opacity-50"
++            >
++              {loading ? "Running Simulation..." : "Run Simulation"}
++            </button>
++            {error && <p className="text-sm text-red-600 dark:text-red-400 mt-2">{error}</p>}
+           </div>
+         </div>
+ 
+@@ -202,10 +278,10 @@ export default function ScenariosPage() {
+                   {result.baseline?.recommended ? (
+                     <div className="text-sm">
+                       <p className="font-medium text-gray-900 dark:text-white">
+-                        {result.baseline.recommended.option?.route_name || "N/A"}
++                        {result.baseline.recommended.option?.route_name || result.baseline.recommended.option?.id || "N/A"}
+                       </p>
+                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+-                        Score: {result.baseline.recommended.score?.toFixed(2) || "N/A"}
++                        Score: {result.baseline.recommended.score?.toFixed(2) ?? "N/A"}
+                       </p>
+                     </div>
+                   ) : (
+@@ -219,10 +295,10 @@ export default function ScenariosPage() {
+                   {result.scenario?.recommended ? (
+                     <div className="text-sm">
+                       <p className="font-medium text-gray-900 dark:text-white">
+-                        {result.scenario.recommended.option?.route_name || "N/A"}
++                        {result.scenario.recommended.option?.route_name || result.scenario.recommended.option?.id || "N/A"}
+                       </p>
+                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+-                        Score: {result.scenario.recommended.score?.toFixed(2) || "N/A"}
++                        Score: {result.scenario.recommended.score?.toFixed(2) ?? "N/A"}
+                       </p>
+                     </div>
+                   ) : (
+@@ -232,12 +308,18 @@ export default function ScenariosPage() {
+               </div>
+ 
+               {/* Diff indicator */}
+-              {result.diff?.recommendation_changed && (
++              {result.diff?.recommendation_changed ? (
+                 <div className="border border-yellow-200 dark:border-yellow-700 rounded-lg p-3 bg-yellow-50 dark:bg-yellow-900/10">
+                   <p className="text-sm font-medium text-yellow-800 dark:text-yellow-300">
+                     ⚠ Recommendation changed under this scenario
+                   </p>
+                 </div>
++              ) : (
++                <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3 bg-gray-50 dark:bg-gray-900/30">
++                  <p className="text-sm text-gray-600 dark:text-gray-400">
++                    No change in recommendation under this scenario.
++                  </p>
++                </div>
+               )}
+ 
+               {/* Mutations applied */}
+@@ -245,11 +327,17 @@ export default function ScenariosPage() {
+                 <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
+                   Mutations Applied
+                 </h3>
+-                {result.mutations?.map((m: any, idx: number) => (
+-                  <div key={idx} className="text-xs text-gray-700 dark:text-gray-300 mb-1">
+-                    {m.label || `${m.type}: ${m.target}`}
+-                  </div>
+-                ))}
++                {result.mutations?.length ? (
++                  result.mutations.map((m: any, idx: number) => (
++                    <div key={idx} className="text-xs text-gray-700 dark:text-gray-300 mb-1">
++                      {m.label || `${m.type}: ${m.target}`}
++                    </div>
++                  ))
++                ) : (
++                  <p className="text-xs text-gray-500 dark:text-gray-400">
++                    No mutations applied — this was a baseline-only run.
++                  </p>
++                )}
+               </div>
+ 
+               {/* Full JSON */}
+diff --git a/dawn-ui/src/components/decision/DecisionCard.tsx b/dawn-ui/src/components/decision/DecisionCard.tsx
+index 5e659da..4d01a59 100644
+--- a/dawn-ui/src/components/decision/DecisionCard.tsx
++++ b/dawn-ui/src/components/decision/DecisionCard.tsx
+@@ -15,13 +15,13 @@ interface RankedOption {
+   constraint_results: ConstraintResult[];
+   hard_constraints_passed: boolean;
+   soft_score: number;
+-  tradeoff_summary: string;
++  tradeoff_summary?: string;
+ }
+ 
+ interface DecisionCardProps {
+   workflow_name: string;
+   ranked_options: RankedOption[];
+-  recommended: { option: Record<string, any>; score: number; tradeoff_summary: string } | null;
++  recommended: { option: Record<string, any>; score: number; tradeoff_summary?: string } | null;
+   explanation: string;
+   requires_approval?: boolean;
+   decision_log_id?: string | null;
+@@ -30,6 +30,17 @@ interface DecisionCardProps {
+   onOverride?: (id: string, reason: string) => void;
+ }
+ 
++// Derives a short human-readable summary from constraint results when the
++// backend doesn't provide a precomputed tradeoff_summary string — the
++// rewritten, data-driven constraint engine returns per-constraint
++// explanations instead of a single canned summary, so this stitches one
++// together client-side from the weighted (soft) constraints.
++function deriveTradeoffSummary(results: ConstraintResult[]): string {
++  const weighted = results.filter((r) => r.weight != null && r.score != null);
++  if (weighted.length === 0) return "";
++  return weighted.map((r) => r.explanation).join(" · ");
++}
++
+ export default function DecisionCard({
+   workflow_name,
+   ranked_options,
+@@ -128,7 +139,11 @@ export default function DecisionCard({
+             )}
+           </div>
+           <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+-            Score: {recommended.score.toFixed(2)} — {recommended.tradeoff_summary}
++            Score: {recommended.score.toFixed(2)}
++            {(recommended.tradeoff_summary ||
++              deriveTradeoffSummary(ranked_options.find((o) => o.option === recommended.option)?.constraint_results || [])) && (
++              <> — {recommended.tradeoff_summary || deriveTradeoffSummary(ranked_options.find((o) => o.option === recommended.option)?.constraint_results || [])}</>
++            )}
+           </div>
+         </div>
+       )}
+diff --git a/dawn-ui/src/components/layout/Sidebar.tsx b/dawn-ui/src/components/layout/Sidebar.tsx
+index ba0c85b..ca2ef7b 100644
+--- a/dawn-ui/src/components/layout/Sidebar.tsx
++++ b/dawn-ui/src/components/layout/Sidebar.tsx
+@@ -73,6 +73,7 @@ const BUSINESS_NAV: NavItem[] = [
+ const DECISIONS_NAV: NavItem[] = [
+   { href: "/ontology", icon: GitBranch, label: "Ontology" },
+   { href: "/scenarios", icon: FlaskConical, label: "Scenarios" },
++  { href: "/decisions/run", icon: Route, label: "Run Decision" },
+   { href: "/decisions", icon: ScrollText, label: "Decisions" },
+   { href: "/admin/data-sources", icon: ActivitySquare, label: "Data Sources" },
+ ];
+diff --git a/dawn-ui/src/lib/api.ts b/dawn-ui/src/lib/api.ts
+index 600806f..ae6ec81 100644
+--- a/dawn-ui/src/lib/api.ts
++++ b/dawn-ui/src/lib/api.ts
+@@ -666,3 +666,228 @@ export async function createArtifact(data: {
+ export async function deleteArtifact(id: string): Promise<void> {
+   await fetch(`${BASE}/artifacts/${id}`, { method: "DELETE", headers: headers() });
+ }
++
++// ── Ontology ───────────────────────────────────────────────────────────────────────────────────────────────────────────
++// Fixed vs. the previous version: ontology/page.tsx and scenarios/page.tsx
++// previously called bare fetch("/api/ontology/...") with no BASE and no
++// API key — that only ever worked if the Next.js server happened to proxy
++// /api to dawn-api, which nothing in next.config.mjs sets up. All ontology
++// and decision calls now go through BASE + headers() like every other
++// endpoint in this file.
++
++export interface OntologyObjectType {
++  object_type: string;
++  source_table: string;
++  source_kind: string;
++  primary_key_column: string;
++  properties: Record<string, { column: string; type: string; decision_relevant: boolean }>;
++  default_filter: Record<string, unknown>;
++  client_id: string | null;
++}
++
++export interface OntologyRelationship {
++  id: string;
++  from_object: string;
++  to_object: string;
++  relationship_name: string;
++  join_definition: Record<string, unknown>;
++  client_id: string | null;
++}
++
++export async function listOntologyObjects(clientId?: string): Promise<OntologyObjectType[]> {
++  const qs = new URLSearchParams();
++  if (clientId) qs.set("client_id", clientId);
++  const res = await fetch(`${BASE}/api/ontology/objects?${qs}`, { headers: headers() });
++  if (!res.ok) throw new Error(`Failed to list ontology objects: ${res.status}`);
++  const data = await res.json();
++  return data.data ?? [];
++}
++
++export async function listOntologyRelationships(clientId?: string): Promise<OntologyRelationship[]> {
++  const qs = new URLSearchParams();
++  if (clientId) qs.set("client_id", clientId);
++  const res = await fetch(`${BASE}/api/ontology/relationships?${qs}`, { headers: headers() });
++  if (!res.ok) throw new Error(`Failed to list ontology relationships: ${res.status}`);
++  const data = await res.json();
++  return data.data ?? [];
++}
++
++export async function registerOntologyObject(data: {
++  object_type: string;
++  source_table: string;
++  primary_key_column?: string;
++  properties?: Record<string, unknown>;
++  source_kind?: string;
++  default_filter?: Record<string, unknown>;
++  client_id?: string;
++}): Promise<OntologyObjectType> {
++  const res = await fetch(`${BASE}/api/ontology/objects`, {
++    method: "POST",
++    headers: headers(),
++    body: JSON.stringify(data),
++  });
++  if (!res.ok) {
++    const detail = await res.json().catch(() => ({}));
++    throw new Error(detail.detail || `Failed to register object type: ${res.status}`);
++  }
++  const result = await res.json();
++  return result.data;
++}
++
++export async function registerOntologyRelationship(data: {
++  from_object: string;
++  to_object: string;
++  relationship_name: string;
++  join_definition: Record<string, unknown>;
++  client_id?: string;
++}): Promise<OntologyRelationship> {
++  const res = await fetch(`${BASE}/api/ontology/relationships`, {
++    method: "POST",
++    headers: headers(),
++    body: JSON.stringify(data),
++  });
++  if (!res.ok) {
++    const detail = await res.json().catch(() => ({}));
++    throw new Error(detail.detail || `Failed to register relationship: ${res.status}`);
++  }
++  const result = await res.json();
++  return result.data;
++}
++
++export async function queryOntology(params: {
++  object_type: string;
++  filters?: Record<string, unknown>;
++  expand?: string[];
++  limit?: number;
++  client_id?: string;
++}): Promise<{ object: string; data: Record<string, unknown>[]; count: number; source_table: string }> {
++  const res = await fetch(`${BASE}/api/ontology/query`, {
++    method: "POST",
++    headers: headers(),
++    body: JSON.stringify({
++      object_type: params.object_type,
++      filters: params.filters ?? {},
++      expand: params.expand ?? [],
++      limit: params.limit ?? 20,
++      client_id: params.client_id,
++    }),
++  });
++  if (!res.ok) {
++    const detail = await res.json().catch(() => ({}));
++    throw new Error(detail.detail || `Ontology query failed: ${res.status}`);
++  }
++  return res.json();
++}
++
++// ── Decision Workflows ─────────────────────────────────────────────────────────────────────────────────────────────────
++
++export interface DecisionWorkflowSummary {
++  name: string;
++  description: string;
++  requires_approval: boolean;
++  candidate_object_type: string | null;
++  input_schema: Record<string, { type: string; required?: boolean }>;
++  client_id: string | null;
++}
++
++export interface ConstraintResult {
++  name: string;
++  passed: boolean;
++  score: number | null;
++  weight: number | null;
++  explanation: string;
++}
++
++export interface RankedOption {
++  option: Record<string, any>;
++  constraint_results: ConstraintResult[];
++  hard_constraints_passed: boolean;
++  soft_score: number;
++}
++
++export interface DecisionRunResult {
++  workflow_name: string;
++  ranked_options: RankedOption[];
++  recommended: { option: Record<string, any>; score: number } | null;
++  requires_approval: boolean;
++  explanation: string;
++  decision_log_id: string | null;
++  timestamp: string;
++}
++
++export async function listDecisionWorkflows(clientId?: string): Promise<DecisionWorkflowSummary[]> {
++  const qs = new URLSearchParams();
++  if (clientId) qs.set("client_id", clientId);
++  const res = await fetch(`${BASE}/api/decision/workflows?${qs}`, { headers: headers() });
++  if (!res.ok) throw new Error(`Failed to list workflows: ${res.status}`);
++  const data = await res.json();
++  return data.data ?? [];
++}
++
++export async function runDecisionWorkflow(params: {
++  workflow_name: string;
++  inputs?: Record<string, unknown>;
++  triggered_by?: string;
++  client_id?: string;
++}): Promise<DecisionRunResult> {
++  const res = await fetch(`${BASE}/api/decision/run`, {
++    method: "POST",
++    headers: headers(),
++    body: JSON.stringify({
++      workflow_name: params.workflow_name,
++      inputs: params.inputs ?? {},
++      triggered_by: params.triggered_by ?? "user",
++      client_id: params.client_id,
++    }),
++  });
++  if (!res.ok) {
++    const detail = await res.json().catch(() => ({}));
++    throw new Error(detail.detail || `Workflow run failed: ${res.status}`);
++  }
++  return res.json();
++}
++
++export async function approveDecision(
++  decisionId: string,
++  data: { decision: "approved" | "rejected" | "overridden"; by: string; override_reason?: string }
++): Promise<{ status: string; decision: string; id: string }> {
++  const res = await fetch(`${BASE}/api/decision/${decisionId}/approve`, {
++    method: "POST",
++    headers: headers(),
++    body: JSON.stringify(data),
++  });
++  if (!res.ok) {
++    const detail = await res.json().catch(() => ({}));
++    throw new Error(detail.detail || `Approve action failed: ${res.status}`);
++  }
++  return res.json();
++}
++
++export async function runDecisionSimulation(params: {
++  workflow_name: string;
++  inputs?: Record<string, unknown>;
++  mutations?: Array<{ mutation_type: string; target_id: string; property: string; new_value: unknown; label?: string }>;
++  client_id?: string;
++}): Promise<{
++  baseline: DecisionRunResult;
++  scenario: DecisionRunResult;
++  diff: { recommendation_changed: boolean; baseline_recommendation: any; scenario_recommendation: any };
++  mutations: Array<{ type: string; target: string; label: string }>;
++}> {
++  const res = await fetch(`${BASE}/api/decision/simulate`, {
++    method: "POST",
++    headers: headers(),
++    body: JSON.stringify({
++      workflow_name: params.workflow_name,
++      inputs: params.inputs ?? {},
++      mutations: params.mutations ?? [],
++      client_id: params.client_id,
++    }),
++  });
++  if (!res.ok) {
++    const detail = await res.json().catch(() => ({}));
++    throw new Error(detail.detail || `Simulation failed: ${res.status}`);
++  }
++  return res.json();
++}
++

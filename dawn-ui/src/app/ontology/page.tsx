@@ -1,81 +1,101 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-
-interface OntologyObject {
-  object_type: string;
-  source_table: string;
-  properties: Record<string, any>;
-}
-
-interface OntologyRelationship {
-  id: string;
-  from_object: string;
-  to_object: string;
-  relationship_name: string;
-  join_definition: Record<string, any>;
-}
+import {
+  listOntologyObjects,
+  listOntologyRelationships,
+  registerOntologyObject,
+  queryOntology,
+  type OntologyObjectType,
+  type OntologyRelationship,
+} from "@/lib/api";
 
 export default function OntologyPage() {
-  const [objects, setObjects] = useState<OntologyObject[]>([]);
+  const [objects, setObjects] = useState<OntologyObjectType[]>([]);
   const [relationships, setRelationships] = useState<OntologyRelationship[]>([]);
   const [loading, setLoading] = useState(true);
   const [queryResult, setQueryResult] = useState<any>(null);
   const [queryObject, setQueryObject] = useState("Shipment");
   const [queryFilter, setQueryFilter] = useState("");
   const [queryExpand, setQueryExpand] = useState("");
+  const [queryError, setQueryError] = useState<string | null>(null);
+
+  const [showRegisterForm, setShowRegisterForm] = useState(false);
+  const [registerError, setRegisterError] = useState<string | null>(null);
+  const [registering, setRegistering] = useState(false);
+  const [newObjectType, setNewObjectType] = useState("");
+  const [newSourceTable, setNewSourceTable] = useState("");
+  const [newPrimaryKey, setNewPrimaryKey] = useState("id");
 
   useEffect(() => {
-    fetchObjects();
-    fetchRelationships();
+    void loadAll();
   }, []);
 
-  const fetchObjects = async () => {
+  const loadAll = async () => {
+    setLoading(true);
     try {
-      const resp = await fetch("/api/ontology/objects");
-      const data = await resp.json();
-      setObjects(data.data || []);
+      const [objs, rels] = await Promise.all([listOntologyObjects(), listOntologyRelationships()]);
+      setObjects(objs);
+      setRelationships(rels);
+      if (objs.length > 0 && !objs.some((o) => o.object_type === queryObject)) {
+        setQueryObject(objs[0].object_type);
+      }
     } catch (err) {
-      console.error("Failed to fetch ontology objects:", err);
+      console.error("Failed to load ontology:", err);
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchRelationships = async () => {
-    try {
-      const resp = await fetch("/api/ontology/relationships");
-      const data = await resp.json();
-      setRelationships(data.data || []);
-    } catch (err) {
-      console.error("Failed to fetch relationships:", err);
-    }
-  };
-
   const runQuery = async () => {
     setLoading(true);
+    setQueryError(null);
     try {
       const filters: Record<string, string> = {};
       if (queryFilter.trim()) {
         const [key, value] = queryFilter.split("=").map((s) => s.trim());
         if (key && value) filters[key] = value;
       }
-
       const expand = queryExpand
         ? queryExpand.split(",").map((s) => s.trim()).filter(Boolean)
         : [];
 
-      const resp = await fetch("/api/ontology/query", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ object_type: queryObject, filters, expand, limit: 10 }),
-      });
-      const data = await resp.json();
+      const data = await queryOntology({ object_type: queryObject, filters, expand, limit: 10 });
       setQueryResult(data);
-    } catch (err) {
-      console.error("Query failed:", err);
+    } catch (err: any) {
+      setQueryError(err.message || "Query failed");
+      setQueryResult(null);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRegisterObject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRegisterError(null);
+
+    if (!newObjectType.trim() || !newSourceTable.trim()) {
+      setRegisterError("Object type and source table are required.");
+      return;
+    }
+
+    setRegistering(true);
+    try {
+      await registerOntologyObject({
+        object_type: newObjectType.trim(),
+        source_table: newSourceTable.trim(),
+        primary_key_column: newPrimaryKey.trim() || "id",
+        properties: {},
+      });
+      setNewObjectType("");
+      setNewSourceTable("");
+      setNewPrimaryKey("id");
+      setShowRegisterForm(false);
+      await loadAll();
+    } catch (err: any) {
+      setRegisterError(err.message || "Failed to register object type");
+    } finally {
+      setRegistering(false);
     }
   };
 
@@ -85,9 +105,75 @@ export default function OntologyPage() {
 
       {/* Object Types */}
       <section className="mb-8">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
-          Registered Object Types ({objects.length})
-        </h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+            Registered Object Types ({objects.length})
+          </h2>
+          <button
+            onClick={() => setShowRegisterForm((v) => !v)}
+            className="px-3 py-1.5 text-sm font-medium text-blue-700 dark:text-blue-400 border border-blue-300 dark:border-blue-700 rounded-md hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+          >
+            {showRegisterForm ? "Cancel" : "+ Register object type"}
+          </button>
+        </div>
+
+        {showRegisterForm && (
+          <form
+            onSubmit={handleRegisterObject}
+            className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 mb-4 bg-gray-50 dark:bg-gray-900 space-y-3"
+          >
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Registers a new object type against an existing table. This is a data change only —
+              no code deploy needed to make the object queryable via ontology_query.
+            </p>
+            <div className="grid sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                  Object type name
+                </label>
+                <input
+                  type="text"
+                  value={newObjectType}
+                  onChange={(e) => setNewObjectType(e.target.value)}
+                  placeholder="e.g. Client"
+                  className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                  Backing table
+                </label>
+                <input
+                  type="text"
+                  value={newSourceTable}
+                  onChange={(e) => setNewSourceTable(e.target.value)}
+                  placeholder="e.g. ontology_clients"
+                  className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                  Primary key column
+                </label>
+                <input
+                  type="text"
+                  value={newPrimaryKey}
+                  onChange={(e) => setNewPrimaryKey(e.target.value)}
+                  className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                />
+              </div>
+            </div>
+            {registerError && <p className="text-sm text-red-600 dark:text-red-400">{registerError}</p>}
+            <button
+              type="submit"
+              disabled={registering}
+              className="px-4 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors disabled:opacity-50"
+            >
+              {registering ? "Registering..." : "Register"}
+            </button>
+          </form>
+        )}
+
         <div className="grid gap-3">
           {objects.map((obj) => (
             <div
@@ -98,10 +184,15 @@ export default function OntologyPage() {
                 <span className="font-bold text-gray-900 dark:text-white">{obj.object_type}</span>
                 <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
                   {obj.source_table}
+                  {obj.client_id && (
+                    <span className="ml-2 px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400 font-sans">
+                      client-scoped
+                    </span>
+                  )}
                 </span>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {Object.entries(obj.properties).map(([prop, meta]: [string, any]) => (
+                {Object.entries(obj.properties || {}).map(([prop, meta]: [string, any]) => (
                   <span
                     key={prop}
                     className={`text-xs px-2 py-0.5 rounded ${
@@ -114,6 +205,11 @@ export default function OntologyPage() {
                     {meta.decision_relevant && " ⚡"}
                   </span>
                 ))}
+                {Object.keys(obj.properties || {}).length === 0 && (
+                  <span className="text-xs text-gray-400 dark:text-gray-500 italic">
+                    No property metadata registered yet
+                  </span>
+                )}
               </div>
             </div>
           ))}
@@ -179,6 +275,10 @@ export default function OntologyPage() {
             {loading ? "Running..." : "Run Query"}
           </button>
         </div>
+
+        {queryError && (
+          <p className="text-sm text-red-600 dark:text-red-400 mb-3">{queryError}</p>
+        )}
 
         {queryResult && (
           <pre className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-gray-50 dark:bg-gray-900 text-xs overflow-auto max-h-96 text-gray-800 dark:text-gray-200">

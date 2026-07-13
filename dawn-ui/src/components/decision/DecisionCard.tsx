@@ -15,19 +15,30 @@ interface RankedOption {
   constraint_results: ConstraintResult[];
   hard_constraints_passed: boolean;
   soft_score: number;
-  tradeoff_summary: string;
+  tradeoff_summary?: string;
 }
 
 interface DecisionCardProps {
   workflow_name: string;
   ranked_options: RankedOption[];
-  recommended: { option: Record<string, any>; score: number; tradeoff_summary: string } | null;
+  recommended: { option: Record<string, any>; score: number; tradeoff_summary?: string } | null;
   explanation: string;
   requires_approval?: boolean;
   decision_log_id?: string | null;
   onApprove?: (id: string) => void;
   onReject?: (id: string) => void;
   onOverride?: (id: string, reason: string) => void;
+}
+
+// Derives a short human-readable summary from constraint results when the
+// backend doesn't provide a precomputed tradeoff_summary string — the
+// rewritten, data-driven constraint engine returns per-constraint
+// explanations instead of a single canned summary, so this stitches one
+// together client-side from the weighted (soft) constraints.
+function deriveTradeoffSummary(results: ConstraintResult[]): string {
+  const weighted = results.filter((r) => r.weight != null && r.score != null);
+  if (weighted.length === 0) return "";
+  return weighted.map((r) => r.explanation).join(" · ");
 }
 
 export default function DecisionCard({
@@ -128,7 +139,11 @@ export default function DecisionCard({
             )}
           </div>
           <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            Score: {recommended.score.toFixed(2)} — {recommended.tradeoff_summary}
+            Score: {recommended.score.toFixed(2)}
+            {(recommended.tradeoff_summary ||
+              deriveTradeoffSummary(ranked_options.find((o) => o.option === recommended.option)?.constraint_results || [])) && (
+              <> — {recommended.tradeoff_summary || deriveTradeoffSummary(ranked_options.find((o) => o.option === recommended.option)?.constraint_results || [])}</>
+            )}
           </div>
         </div>
       )}
