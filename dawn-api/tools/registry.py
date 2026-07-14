@@ -182,3 +182,11 @@ def _register_default_tools(registry: ToolRegistry) -> None:
         registry.register(EmailStatusTool())
     except Exception as e:
         logger.error(f"Failed to register Email tools: {e}")
+
+    # v38.0 — CRM tools (Regent Growth Engine)
+    try:
+        from tools.crm import CRMAnalyticsTool, CRMLeadTool
+        registry.register(CRMAnalyticsTool())
+        registry.register(CRMLeadTool())
+    except Exception as e:
+        logger.error(f"Failed to register CRM tools: {e}")
