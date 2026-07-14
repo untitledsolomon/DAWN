@@ -8,12 +8,18 @@ Architecture:
 The Bolt app is lazily initialized — it only connects to Slack when
 start_slack_bot() is called, not on module import. This lets the
 module be imported without Slack tokens being set.
+
+Session UUID Mapping:
+  Slack channel IDs (e.g. "D0BH78FJ8LU") are NOT valid UUIDs.
+  This bot maintains a {slack_channel_id: dawn_uuid} mapping that
+  persists to .session_map.json so conversations survive restarts.
 """
 
 import os
 import json
 import logging
 import asyncio
+import uuid
 import httpx
 from typing import Optional
 
@@ -22,7 +28,7 @@ from slack_sdk import WebClient
 
 logger = logging.getLogger(__name__)
 
-# ── Config ──────────────────────────────────────────────────────────────
+# ── Config ──────────────────────────────────────────────────────────────────
 
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN", "")
@@ -30,9 +36,55 @@ SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
 DAWN_API_URL = os.environ.get("DAWN_API_URL", "http://localhost:8000")
 DAWN_API_KEY = os.environ.get("DAWN_API_KEY", "dev-key")
 
+SESSION_MAP_PATH = os.environ.get(
+    "SLACK_SESSION_MAP_PATH",
+    os.path.join(os.path.dirname(__file__), ".session_map.json")
+)
+
 # Lazy-initialized app — None until start_slack_bot() is called
 _app = None
 
+
+# ── Session UUID Mapping ────────────────────────────────────────────────────
+
+def _load_session_map() -> dict:
+    """Load the {slack_channel_id: dawn_uuid} mapping from disk."""
+    if os.path.exists(SESSION_MAP_PATH):
+        try:
+            with open(SESSION_MAP_PATH, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Failed to load session map: {e}")
+    return {}
+
+
+def _save_session_map(mapping: dict):
+    """Persist the session mapping to disk."""
+    try:
+        os.makedirs(os.path.dirname(SESSION_MAP_PATH) or ".", exist_ok=True)
+        with open(SESSION_MAP_PATH, "w") as f:
+            json.dump(mapping, f, indent=2)
+    except OSError as e:
+        logger.error(f"Failed to save session map: {e}")
+
+
+def get_or_create_session_id(slack_channel_id: str) -> str:
+    """
+    Return a DAWN-compatible UUID session_id for a Slack channel.
+    Creates and persists a new UUID if this channel hasn't been seen before.
+    """
+    mapping = _load_session_map()
+    if slack_channel_id in mapping:
+        return mapping[slack_channel_id]
+
+    new_uuid = str(uuid.uuid4())
+    mapping[slack_channel_id] = new_uuid
+    _save_session_map(mapping)
+    logger.info(f"Mapped Slack channel {slack_channel_id} → DAWN session {new_uuid}")
+    return new_uuid
+
+
+# ── App Factory ─────────────────────────────────────────────────────────────
 
 def get_app():
     """Get or create the Bolt App instance (lazy initialization)."""
@@ -47,7 +99,7 @@ def get_app():
     return _app
 
 
-# ── Helpers ─────────────────────────────────────────────────────────────
+# ── Helpers ─────────────────────────────────────────────────────────────────
 
 async def query_dawn(
     message: str,
@@ -98,20 +150,7 @@ async def query_dawn(
         return f"⚠️ Unexpected error: {e}"
 
 
-def get_session_id_for_channel(channel: str, user: str = "") -> str:
-    """
-    Generate a deterministic session_id for a Slack channel or DM.
-    This lets DAWN maintain context per conversation.
-
-    DM with DAWN → session per user (e.g., "slack_dm_U12345")
-    Channel mention → session per channel (e.g., "slack_channel_C67890")
-    """
-    if channel.startswith("D"):
-        return f"slack_dm_{channel}"
-    return f"slack_channel_{channel}"
-
-
-# ── Handler Registration ───────────────────────────────────────────────
+# ── Handler Registration ────────────────────────────────────────────────────
 
 def _register_handlers(app):
     """Register all event handlers and slash commands on the Bolt app."""
@@ -130,7 +169,7 @@ def _register_handlers(app):
 
             channel = event.get("channel", "")
             user = event.get("user", "")
-            session_id = get_session_id_for_channel(channel, user)
+            session_id = get_or_create_session_id(channel)
 
             response = asyncio.run(query_dawn(text, channel, user, session_id))
             say(response)
@@ -156,7 +195,7 @@ def _register_handlers(app):
 
             channel = event.get("channel", "")
             user = event.get("user", "")
-            session_id = get_session_id_for_channel(channel, user)
+            session_id = get_or_create_session_id(channel)
 
             response = asyncio.run(query_dawn(text, channel, user, session_id))
             say(response)
@@ -175,7 +214,7 @@ def _register_handlers(app):
 
         channel = command.get("channel_id", "")
         user = command.get("user_id", "")
-        session_id = get_session_id_for_channel(channel, user)
+        session_id = get_or_create_session_id(channel)
 
         response = asyncio.run(query_dawn(text, channel, user, session_id))
         say(response)
@@ -207,7 +246,7 @@ def _register_handlers(app):
         except Exception as e:
             say(f"⚠️ Revenue check failed: {e}")
 
-    # ── Channel Monitoring ──────────────────────────────────────────────
+    # ── Channel Monitoring ──────────────────────────────────────────────────
 
     @app.event("message")
     def handle_channel_messages(event: dict, client: WebClient):
@@ -238,7 +277,7 @@ def _register_handlers(app):
             logger.error(f"Error in channel monitoring: {e}")
 
 
-# ── Startup ─────────────────────────────────────────────────────────────
+# ── Startup ─────────────────────────────────────────────────────────────────
 
 def start_slack_bot():
     """Start the Slack bot in Socket Mode. Call this from a background thread."""

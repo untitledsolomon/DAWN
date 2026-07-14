@@ -162,3 +162,23 @@ async def slack_setup_info():
         ],
         "manifest_path": "slack_bot/manifest.yaml",
     }
+
+
+# ── Session Mapping ─────────────────────────────────────────────────────────
+
+@router.get("/sessions")
+async def list_slack_sessions():
+    """Show the Slack channel → DAWN session UUID mapping."""
+    try:
+        from slack_bot.app import _load_session_map
+        mapping = _load_session_map()
+        return {
+            "count": len(mapping),
+            "sessions": [
+                {"slack_channel": k, "dawn_session": v}
+                for k, v in mapping.items()
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Failed to load session map: {e}")
+        return {"count": 0, "sessions": [], "error": str(e)}
