@@ -103,16 +103,19 @@ def get_app():
 
 async def query_dawn(
     message: str,
-    channel: str = "",
-    user: str = "",
     session_id: Optional[str] = None,
 ) -> str:
-    """Send a message to DAWN's chat endpoint and get the response."""
+    """
+    Send a message to DAWN's chat endpoint and get the response text.
+
+    session_id should be a valid UUID (from get_or_create_session_id) or None
+    (the API will create one). Never pass a Slack channel ID directly.
+    """
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             payload = {
                 "message": message,
-                "session_id": session_id or channel,
+                "session_id": session_id,  # None is fine — API creates one
                 "web_search_enabled": False,
             }
             resp = await client.post(
@@ -168,10 +171,9 @@ def _register_handlers(app):
                 return
 
             channel = event.get("channel", "")
-            user = event.get("user", "")
             session_id = get_or_create_session_id(channel)
 
-            response = asyncio.run(query_dawn(text, channel, user, session_id))
+            response = asyncio.run(query_dawn(text, session_id=session_id))
             say(response)
 
         except Exception as e:
@@ -194,10 +196,9 @@ def _register_handlers(app):
                 return
 
             channel = event.get("channel", "")
-            user = event.get("user", "")
             session_id = get_or_create_session_id(channel)
 
-            response = asyncio.run(query_dawn(text, channel, user, session_id))
+            response = asyncio.run(query_dawn(text, session_id=session_id))
             say(response)
 
         except Exception as e:
@@ -213,10 +214,9 @@ def _register_handlers(app):
             return
 
         channel = command.get("channel_id", "")
-        user = command.get("user_id", "")
         session_id = get_or_create_session_id(channel)
 
-        response = asyncio.run(query_dawn(text, channel, user, session_id))
+        response = asyncio.run(query_dawn(text, session_id=session_id))
         say(response)
 
     @app.command("/status")
@@ -224,9 +224,12 @@ def _register_handlers(app):
         """Quick system status check."""
         ack()
         try:
+            # Use a dedicated session for status checks so they don't pollute
+            # the user's conversation history
+            session_id = get_or_create_session_id("_system_status")
             resp = asyncio.run(query_dawn(
                 "Run a quick system health check and return the status.",
-                "status_check"
+                session_id=session_id,
             ))
             say(f"📊 *DAWN System Status*\n{resp}")
         except Exception as e:
@@ -237,10 +240,11 @@ def _register_handlers(app):
         """Quick revenue summary."""
         ack()
         try:
+            session_id = get_or_create_session_id("_system_revenue")
             resp = asyncio.run(query_dawn(
                 "What's the current revenue situation? Summarize active clients, "
                 "monthly recurring revenue, and any overdue invoices.",
-                "revenue_check"
+                session_id=session_id,
             ))
             say(f"💰 *Revenue Summary*\n{resp}")
         except Exception as e:
