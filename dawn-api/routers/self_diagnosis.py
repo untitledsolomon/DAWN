@@ -39,10 +39,15 @@ class DiagnosisRequest(BaseModel):
 # ──── Helpers ────────────────────────────────────────────────────────────────
 
 def _count_table(table: str, filters: Optional[dict] = None) -> int:
-    """Count rows in a table with optional filters."""
+    """Count rows in a table with optional filters.
+    
+    Uses count=exact with a minimal select. Some junction tables (e.g. node_tags)
+    don't have an 'id' column, so we use '*' as the select column which works
+    universally.
+    """
     try:
         supabase = db.get_db()
-        q = supabase.table(table).select("id", count="exact")
+        q = supabase.table(table).select("*", count="exact")
         if filters:
             for k, v in filters.items():
                 q = q.eq(k, v)
@@ -59,7 +64,7 @@ def _get_recent(table: str, column: str = "created_at", days: int = 7) -> int:
         supabase = db.get_db()
         since = datetime.now(timezone.utc).isoformat()
         # We approximate by fetching recent and counting
-        res = supabase.table(table).select("id").gte(column, since).execute()
+        res = supabase.table(table).select("*").gte(column, since).execute()
         return len(res.data or [])
     except Exception:
         return -1
@@ -116,30 +121,30 @@ async def get_diagnosis(
             "focus": focus,
         }
 
-        # ── 1. Database Health ──────────────────────────────────────────
+        # ── 1. Database Health ───────────────────────────────────────────────
         db_health = _diagnose_database()
         report["database"] = db_health
 
-        # ── 2. Knowledge Graph Health ───────────────────────────────────
+        # ── 2. Knowledge Graph Health ────────────────────────────────────────
         kg_health = _diagnose_knowledge_graph()
         report["knowledge_graph"] = kg_health
 
-        # ── 3. ML/AI Capabilities ───────────────────────────────────────
+        # ── 3. ML/AI Capabilities ────────────────────────────────────────────
         if focus in ("all", "ml"):
             report["ml_capabilities"] = _diagnose_ml_capabilities()
 
-        # ── 4. Performance & Infrastructure ─────────────────────────────
+        # ── 4. Performance & Infrastructure ──────────────────────────────────
         if focus in ("all", "performance"):
             report["infrastructure"] = _diagnose_infrastructure()
 
-        # ── 5. Codebase Health ──────────────────────────────────────────
+        # ── 5. Codebase Health ───────────────────────────────────────────────
         if include_code_analysis or focus == "code":
             report["codebase"] = _diagnose_codebase()
 
-        # ── 6. Improvement Roadmap ──────────────────────────────────────
+        # ── 6. Improvement Roadmap ───────────────────────────────────────────
         report["improvements"] = _generate_improvements(db_health, kg_health, focus)
 
-        # ── 7. Self-Knowledge Summary ───────────────────────────────────
+        # ── 7. Self-Knowledge Summary ────────────────────────────────────────
         report["self_knowledge"] = _summarize_self_knowledge()
 
         return report
@@ -160,7 +165,7 @@ def _diagnose_database() -> dict:
     try:
         supabase = db.get_db()
         # Ping
-        ping = supabase.table("nodes").select("id").limit(1).execute()
+        ping = supabase.table("nodes").select("*").limit(1).execute()
         result["connected"] = True
 
         # Count key tables
@@ -499,7 +504,7 @@ def _generate_improvements(db_health: dict, kg_health: dict, focus: str) -> list
     """Generate a prioritized list of concrete improvements."""
     improvements = []
 
-    # ── Data Collection Improvements ──────────────────────────────────
+    # ── Data Collection Improvements ─────────────────────────────────────────
     if focus in ("all", "ml"):
         improvements.append({
             "priority": "P0 - Critical",
@@ -530,7 +535,7 @@ def _generate_improvements(db_health: dict, kg_health: dict, focus: str) -> list
             "depends_on": ["Install transformers + torch + peft"],
         })
 
-    # ── Knowledge Graph Improvements ───────────────────────────────────
+    # ── Knowledge Graph Improvements ─────────────────────────────────────────
     if focus in ("all", "knowledge", "ml"):
         if kg_health.get("orphan_nodes", 0) > 0:
             improvements.append({
@@ -563,7 +568,7 @@ def _generate_improvements(db_health: dict, kg_health: dict, focus: str) -> list
                 "depends_on": [],
             })
 
-    # ── ML-Specific Improvements ───────────────────────────────────────
+    # ── ML-Specific Improvements ─────────────────────────────────────────────
     if focus in ("all", "ml"):
         improvements.append({
             "priority": "P1 - High",
@@ -639,7 +644,7 @@ def _generate_improvements(db_health: dict, kg_health: dict, focus: str) -> list
             "depends_on": ["Add response quality scoring with a learned reward model"],
         })
 
-    # ── Infrastructure Improvements ────────────────────────────────────
+    # ── Infrastructure Improvements ──────────────────────────────────────────
     if focus in ("all", "performance"):
         improvements.append({
             "priority": "P2 - Medium",
@@ -655,7 +660,7 @@ def _generate_improvements(db_health: dict, kg_health: dict, focus: str) -> list
             "depends_on": [],
         })
 
-    # ── Self-Knowledge Improvements ────────────────────────────────────
+    # ── Self-Knowledge Improvements ──────────────────────────────────────────
     improvements.append({
         "priority": "P1 - High",
         "category": "self_knowledge",
@@ -714,7 +719,7 @@ async def quick_health(_=None):
     """Quick health check with key metrics."""
     try:
         supabase = db.get_db()
-        ping = supabase.table("nodes").select("id").limit(1).execute()
+        ping = supabase.table("nodes").select("*").limit(1).execute()
         db_ok = True
     except Exception:
         db_ok = False
@@ -732,9 +737,9 @@ async def quick_health(_=None):
     }
 
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # NEW: Memory system diagnosis
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _diagnose_memory_system() -> dict:
     """Check the dedicated memories table and related infrastructure."""
