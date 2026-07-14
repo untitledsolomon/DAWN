@@ -1,4 +1,4 @@
-# Slack App Manifest for DAWN
+# Slack App Manifest for DAWN v37.0
 # Import this at https://api.slack.com/apps → Create New App → From Manifest
 #
 # After creating the app:
@@ -30,6 +30,10 @@ display_information:
     • Search the web and knowledge graph
     • Run OSINT and security reconnaissance
     • Execute decision workflows
+    • Delegate tasks to specialist sub-agents
+    • Schedule recurring reports and channel monitors
+    • Manage website content via Forge CMS
+    • Send emails and notifications
 
     Built by Solomon John for Regent (Kampala, Uganda).
 
@@ -61,6 +65,26 @@ features:
     - command: /revenue
       description: "Revenue summary"
       usage_hint: ""
+      should_escape: false
+    - command: /watch
+      description: "Watch a channel for keywords — creates a monitor agent"
+      usage_hint: "#channel for \"keywords\" every Nmin"
+      should_escape: false
+    - command: /agents
+      description: "List and manage dynamic agents (stop/start/delete)"
+      usage_hint: "[stop|start|delete <id>]"
+      should_escape: false
+    - command: /axis
+      description: "Query Axis ERP — payroll, tax, employees"
+      usage_hint: "[your question about payroll/tax/employees]"
+      should_escape: false
+    - command: /forge
+      description: "Query Forge CMS — website content management"
+      usage_hint: "[your question about website content]"
+      should_escape: false
+    - command: /report
+      description: "Schedule a recurring report"
+      usage_hint: "\"query\" every <schedule>"
       should_escape: false
     - command: /leads
       description: "CRM lead management and pipeline"

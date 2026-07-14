@@ -36,7 +36,7 @@ class ToolRegistry:
         return list(self._tools.keys())
 
 
-# ── Singleton ───────────────────────────────────────────────────────────────────────────
+# ── Singleton ──────────────────────────────────────────────────────────────
 
 _registry: Optional[ToolRegistry] = None
 
@@ -120,17 +120,14 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register PentestTool: {e}")
 
-    # Knowledge graph tool — was defined but never registered, so agent
-    # mode had no path to the same graph/memory retrieval chat mode uses
-    # automatically via build_context(). See tools/knowledge_graph.py.
+    # Knowledge graph tool
     try:
         from tools.knowledge_graph import KnowledgeGraphTool
         registry.register(KnowledgeGraphTool())
     except Exception as e:
         logger.error(f"Failed to register KnowledgeGraphTool: {e}")
 
-    # v32.0 — Decision Intelligence tools (rebuilt on the generic,
-    # data-driven ontology/workflow engine — see decision_engine/)
+    # v32.0 — Decision Intelligence tools
     try:
         from tools.decision_workflow import DecisionWorkflowTool, DecisionWorkflowListTool
         registry.register(DecisionWorkflowTool())
@@ -145,9 +142,43 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register OntologyQueryTool: {e}")
 
-    # v35.0 — Explainer tool (animated whiteboard-style HTML/SVG/JS artifacts)
+    # v35.0 — Explainer tool
     try:
         from tools.explainer import ExplainerTool
         registry.register(ExplainerTool())
     except Exception as e:
         logger.error(f"Failed to register ExplainerTool: {e}")
+
+    # v37.0 — Delegate tools (sub-agent handoff)
+    try:
+        from tools.delegate import DelegateToSubAgentTool, DelegateParallelTool
+        registry.register(DelegateToSubAgentTool())
+        registry.register(DelegateParallelTool())
+    except Exception as e:
+        logger.error(f"Failed to register DelegateToSubAgentTool: {e}")
+
+    # v37.0 — Axis ERP tools
+    try:
+        from tools.axis import AxisPayrollTool, AxisTaxTool, AxisEmployeeTool
+        registry.register(AxisPayrollTool())
+        registry.register(AxisTaxTool())
+        registry.register(AxisEmployeeTool())
+    except Exception as e:
+        logger.error(f"Failed to register Axis tools: {e}")
+
+    # v37.0 — Forge CMS tools
+    try:
+        from tools.forge import ForgePagesTool, ForgeBlogTool, ForgeAnalyticsTool
+        registry.register(ForgePagesTool())
+        registry.register(ForgeBlogTool())
+        registry.register(ForgeAnalyticsTool())
+    except Exception as e:
+        logger.error(f"Failed to register Forge tools: {e}")
+
+    # v37.0 — Email tools
+    try:
+        from tools.email_tool import EmailSendTool, EmailStatusTool
+        registry.register(EmailSendTool())
+        registry.register(EmailStatusTool())
+    except Exception as e:
+        logger.error(f"Failed to register Email tools: {e}")

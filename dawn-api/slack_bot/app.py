@@ -29,7 +29,7 @@ from slack_sdk import WebClient
 
 logger = logging.getLogger(__name__)
 
-# ── Config ──────────────────────────────────────────────────────────────────
+# ── Config ─────────────────────────────────────────────────────────────────
 
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN", "")
@@ -46,7 +46,7 @@ SESSION_MAP_PATH = os.environ.get(
 _app = None
 
 
-# ── Session UUID Mapping ────────────────────────────────────────────────────
+# ── Session UUID Mapping ───────────────────────────────────────────────────
 
 def _load_session_map() -> dict:
     """Load the {slack_channel_id: dawn_uuid} mapping from disk."""
@@ -85,7 +85,7 @@ def get_or_create_session_id(slack_channel_id: str) -> str:
     return new_uuid
 
 
-# ── App Factory ─────────────────────────────────────────────────────────────
+# ── App Factory ────────────────────────────────────────────────────────────
 
 def get_app():
     """Get or create the Bolt App instance (lazy initialization)."""
@@ -100,7 +100,7 @@ def get_app():
     return _app
 
 
-# ── DAWN Agent API (replaces old chat-mode query_dawn) ─────────────────────
+# ── DAWN Agent API ─────────────────────────────────────────────────────────
 
 async def query_dawn_agent(
     message: str,
@@ -288,7 +288,7 @@ async def _send_long_message(channel: str, text: str, thread_ts: Optional[str] =
         client.chat_postMessage(**kwargs)
 
 
-# ── Handler Registration ────────────────────────────────────────────────────
+# ── Handler Registration ───────────────────────────────────────────────────
 
 def _register_handlers(app):
     """Register all event handlers and slash commands on the Bolt app."""
@@ -412,7 +412,7 @@ def _register_handlers(app):
 
     @app.command("/regent")
     def handle_regent(ack: Ack, command: dict, say):
-        """Ask DAWN about anything Regent-related — products, clients, team, projects."""
+        """Ask DAWN about anything Regent-related."""
         ack()
         text = command.get("text", "").strip()
         if not text:
@@ -435,11 +435,7 @@ def _register_handlers(app):
 
     @app.command("/analyze")
     def handle_analyze(ack: Ack, command: dict, say):
-        """
-        Analyze something — a file, a situation, data.
-        Usage: /analyze <question or description>
-        Best used when you've already shared a file in the thread.
-        """
+        """Analyze something — a file, a situation, data."""
         ack()
         text = command.get("text", "").strip()
         if not text:
@@ -455,6 +451,244 @@ def _register_handlers(app):
             session_id=session_id,
         ))
         asyncio.run(_send_long_message(channel, response))
+
+    # ── v37.0: New Slash Commands ──────────────────────────────────────────
+
+    @app.command("/watch")
+    def handle_watch(ack: Ack, command: dict, say):
+        """Create a keyword monitor agent.
+        
+        Usage: /watch #channel for "keyword1, keyword2" every 10min
+        """
+        ack()
+        text = command.get("text", "").strip()
+        if not text:
+            say("Usage: `/watch #channel for \"keywords\" every <interval>`\n"
+                "Example: `/watch #support for \"urgent, escalation, critical\" every 10min`")
+            return
+
+        # Parse: #channel for "keywords" every Nmin
+        channel_match = re.search(r"#(\w+)", text)
+        keywords_match = re.search(r'"([^"]+)"', text)
+        interval_match = re.search(r"every\s+(\d+)\s*min", text, re.IGNORECASE)
+
+        if not channel_match or not keywords_match:
+            say("Usage: `/watch #channel for \"keywords\" every 10min`\n"
+                "Example: `/watch #support for \"urgent, escalation\" every 10min`")
+            return
+
+        channel_name = channel_match.group(1)
+        keywords = [k.strip() for k in keywords_match.group(1).split(",")]
+        interval_min = int(interval_match.group(1)) if interval_match else 10
+
+        try:
+            from slack_bot.dynamic_agents import DynamicAgentManager
+            result = asyncio.run(DynamicAgentManager.create_agent(
+                name=f"watch-{channel_name}",
+                agent_type="keyword_monitor",
+                channel=channel_name,
+                config={"keywords": keywords, "interval_minutes": interval_min},
+                created_by=command.get("user_id", "slack"),
+            ))
+            if result["success"]:
+                say(f"✅ Created keyword monitor for #{channel_name}\n"
+                    f"   Keywords: {', '.join(keywords)}\n"
+                    f"   Interval: every {interval_min} minutes\n"
+                    f"   Agent ID: `{result['agent']['id'][:8]}...`")
+            else:
+                say(f"⚠️ Failed to create monitor: {result.get('error')}")
+        except Exception as e:
+            logger.error(f"Error creating watch agent: {e}")
+            say(f"⚠️ Error: {e}")
+
+    @app.command("/agents")
+    def handle_agents(ack: Ack, command: dict, say):
+        """List and manage dynamic agents.
+        
+        Usage: /agents — list all agents
+               /agents stop <id> — pause an agent
+               /agents start <id> — resume an agent
+               /agents delete <id> — delete an agent
+        """
+        ack()
+        text = command.get("text", "").strip()
+        parts = text.split()
+
+        try:
+            from slack_bot.dynamic_agents import DynamicAgentManager
+
+            if not text:
+                # List all agents
+                agents = DynamicAgentManager.list_agents()
+                if not agents:
+                    say("No dynamic agents configured. Use `/watch` to create one.")
+                    return
+
+                blocks = [
+                    {
+                        "type": "header",
+                        "text": {"type": "plain_text", "text": "🤖 Dynamic Agents", "emoji": True},
+                    },
+                    {"type": "divider"},
+                ]
+
+                for agent in agents:
+                    status_emoji = "🟢" if agent.get("status") == "active" else "⏸️"
+                    agent_type = agent.get("agent_type", "unknown").replace("_", " ").title()
+                    blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": (
+                                f"{status_emoji} *{agent.get('name', 'Unnamed')}*\n"
+                                f"   Type: {agent_type} | Channel: #{agent.get('channel', '?')}\n"
+                                f"   ID: `{agent.get('id', '?')[:8]}...`"
+                            ),
+                        },
+                    })
+
+                say(text="Dynamic Agents", blocks=blocks)
+                return
+
+            if parts[0] == "stop" and len(parts) >= 2:
+                result = asyncio.run(DynamicAgentManager.toggle_agent(parts[1]))
+                if result["success"]:
+                    say(f"⏸️ Agent paused.")
+                else:
+                    say(f"⚠️ {result.get('error', 'Failed to pause agent')}")
+
+            elif parts[0] == "start" and len(parts) >= 2:
+                result = asyncio.run(DynamicAgentManager.toggle_agent(parts[1]))
+                if result["success"]:
+                    say(f"▶️ Agent resumed.")
+                else:
+                    say(f"⚠️ {result.get('error', 'Failed to resume agent')}")
+
+            elif parts[0] == "delete" and len(parts) >= 2:
+                result = asyncio.run(DynamicAgentManager.delete_agent(parts[1]))
+                if result["success"]:
+                    say(f"🗑️ Agent deleted.")
+                else:
+                    say(f"⚠️ {result.get('error', 'Failed to delete agent')}")
+
+            else:
+                say("Usage:\n"
+                    "  `/agents` — list all agents\n"
+                    "  `/agents stop <id>` — pause an agent\n"
+                    "  `/agents start <id>` — resume an agent\n"
+                    "  `/agents delete <id>` — delete an agent")
+
+        except Exception as e:
+            logger.error(f"Error in /agents: {e}")
+            say(f"⚠️ Error: {e}")
+
+    @app.command("/axis")
+    def handle_axis(ack: Ack, command: dict, say):
+        """Query Axis ERP — payroll, tax, employees.
+        
+        Usage: /axis <question about payroll, tax, or employees>
+        """
+        ack()
+        text = command.get("text", "").strip()
+        if not text:
+            say("Usage: `/axis <your question about payroll, tax, or employees>`\n"
+                "Examples:\n"
+                "• `/axis process payroll for January 2025`\n"
+                "• `/axis what's the PAYE for a gross salary of 5,000,000 UGX?`\n"
+                "• `/axis list all employees`\n"
+                "• `/axis show me the tax report for last month`")
+            return
+
+        channel = command.get("channel_id", "")
+        session_id = get_or_create_session_id(channel)
+
+        response = asyncio.run(query_dawn_agent(
+            f"[Axis ERP] {text}",
+            session_id=session_id,
+        ))
+        asyncio.run(_send_long_message(channel, response))
+
+    @app.command("/forge")
+    def handle_forge(ack: Ack, command: dict, say):
+        """Query Forge CMS — website content management.
+        
+        Usage: /forge <question about website content>
+        """
+        ack()
+        text = command.get("text", "").strip()
+        if not text:
+            say("Usage: `/forge <your question about website content>`\n"
+                "Examples:\n"
+                "• `/forge list all pages`\n"
+                "• `/forge create a new blog post about our services`\n"
+                "• `/forge what's our top performing content?`\n"
+                "• `/forge update the homepage hero section`")
+            return
+
+        channel = command.get("channel_id", "")
+        session_id = get_or_create_session_id(channel)
+
+        response = asyncio.run(query_dawn_agent(
+            f"[Forge CMS] {text}",
+            session_id=session_id,
+        ))
+        asyncio.run(_send_long_message(channel, response))
+
+    @app.command("/report")
+    def handle_report(ack: Ack, command: dict, say):
+        """Schedule a recurring report.
+        
+        Usage: /report "query" every <schedule>
+        """
+        ack()
+        text = command.get("text", "").strip()
+        if not text:
+            say("Usage: `/report \"your query\" every <schedule>`\n"
+                "Examples:\n"
+                "• `/report \"summarize this week's leads\" every monday 9am`\n"
+                "• `/report \"check system health\" every 6 hours`\n"
+                "• `/report \"revenue summary\" every 1st of month`")
+            return
+
+        # Parse: "query" every <schedule>
+        query_match = re.search(r'"([^"]+)"', text)
+        if not query_match:
+            say("Please put your query in quotes.\n"
+                "Example: `/report \"summarize leads\" every monday 9am`")
+            return
+
+        query = query_match.group(1)
+        schedule_text = text[text.index(query_match.group(0)) + len(query_match.group(0)):].strip()
+        schedule_text = re.sub(r"^every\s+", "", schedule_text, flags=re.IGNORECASE).strip()
+
+        if not schedule_text:
+            say("Please specify a schedule.\n"
+                "Example: `/report \"summarize leads\" every monday 9am`")
+            return
+
+        channel = command.get("channel_id", "")
+        channel_name = command.get("channel_name", channel)
+
+        try:
+            from slack_bot.dynamic_agents import DynamicAgentManager
+            result = asyncio.run(DynamicAgentManager.create_agent(
+                name=f"report-{schedule_text[:20].replace(' ', '-')}",
+                agent_type="cron_report",
+                channel=channel_name,
+                config={"query": query, "schedule": schedule_text},
+                created_by=command.get("user_id", "slack"),
+            ))
+            if result["success"]:
+                say(f"✅ Scheduled report created\n"
+                    f"   Query: \"{query[:100]}\"\n"
+                    f"   Schedule: every {schedule_text}\n"
+                    f"   Channel: #{channel_name}\n"
+                    f"   Agent ID: `{result['agent']['id'][:8]}...`")
+            else:
+                say(f"⚠️ Failed to create report: {result.get('error')}")
+        except Exception as e:
+            logger.error(f"Error creating report: {e}")
+            say(f"⚠️ Error: {e}")
 
     # ── CRM Agent Commands (kept for backward compatibility) ──
 
@@ -546,7 +780,7 @@ def _register_handlers(app):
             logger.error(f"Error in /dashboard: {e}", exc_info=True)
             say(f"⚠️ Error: {str(e)[:200]}")
 
-    # ── Channel Monitoring ──────────────────────────────────────────────────
+    # ── Channel Monitoring ─────────────────────────────────────────────────
 
     @app.event("message")
     def handle_channel_messages(event: dict, client: WebClient):
@@ -577,7 +811,7 @@ def _register_handlers(app):
             logger.error(f"Error in channel monitoring: {e}")
 
 
-# ── Startup ─────────────────────────────────────────────────────────────────
+# ── Startup ────────────────────────────────────────────────────────────────
 
 def start_slack_bot():
     """Start the Slack bot in Socket Mode. Call this from a background thread."""

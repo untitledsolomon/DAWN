@@ -54,7 +54,10 @@ def build_agent_messages(user_message: str, history: list[dict]) -> list[dict]:
     and the same memory lookup routers/chat.py uses) on demand. Kept separate
     deliberately so agent runs don't pay for a graph traversal on every single
     turn regardless of whether the task needs it.
+
+    v37.0: Injects sub-agent descriptions so the supervisor knows when to delegate.
     """
+    # Build base system prompt
     system = (
         DAWN_SYSTEM_PROMPT
         + "\n\nYou have access to tools for working with files, git repositories, "
@@ -70,9 +73,26 @@ def build_agent_messages(user_message: str, history: list[dict]) -> list[dict]:
           "first (search for topics/entities, recall for personal facts and "
           "preferences) rather than relying only on conversation history or "
           "guessing — DAWN's knowledge graph and memory may already have the answer."
-        + "\n"
-        + AGENT_SAFETY_PROMPT
     )
+
+    # v37.0: Inject sub-agent descriptions for delegation awareness
+    try:
+        from slack_bot.sub_agents.registry import get_sub_agent_registry
+        registry = get_sub_agent_registry()
+        agent_descriptions = registry.agent_descriptions()
+        if agent_descriptions:
+            system += agent_descriptions
+            system += (
+                "\n\nWhen a task falls clearly into one of these specialist domains, "
+                "use the delegate_to_subagent or delegate_parallel tools to hand off "
+                "the work. The sub-agent will handle the details and return the result. "
+                "This is more efficient than doing everything yourself."
+            )
+    except Exception as e:
+        logger.debug(f"Could not load sub-agent descriptions: {e}")
+
+    system += "\n" + AGENT_SAFETY_PROMPT
+
     messages = [{"role": "system", "content": system}]
     for turn in history[-10:]:
         messages.append({"role": turn["role"], "content": turn["content"]})
