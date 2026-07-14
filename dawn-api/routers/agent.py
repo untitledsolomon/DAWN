@@ -17,6 +17,7 @@ from routers.chat import (
     _ensure_session_sync,
     _generate_title,
     _needs_title_sync,
+    _load_history_from_db,  # ★ NEW: load history from DB
 )
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ── Auth ───────────────────────────────────────────────────────────────────
+# ── Auth ──────────────────────────────────────────────────────────────────────
 # Unlike routers/chat.py's verify_key (which only checks the key is valid),
 # this resolves *which* identity is making the request, since agent mode's
 # tool access is tiered — see llm/identity.py.
@@ -36,7 +37,7 @@ def get_identity(x_api_key: Optional[str] = Header(None)) -> Identity:
     return identity
 
 
-# ── Schema ─────────────────────────────────────────────────────────────────
+# ── Schema ────────────────────────────────────────────────────────────────────
 
 class AgentRequest(BaseModel):
     message: str
@@ -45,7 +46,7 @@ class AgentRequest(BaseModel):
     max_iterations: int = DEFAULT_MAX_ITERATIONS
 
 
-# ── SSE helper ─────────────────────────────────────────────────────────────
+# ── SSE helper ────────────────────────────────────────────────────────────────
 # Identical format to routers/chat.py's sse() — duplicated here rather than
 # imported to avoid a cross-router dependency; consider moving to a shared
 # util if a third SSE router shows up.
@@ -54,7 +55,7 @@ def sse(event_type: str, payload: dict) -> str:
     return f"data: {json.dumps({'type': event_type, **payload})}\n\n"
 
 
-# ── Main agent endpoint ────────────────────────────────────────────────────
+# ── Main agent endpoint ───────────────────────────────────────────────────────
 
 @router.post("/")
 async def agent(
@@ -86,6 +87,12 @@ async def agent(
                 _generate_title, session_id, req.message, engine.complete
             )
 
+        # ★ FIX: Load history from DB instead of relying on client
+        # This is the critical fix for Slack bot and page-refresh forgetting.
+        # The Slack bot never sends history, and the web UI loses it on refresh.
+        db_history = _load_history_from_db(session_id)
+        effective_history = db_history if db_history else req.history
+
         # Track tool calls by a unique key (name + index) so duplicate tool
         # names don't overwrite each other in pending_calls.
         pending_calls: dict[str, dict] = {}
@@ -94,7 +101,7 @@ async def agent(
         async for event in run_agent_loop(
             user_message=req.message,
             identity=identity,
-            history=req.history,
+            history=effective_history,  # ★ Now uses DB-loaded history
             max_iterations=req.max_iterations,
         ):
             event_type = event.pop("type")
@@ -126,7 +133,7 @@ async def agent(
                     tc_dict["output"] = event.get("output")
                     tc_dict["error"] = event.get("error")
 
-                # ── create_chart: persist Vega-Lite spec ──────────────────
+                # ── create_chart: persist Vega-Lite spec ────────────────────────
                 if (
                     event.get("name") == "create_chart"
                     and event.get("success")
@@ -153,17 +160,13 @@ async def agent(
                     except Exception:
                         logger.exception("Failed to persist chart artifact")
 
-                # ── create_explainer: persist HTML code ───────────────────
+                # ── create_explainer: persist HTML code ─────────────────────────
                 if (
                     event.get("name") == "create_explainer"
                     and event.get("success")
                     and isinstance(event.get("output"), dict)
                 ):
                     output = event["output"]
-                    # The explainer tool returns a placeholder; the actual
-                    # LLM generation happens via the /explainer/generate endpoint.
-                    # But if the output already contains code (e.g. from a
-                    # direct LLM call), persist it here.
                     code = output.get("code")
                     if code:
                         try:

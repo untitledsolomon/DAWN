@@ -20,14 +20,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ── Auth ─────────────────────────────────────────────────────────────────────
+# ── Auth ──────────────────────────────────────────────────────────────────────
 
 def verify_key(x_api_key: Optional[str] = Header(None)):
     if x_api_key != settings.dawn_api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
-# ── Schema ───────────────────────────────────────────────────────────────────
+# ── Schema ────────────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
     message: str
@@ -36,13 +36,13 @@ class ChatRequest(BaseModel):
     web_search_enabled: bool = False
 
 
-# ── SSE helpers ──────────────────────────────────────────────────────────────
+# ── SSE helpers ───────────────────────────────────────────────────────────────
 
 def sse(event_type: str, payload) -> str:
     return f"data: {json.dumps({'type': event_type, **payload})}\n\n"
 
 
-# ── DB helpers ───────────────────────────────────────────────────────────────
+# ── DB helpers ────────────────────────────────────────────────────────────────
 
 def _save_message_sync(session_id: str, role: str, content: str,
                        tool_calls: Optional[list] = None,
@@ -193,7 +193,34 @@ async def _learn_from_error(
         logger.warning(f"[chat] Error learning failed: {e}")
 
 
-# ── Main chat endpoint ───────────────────────────────────────────────────────
+# ── Shared: load conversation history from DB ─────────────────────────────────
+
+def _load_history_from_db(session_id: str, max_turns: int = 20) -> list[dict]:
+    """Load the last N turns of conversation history from the database.
+    
+    This is the KEY fix for the forgetting problem: instead of relying on the
+    client to send history (which breaks on page refresh, Slack, etc.), we
+    independently load past messages from the DB using the session_id.
+    """
+    if not session_id or session_id == "unknown":
+        return []
+    try:
+        supabase = db.get_db()
+        res = supabase.table("chat_messages").select(
+            "role, content"
+        ).eq("session_id", session_id).order("created_at").execute()
+        if not res.data:
+            return []
+        # Take the last max_turns messages (each turn = user + assistant = 2 messages)
+        # We want the last N/2 complete turns
+        recent = res.data[-max_turns * 2:] if len(res.data) > max_turns * 2 else res.data
+        return [{"role": m["role"], "content": m["content"]} for m in recent]
+    except Exception as e:
+        logger.warning(f"[chat] Failed to load history from DB: {e}")
+        return []
+
+
+# ── Main chat endpoint ────────────────────────────────────────────────────────
 
 @router.post("/")
 async def chat(
@@ -225,7 +252,6 @@ async def chat(
         await asyncio.sleep(0)
 
         # 4. Load memory context (personal facts, preferences, past learnings)
-        #    Uses the new dedicated memories table via load_memory_context()
         memory_context = await load_memory_context(req.message)
 
         # 5. Build context from graph
@@ -267,10 +293,16 @@ async def chat(
             else:
                 combined_context = web_note
 
+        # ★ FIX: Load history from DB instead of relying on client
+        # Merge client-provided history with DB history (DB wins for completeness)
+        db_history = _load_history_from_db(session_id)
+        # Use DB history if available (it's authoritative), fall back to client history
+        effective_history = db_history if db_history else req.history
+
         messages = build_messages(
             user_message=req.message,
             context=combined_context,
-            history=req.history,
+            history=effective_history,
         )
 
         # 9. Stream LLM response token by token
