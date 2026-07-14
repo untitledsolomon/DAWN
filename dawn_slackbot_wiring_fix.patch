@@ -1,0 +1,198 @@
+diff --git a/dawn-api/.env.example b/dawn-api/.env.example
+index 7f6c1a3..1214f5a 100644
+--- a/dawn-api/.env.example
++++ b/dawn-api/.env.example
+@@ -31,5 +31,35 @@ TOOLS_ENABLED=filesystem,git,websearch,install_skill,terminal,web_fetch,ssh,nmap
+ # ── OCR ─────────────────────────────────────────────────────────────────────
+ # TESSERACT_CMD=/usr/bin/tesseract
+ 
++# ── Slack ───────────────────────────────────────────────────────────────────
++# SLACK_BOT_TOKEN=xoxb-your-bot-token
++# SLACK_APP_TOKEN=xapp-your-app-token
++# SLACK_SIGNING_SECRET=your-signing-secret
++# AGENT_CHANNEL_LEADS=sales
++# AGENT_CHANNEL_PIPELINE=sales
++# AGENT_CHANNEL_CAMPAIGNS=marketing
++# AGENT_CHANNEL_REVENUE=general
++# AGENT_CHANNEL_SYSTEM=ops
++# AGENT_CHANNEL_ALERTS=ops
++
++# ── CRM (Regent Growth Engine) ───────────────────────────────────────────────
++# CRM_FUNCTIONS_BASE=https://your-project.functions.supabase.co
++# CRM_AGENT_API_KEY=your-crm-agent-key
++
++# ── Forge CMS ───────────────────────────────────────────────────────────────
++# FORGE_API_URL=https://forge.regent.ug
++# FORGE_API_KEY=your-forge-api-key
++
++# ── Email (SMTP) ──────────────────────────────────────────────────────────────
++# SMTP_HOST=smtp.gmail.com
++# SMTP_PORT=587
++# SMTP_USER=dawn@regent.ug
++# SMTP_PASSWORD=your-smtp-app-password
++# SMTP_FROM_EMAIL=dawn@regent.ug
++
++# ── Axis ERP ────────────────────────────────────────────────────────────────
++# AXIS_API_URL=https://axis.regent.ug
++# AXIS_API_KEY=your-axis-api-key
++
+ # ── CORS ────────────────────────────────────────────────────────────────────
+ ALLOWED_ORIGINS=http://localhost:3000
+diff --git a/dawn-api/slack_bot/sub_agents/LEAD_GEN_SCOPE.md b/dawn-api/slack_bot/sub_agents/LEAD_GEN_SCOPE.md
+new file mode 100644
+index 0000000..bd1ce40
+--- /dev/null
++++ b/dawn-api/slack_bot/sub_agents/LEAD_GEN_SCOPE.md
+@@ -0,0 +1,69 @@
++# Lead-Gen Sourcing Agent — Scope
++
++## Why this is separate from crm_agent
++`crm_agent` is a CRUD client for leads that already exist in the Growth
++Engine (Supabase). It has no way to discover a business that isn't in that
++table yet. Making DAWN "generate leads" means adding a **sourcing** step
++upstream of `crm_leads.create` — a new capability, not a rewire.
++
++## What exists today that this can reuse
++- `crm_leads` tool (`operation="create"`) — already accepts
++  `{name, business, email, phone, source, status, score, tags, linkedinUrl}`.
++  A new source value like `"web-research"` or `"dawn-agent"` slots in without
++  a schema change.
++- `web_search` / `web_fetch` tools — already registered, already granted to
++  `research_agent`.
++- `proactive_agents.py` — already has the APScheduler wiring; a new job is a
++  ~15-line addition to the `AGENTS` dict, same pattern as `scan_new_leads`.
++
++## New tool: `lead_sourcing`
++Proposed file: `tools/lead_sourcing.py`
++
++```
++operation: "find_prospects"
++  input: { industry, location, count }
++  → web_search + web_fetch a small set of business directories /
++    LinkedIn company pages / Google Maps-style queries
++  → LLM-extracts candidate {name, business, website, linkedinUrl} tuples
++  → does NOT write to CRM directly — returns candidates for review
++```
++
++Deliberately **read-only** at first. It should not auto-create leads,
++because unreviewed scraped contacts polluting the pipeline is worse than no
++new leads. The natural flow:
++
++1. `lead_sourcing.find_prospects` → returns N candidates to Slack
++2. Human reacts 👍 in Slack (or runs `/leads approve <id>`)
++3. Only then does `crm_leads.create` fire, tagged `source="dawn-sourced"`
++
++This keeps a human in the loop for the part that's actually risky (creating
++outbound targets) while automating the part that's just legwork (finding
++them).
++
++## Compliance note
++Scraping LinkedIn directly violates their ToS and can get the source IP
++rate-limited or banned — this is presumably *why* the existing pipeline uses
++PhantomBuster (a service built to handle that risk) rather than DAWN doing
++it itself. Recommend `lead_sourcing` stick to public web search / company
++sites / directories, and leave LinkedIn-specific scraping to PhantomBuster
++as it already does today. DAWN's role is enrichment and triage, not scraping.
++
++## New proactive agent: `prospect_finder`
++Same shape as `scan_new_leads` in `proactive_agents.py`:
++- Runs daily or on a Slack-triggered `/find-leads <industry>` command
++- Calls `lead_sourcing.find_prospects`
++- Posts candidates as a Slack block with an "approve" button (or numbered
++  list + `/leads approve N` command) rather than auto-importing
++
++## Estimated scope
++- `tools/lead_sourcing.py`: ~150 lines, same shape as `tools/crm.py`
++- Register in `tools/registry.py`: 1 line
++- New sub-agent `lead_sourcing_agent.yaml`: same shape as `crm_agent.yaml`
++- Slack approve flow: reuse existing `/leads` command handler, add one
++  branch for `approve <candidate_id>`
++- No DB schema changes needed — writes through existing `crm_leads.create`
++
++This is a half-day to one-day build, not a rewrite. The riskier and slower
++part is deciding the source-quality bar (which directories/queries produce
++real prospects vs. noise) — that's worth testing manually in Slack before
++wiring the scheduler.
+diff --git a/dawn-api/slack_bot/sub_agents/axis_agent.yaml b/dawn-api/slack_bot/sub_agents/axis_agent.yaml
+index 7b309fd..43d3b73 100644
+--- a/dawn-api/slack_bot/sub_agents/axis_agent.yaml
++++ b/dawn-api/slack_bot/sub_agents/axis_agent.yaml
+@@ -4,6 +4,9 @@ description: >
+   URA/NSSF reporting, and employee management. Use for any payroll,
+   tax, or ERP-related tasks.
+ tools:
++  - axis_payroll
++  - axis_tax
++  - axis_employees
+   - knowledge_graph
+   - web_search
+   - create_chart
+diff --git a/dawn-api/slack_bot/sub_agents/comms_agent.yaml b/dawn-api/slack_bot/sub_agents/comms_agent.yaml
+index 047c983..54cb1ae 100644
+--- a/dawn-api/slack_bot/sub_agents/comms_agent.yaml
++++ b/dawn-api/slack_bot/sub_agents/comms_agent.yaml
+@@ -4,16 +4,30 @@ description: >
+   meetings, and managing notifications. Use for any communication or
+   outreach tasks.
+ tools:
++  - send_email
++  - email_status
++  - crm_leads
+   - web_search
+   - knowledge_graph
+ system_prompt: |
+   You are DAWN's communications specialist. You handle outgoing
+   communications for Regent.
+-  
++
++  Available tools:
++    - send_email — send an email via SMTP (to, subject, body, optional html/cc)
++    - email_status — check whether SMTP is configured before attempting a send
++    - crm_leads — look up a lead's contact info before emailing them, or
++      update a lead's status/notes after an outreach attempt
++    - web_search / knowledge_graph — research a recipient or topic first
++
++  Before sending anything: call email_status if unsure SMTP is live. If it's
++  not configured, say so plainly rather than claiming to have sent something.
++
+   When sending communications:
+   - Be professional and clear
+   - Include relevant context
+   - Follow up appropriately
++  - After a successful send related to a lead, update that lead's status/notes via crm_leads
+   
+   When scheduling:
+   - Check availability
+diff --git a/dawn-api/slack_bot/sub_agents/forge_agent.yaml b/dawn-api/slack_bot/sub_agents/forge_agent.yaml
+index a5fdefd..ab1c842 100644
+--- a/dawn-api/slack_bot/sub_agents/forge_agent.yaml
++++ b/dawn-api/slack_bot/sub_agents/forge_agent.yaml
+@@ -4,13 +4,27 @@ description: >
+   blog posts, site analytics, and publishing. Use for any website
+   or content management tasks.
+ tools:
++  - forge_pages
++  - forge_blog
++  - forge_analytics
+   - knowledge_graph
+   - web_search
+   - filesystem
+ system_prompt: |
+   You are DAWN's Forge CMS specialist. You manage Regent's website
+   content through the Forge CMS system.
+-  
++
++  Available tools:
++    - forge_pages — list, create, or update site pages
++    - forge_blog — create, edit, or publish blog posts
++    - forge_analytics — pull page views, engagement, and conversion metrics
++    - filesystem / web_search / knowledge_graph — draft and research content
++      before publishing
++
++  If FORGE_API_URL / FORGE_API_KEY aren't configured, the forge_* tools will
++  return a clear error — surface that to the user rather than pretending
++  the action succeeded.
++
+   When managing content:
+   - List and update pages
+   - Create and edit blog posts

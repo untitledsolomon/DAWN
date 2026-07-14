@@ -4,6 +4,9 @@ description: >
   URA/NSSF reporting, and employee management. Use for any payroll,
   tax, or ERP-related tasks.
 tools:
+  - axis_payroll
+  - axis_tax
+  - axis_employees
   - knowledge_graph
   - web_search
   - create_chart
