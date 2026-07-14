@@ -31,10 +31,10 @@ DEFAULT_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 120
 MAX_OUTPUT_CHARS = 8000
 
-# ── Detect OS ──────────────────────────────────────────────────────────────
+# ── Detect OS ────────────────────────────────────────────────────────────────
 _IS_WINDOWS = sys.platform.startswith("win") or os.name == "nt"
 
-# ── Unix/Linux allowlist ───────────────────────────────────────────────────
+# ── Unix/Linux allowlist ─────────────────────────────────────────────────────
 UNIX_ALLOWED_BINARIES = {
     "ls", "cat", "head", "tail", "wc", "grep", "find", "pwd", "echo",
     "python", "python3", "pip", "pip3",
@@ -75,7 +75,7 @@ UNIX_ALLOWED_BINARIES = {
     "sh", "bash", "zsh",
 }
 
-# ── Windows allowlist ──────────────────────────────────────────────────────
+# ── Windows allowlist ────────────────────────────────────────────────────────
 WINDOWS_ALLOWED_BINARIES = {
     # Shell builtins (cmd.exe)
     "dir", "type", "copy", "del", "erase", "move", "ren", "rename",
@@ -302,8 +302,15 @@ class TerminalTool(BaseTool):
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
+            # Process may have already exited — handle race condition gracefully
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass  # Process already exited
+            try:
+                await proc.wait()
+            except ProcessLookupError:
+                pass
             return ToolResult(success=False, error=f"Command timed out after {timeout}s and was killed")
 
         stdout_text = stdout.decode(errors="replace")[:MAX_OUTPUT_CHARS]

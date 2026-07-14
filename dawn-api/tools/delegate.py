@@ -19,9 +19,45 @@ from slack_bot.sub_agents.registry import get_sub_agent_registry
 logger = logging.getLogger(__name__)
 
 
+def _normalize_delegations(delegations) -> list[dict]:
+    """Normalize delegations from various LLM output formats into list of dicts.
+
+    The LLM sometimes sends delegations as:
+      - list of dicts: [{"agent_name": "...", "task": "..."}]
+      - list of tuples: [("ops_agent", "check health")]
+      - list of lists: [["ops_agent", "check health"]]
+      - tuple of tuples: (("ops_agent", "check health"),)
+    """
+    if not delegations:
+        return []
+
+    # If it's a tuple, convert to list
+    if isinstance(delegations, tuple):
+        delegations = list(delegations)
+
+    if not isinstance(delegations, list):
+        return []
+
+    normalized = []
+    for d in delegations:
+        if isinstance(d, dict):
+            # Already a dict — use as-is
+            normalized.append(d)
+        elif isinstance(d, (list, tuple)) and len(d) >= 2:
+            # [name, task] or (name, task) format
+            normalized.append({
+                "agent_name": str(d[0]),
+                "task": str(d[1]),
+                "context": d[2] if len(d) > 2 else None,
+            })
+        else:
+            logger.warning(f"Skipping malformed delegation item: {d}")
+    return normalized
+
+
 class DelegateToSubAgentTool(BaseTool):
     """Delegate a task to a specialist sub-agent.
-    
+
     The supervisor calls this when a task falls clearly into one of the
     sub-agent domains (CRM, ops, research, code, comms, data, axis, forge, security).
     The sub-agent runs in its own isolated context with restricted tools.
@@ -101,7 +137,7 @@ class DelegateToSubAgentTool(BaseTool):
 
 class DelegateParallelTool(BaseTool):
     """Delegate multiple tasks to multiple sub-agents in parallel.
-    
+
     Use this when a complex task can be split into independent parts that
     different specialists can work on simultaneously. For example, researching
     a competitor while also checking internal CRM data.
@@ -147,24 +183,28 @@ class DelegateParallelTool(BaseTool):
     }
 
     async def run(self, **kwargs) -> ToolResult:
-        delegations = kwargs.get("delegations", [])
+        raw_delegations = kwargs.get("delegations", [])
+
+        # Normalize: LLM sometimes sends tuples/lists instead of dicts
+        delegations = _normalize_delegations(raw_delegations)
 
         if not delegations:
             return ToolResult(
                 success=False,
-                error="At least one delegation is required.",
+                error="At least one delegation is required. Pass delegations as a list of {agent_name, task} objects.",
             )
 
         # Validate all agent names
         registry = get_sub_agent_registry()
         for d in delegations:
-            if not registry.get(d.get("agent_name", "")):
+            agent_name = d.get("agent_name", "")
+            if not registry.get(agent_name):
                 return ToolResult(
                     success=False,
-                    error=f"Unknown sub-agent '{d.get('agent_name')}'. Available: {', '.join(registry.names())}",
+                    error=f"Unknown sub-agent '{agent_name}'. Available: {', '.join(registry.names())}",
                 )
 
-        logger.info(f"Running {len(delegations)} sub-agents in parallel: {[d['agent_name'] for d in delegations]}")
+        logger.info(f"Running {len(delegations)} sub-agents in parallel: {[d.get('agent_name', '?') for d in delegations]}")
 
         results = await run_parallel_sub_agents(delegations)
 

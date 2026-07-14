@@ -36,18 +36,18 @@ async def run_sub_agent(
     context: Optional[dict] = None,
 ) -> dict:
     """Run a sub-agent with its own isolated context and restricted tools.
-    
+
     Args:
         agent_name: Name of the sub-agent (must be registered)
         task: The task description to give the sub-agent
         context: Optional context dict (e.g., {"user_message": "...", "history": [...]})
-    
+
     Returns:
         dict with {"success": bool, "result": str, "error": str|None, "iterations": int}
     """
     registry = get_sub_agent_registry()
     agent_def = registry.get(agent_name)
-    
+
     if not agent_def:
         return {
             "success": False,
@@ -55,7 +55,7 @@ async def run_sub_agent(
             "error": f"Unknown sub-agent: '{agent_name}'. Available: {', '.join(registry.names())}",
             "iterations": 0,
         }
-    
+
     engine = get_engine()
     if not isinstance(engine, DeepSeekEngine):
         return {
@@ -64,9 +64,9 @@ async def run_sub_agent(
             "error": "Sub-agents require DeepSeek engine (tool-calling mode)",
             "iterations": 0,
         }
-    
+
     tool_registry = get_registry()
-    
+
     # Build isolated message list
     system = (
         agent_def.system_prompt
@@ -78,17 +78,17 @@ async def run_sub_agent(
         "Complete the task assigned to you and return your final answer. "
         "Do not describe actions you haven't taken — actually use the tools."
     )
-    
+
     messages = [{"role": "system", "content": system}]
-    
+
     # Add context if provided
     if context:
         if "history" in context:
             for turn in context["history"][-5:]:
                 messages.append({"role": turn["role"], "content": turn["content"]})
-    
+
     messages.append({"role": "user", "content": task})
-    
+
     # Restrict tools to what this sub-agent is allowed
     allowed_tools = set(agent_def.tools)
     all_tools = tool_registry.list_tools()
@@ -96,15 +96,15 @@ async def run_sub_agent(
         t.spec() for t in all_tools
         if t.name in allowed_tools
     ]
-    
+
     if not available_specs:
         logger.warning(f"Sub-agent '{agent_name}' has no available tools (allowed: {allowed_tools})")
-    
+
     logger.info(f"Running sub-agent '{agent_name}' with {len(available_specs)} tools")
-    
+
     iterations = 0
     final_result = None
-    
+
     for iteration in range(1, MAX_SUB_AGENT_ITERATIONS + 1):
         iterations = iteration
         try:
@@ -117,11 +117,11 @@ async def run_sub_agent(
                 "error": f"LLM call failed: {e}",
                 "iterations": iterations,
             }
-        
+
         if result.wants_tool_call:
             # Execute tool calls
             messages.append(engine.assistant_tool_call_message(result.content, result.tool_calls))
-            
+
             for call in result.tool_calls:
                 if call.name not in allowed_tools:
                     logger.warning(f"Sub-agent '{agent_name}' attempted disallowed tool '{call.name}'")
@@ -132,20 +132,20 @@ async def run_sub_agent(
                         result_json=json.dumps({"success": False, "output": None, "error": error_msg, "metadata": {}}),
                     ))
                     continue
-                
+
                 tool_result = await execute_tool_call(tool_registry, call.name, call.args)
                 messages.append(engine.tool_result_message(
                     tool_call_id=call.id,
                     tool_name=call.name,
                     result_json=json.dumps(tool_result.to_dict()),
                 ))
-            
+
             continue  # Get another completion
-        
+
         # No tool call — this is the final answer
         final_result = result.content
         break
-    
+
     return {
         "success": True,
         "result": final_result or "No output produced.",
@@ -156,30 +156,31 @@ async def run_sub_agent(
 
 async def run_parallel_sub_agents(delegations: list[dict]) -> dict[str, dict]:
     """Run multiple sub-agents in parallel.
-    
+
     Args:
         delegations: List of dicts, each with {"agent_name": str, "task": str, "context": dict|None}
-    
+
     Returns:
         dict mapping agent_name to its result dict
     """
     import asyncio
-    
+
     async def _run_one(d: dict) -> tuple[str, dict]:
-        name = d["agent_name"]
+        # Use .get() for safety — handles malformed dicts gracefully
+        name = d.get("agent_name", "unknown")
         result = await run_sub_agent(
             agent_name=name,
-            task=d["task"],
+            task=d.get("task", ""),
             context=d.get("context"),
         )
         return name, result
-    
+
     tasks = [_run_one(d) for d in delegations]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     output = {}
     for i, result in enumerate(results):
-        name = delegations[i]["agent_name"]
+        name = delegations[i].get("agent_name", f"agent_{i}") if i < len(delegations) else f"agent_{i}"
         if isinstance(result, Exception):
             output[name] = {
                 "success": False,
@@ -189,5 +190,5 @@ async def run_parallel_sub_agents(delegations: list[dict]) -> dict[str, dict]:
             }
         else:
             output[name] = result
-    
+
     return output
