@@ -24,6 +24,8 @@ display_information:
     • Monitor system health
     • Manage CRM and client data
     • Execute deployments via Jarvis
+    • Track leads, pipeline, and campaigns
+    • Manage team and projects
     
     Built by Solomon John for Regent (Kampala, Uganda).
 
@@ -46,6 +48,26 @@ features:
       should_escape: false
     - command: /revenue
       description: "Revenue summary"
+      usage_hint: ""
+      should_escape: false
+    - command: /leads
+      description: "CRM lead management and pipeline"
+      usage_hint: "[status] [--source X] [--limit N]"
+      should_escape: false
+    - command: /pipeline
+      description: "Pipeline funnel summary"
+      usage_hint: ""
+      should_escape: false
+    - command: /team
+      description: "Team roster management"
+      usage_hint: "[add <name> <role>]"
+      should_escape: false
+    - command: /projects
+      description: "Project management"
+      usage_hint: "[all|add <name>]"
+      should_escape: false
+    - command: /dashboard
+      description: "Full team dashboard overview"
       usage_hint: ""
       should_escape: false
     - command: /payroll
