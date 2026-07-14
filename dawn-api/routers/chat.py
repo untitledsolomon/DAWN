@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from typing import Optional
 from config import settings
 from llm.engine import get_engine, build_messages
-from llm.tools import build_context, extract_memory_facts, extract_error_pattern, extract_key_terms
+from llm.tools import build_context, extract_memory_facts, extract_error_pattern, extract_key_terms, load_memory_context, extract_and_store_memory
 import db.client as db
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ def _save_message_sync(session_id: str, role: str, content: str,
             "content": content,
         }
         if tool_calls:
-            data["tool_calls"] = tool_calls  # Pass list directly, not json.dumps — JSONB handles it
+            data["tool_calls"] = tool_calls
         if node_ids:
             data["node_ids"] = node_ids
         if node_titles:
@@ -89,11 +89,7 @@ def _ensure_session_sync(session_id: Optional[str]) -> str:
 
 def _needs_title_sync(session_id: str) -> bool:
     """Whether a session still has its placeholder title and should be
-    (re)titled from the first real message. Checking DB state — rather than
-    just "was session_id absent from the request" — means sessions that got
-    stuck as "New Chat" (e.g. from an earlier bug, or a client retry) get
-    fixed automatically on their next message instead of staying broken
-    forever."""
+    (re)titled from the first real message."""
     try:
         supabase = db.get_db()
         res = supabase.table("chat_sessions").select("title").eq("id", session_id).execute()
@@ -134,115 +130,9 @@ async def _generate_title(session_id: str, first_message: str, llm_complete_fn):
         logger.warning(f"[chat] Failed to save title: {e}")
 
 
-async def _load_memory_context(query: str) -> str:
-    """Load relevant memory nodes from the knowledge graph for context."""
-    try:
-        terms = extract_key_terms(query)
-        memory_parts = []
-        seen = set()
-
-        for term in terms[:3]:
-            results = await db.rpc_fuzzy_search(term, limit=3, threshold=0.2)
-            for node in results:
-                if node.get("id") not in seen and node.get("type") in ("memory", "fact", "preference"):
-                    seen.add(node["id"])
-                    if node.get("body"):
-                        memory_parts.append(f"[{node['type']}] {node['title']}: {node['body']}")
-
-        if memory_parts:
-            return "Relevant memories:\n" + "\n".join(memory_parts[:5])
-        return ""
-    except Exception as e:
-        logger.warning(f"[chat] Memory context load failed: {e}")
-        return ""
-
-
-async def _extract_and_store_memory(
-    user_message: str,
-    assistant_response: str,
-    session_id: str,
-    llm_complete_fn,
-):
-    """Extract durable facts from conversation and store as memory nodes."""
-    try:
-        conversation = f"User: {user_message}\nDAWN: {assistant_response}"
-        facts = await extract_memory_facts(conversation, llm_complete_fn)
-
-        if not facts:
-            logger.info("[memory] No durable facts extracted from this exchange")
-            return
-
-        logger.info(f"[memory] Extracted {len(facts)} fact(s), storing as memory nodes")
-        supabase = db.get_db()
-
-        # Create memory session
-        session_res = supabase.table("memory_sessions").insert({
-            "session_source": "dawn_web",
-            "summary": user_message[:100],
-        }).execute()
-        session = session_res.data[0] if session_res.data else {}
-
-        for fact in facts[:5]:
-            node_res = supabase.table("nodes").insert({
-                "title": fact.get("title", "Memory fact"),
-                "type": "memory",
-                "body": fact.get("body", ""),
-                "status": "draft",
-                "source": "conversation",
-                "source_ref": session_id,
-                "confidence": fact.get("confidence", 0.7),
-            }).execute()
-            node = node_res.data[0] if node_res.data else {}
-
-            if node.get("id") and session.get("id"):
-                supabase.table("memory_node_origins").insert({
-                    "node_id": node["id"],
-                    "session_id": session["id"],
-                }).execute()
-
-                # Log the extraction
-                try:
-                    supabase.table("knowledge_extractions").insert({
-                        "session_id": session_id,
-                        "node_id": node["id"],
-                        "extraction_type": fact.get("type", "memory"),
-                        "confidence": fact.get("confidence", 0.7),
-                    }).execute()
-                except Exception:
-                    pass
-
-            # Attach tags
-            for tag_name in fact.get("tags", []):
-                try:
-                    all_tags_res = supabase.table("tags").select("*").execute()
-                    all_tags = all_tags_res.data or []
-                    tag = next((t for t in all_tags if t["name"] == tag_name), None)
-                    if tag:
-                        supabase.table("node_tags").upsert({
-                            "node_id": node["id"],
-                            "tag_id": tag["id"],
-                        }).execute()
-                except Exception:
-                    pass
-
-            # Link this new memory node into the graph. Without this, every
-            # extracted fact was an isolated node — never connected to
-            # anything else, so "knowledge graph" was really just a flat
-            # pile of unconnected memories. Fuzzy-match the fact's own title
-            # against existing nodes and add a generic 'related_to' edge to
-            # the best few matches, so traversal-based retrieval can surface
-            # this fact from a related query later, not just exact search.
-            if node.get("id"):
-                await _link_node_to_related(node["id"], fact.get("title", ""))
-    except Exception as e:
-        logger.warning(f"[chat] Memory extraction failed: {e}")
-
-
 async def _link_node_to_related(node_id: str, title: str, max_links: int = 3) -> None:
     """Best-effort: connect a freshly-created node to existing related nodes
-    via 'related_to' edges, using the same fuzzy search retrieval already
-    relies on. Never raises — a missed link isn't worth failing the whole
-    memory-extraction background task over."""
+    via 'related_to' edges."""
     if not title:
         return
     try:
@@ -326,9 +216,7 @@ async def chat(
         # 1. Save user message immediately
         _save_message_sync(session_id, "user", req.message)
 
-        # 2. Auto-title on first message (using AI) — retitle whenever the
-        # session still has its placeholder title, not just when the request
-        # omitted session_id, so previously-stuck "New Chat" sessions self-heal.
+        # 2. Auto-title on first message
         if _needs_title_sync(session_id):
             background_tasks.add_task(_generate_title, session_id, req.message, engine.complete)
 
@@ -337,9 +225,10 @@ async def chat(
         await asyncio.sleep(0)
 
         # 4. Load memory context (personal facts, preferences, past learnings)
-        memory_context = await _load_memory_context(req.message)
+        #    Uses the new dedicated memories table via load_memory_context()
+        memory_context = await load_memory_context(req.message)
 
-        # 5. Build context from graph — pass web_search_enabled flag
+        # 5. Build context from graph
         context_result = await build_context(req.message, web_search_enabled=req.web_search_enabled)
 
         # 6. Stream tool call events to frontend
@@ -389,7 +278,7 @@ async def chat(
             full_response.append(token)
             yield sse("token", {"content": token})
 
-        # 10. Done — send final node citations + session_id so frontend can track it
+        # 10. Done — send final node citations + session_id
         yield sse("done", {
             "node_ids": final_node_ids,
             "node_titles": final_node_titles,
@@ -405,17 +294,16 @@ async def chat(
             node_titles=final_node_titles if final_node_titles else None,
         )
 
-        # 12. Background: extract memory facts from this exchange
+        # 12. Background: extract memory facts into dedicated memories table
         if req.message and assistant_content:
             background_tasks.add_task(
-                _extract_and_store_memory,
-                req.message,
-                assistant_content,
-                session_id,
+                extract_and_store_memory,
+                f"User: {req.message}\nDAWN: {assistant_content}",
                 engine.complete,
+                session_id,
             )
 
-        # 13. Background: learn from errors if the response indicates a mistake
+        # 13. Background: learn from errors
         if req.message and assistant_content:
             background_tasks.add_task(
                 _learn_from_error,

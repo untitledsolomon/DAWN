@@ -409,3 +409,293 @@ async def create_artifact(
 
     res = await _async_execute(lambda: db.table("artifacts").insert(data).execute())
     return res.data[0] if res.data else {}
+
+
+# ─────────────────────────────────────────────
+# NEW: In-memory query cache
+# ─────────────────────────────────────────────
+_query_cache: dict = {}
+_cache_ttl: int = 300  # 5 minutes default
+
+def _cache_key(query_type: str, **params) -> str:
+    import hashlib
+    raw = f"{query_type}:{json.dumps(params, sort_keys=True, default=str)}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+def _cache_get(key: str):
+    import time
+    entry = _query_cache.get(key)
+    if entry and time.time() - entry["ts"] < _cache_ttl:
+        return entry["data"]
+    if entry:
+        del _query_cache[key]
+    return None
+
+def _cache_set(key: str, data):
+    import time
+    _query_cache[key] = {"data": data, "ts": time.time()}
+
+def cache_clear():
+    _query_cache.clear()
+
+def cache_stats() -> dict:
+    return {"size": len(_query_cache), "ttl_seconds": _cache_ttl}
+
+# ─────────────────────────────────────────────
+# NEW: Unified search_all (1 RPC instead of 4-8)
+# ─────────────────────────────────────────────
+
+async def rpc_search_all(
+    query: str,
+    limit: int = 5,
+    threshold: float = 0.2,
+    exclude_types: Optional[list[str]] = None,
+    exclude_tags: Optional[list[str]] = None,
+    include_memories: bool = True,
+    embedding: Optional[list[float]] = None,
+    use_cache: bool = True,
+) -> dict:
+    """Unified search: fuzzy + semantic + memory in one DB call.
+    
+    Uses in-memory cache for repeat queries. Falls back to individual
+    RPC calls if search_all isn't available yet.
+    """
+    db = get_db()
+    
+    cache_key = _cache_key("search_all", query=query, limit=limit, 
+                           threshold=threshold, include_memories=include_memories)
+    if use_cache:
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+    
+    params = {
+        "p_query": query,
+        "p_limit": limit,
+        "p_threshold": threshold,
+        "p_include_memories": include_memories,
+    }
+    if exclude_types:
+        params["p_exclude_types"] = exclude_types
+    if exclude_tags:
+        params["p_exclude_tags"] = exclude_tags
+    if embedding:
+        params["p_embedding"] = embedding
+    
+    try:
+        res = await _async_execute(lambda: db.rpc("search_all", params).execute())
+        result = res.data if res.data else {}
+        if use_cache:
+            _cache_set(cache_key, result)
+        return result
+    except Exception as e:
+        logger.warning(f"search_all RPC failed ({e}), falling back to individual searches")
+        # Fallback: do individual searches
+        result = {"nodes_fuzzy": [], "nodes_semantic": [], "memories": []}
+        
+        fuzzy = await rpc_fuzzy_search(query, limit, threshold, exclude_types, exclude_tags)
+        result["nodes_fuzzy"] = fuzzy
+        
+        if embedding:
+            semantic = await rpc_semantic_search(embedding, limit, exclude_types, exclude_tags)
+            result["nodes_semantic"] = semantic
+        
+        if include_memories:
+            mem = await rpc_fuzzy_search_memories(query, limit, threshold)
+            result["memories"] = mem
+        
+        if use_cache:
+            _cache_set(cache_key, result)
+        return result
+
+# ─────────────────────────────────────────────
+# NEW: Memory CRUD
+# ─────────────────────────────────────────────
+
+async def create_memory(
+    title: str,
+    body: Optional[str] = None,
+    fact_type: str = "preference",
+    confidence: float = 0.7,
+    source: str = "conversation",
+    source_ref: Optional[str] = None,
+    tags: Optional[list[str]] = None,
+    embedding: Optional[list[float]] = None,
+) -> dict:
+    """Create a memory in the dedicated memories table.
+    
+    Auto-promotion to 'active' happens via DB trigger when confidence >= 0.8.
+    """
+    db = get_db()
+    data = {
+        "title": title,
+        "fact_type": fact_type,
+        "confidence": confidence,
+        "source": source,
+        "status": "draft",
+    }
+    if body:
+        data["body"] = body
+    if source_ref:
+        data["source_ref"] = source_ref
+    if tags:
+        data["tags"] = tags
+    if embedding:
+        data["embedding"] = embedding
+    
+    res = await _async_execute(lambda: db.table("memories").insert(data).execute())
+    return res.data[0] if res.data else {}
+
+async def create_memories_batch(rows: list[dict], batch_size: int = 50) -> list[dict]:
+    """Batch insert memories."""
+    if not rows:
+        return []
+    db = get_db()
+    created = []
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i:i + batch_size]
+        res = await _async_execute(lambda b=batch: db.table("memories").insert(b).execute())
+        created.extend(res.data or [])
+    return created
+
+async def update_memory(memory_id: str, data: dict) -> dict:
+    """Update a memory by ID."""
+    db = get_db()
+    res = await _async_execute(
+        lambda: db.table("memories").update(data).eq("id", memory_id).execute()
+    )
+    return res.data[0] if res.data else {}
+
+async def get_memory_by_id(memory_id: str) -> Optional[dict]:
+    """Get a single memory by ID."""
+    db = get_db()
+    res = await _async_execute(
+        lambda: db.table("memories").select("*").eq("id", memory_id).limit(1).execute()
+    )
+    return res.data[0] if res.data else None
+
+async def get_active_memories(limit: int = 50, offset: int = 0) -> list[dict]:
+    """Get active memories, most recently accessed first."""
+    db = get_db()
+    res = await _async_execute(
+        lambda: db.table("memories")
+        .select("*")
+        .eq("status", "active")
+        .order("last_accessed", desc=True)
+        .limit(limit)
+        .offset(offset)
+        .execute()
+    )
+    return res.data or []
+
+async def get_draft_memories(limit: int = 50) -> list[dict]:
+    """Get draft (unreviewed) memories."""
+    db = get_db()
+    res = await _async_execute(
+        lambda: db.table("memories")
+        .select("*")
+        .eq("status", "draft")
+        .order("confidence", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return res.data or []
+
+# ─────────────────────────────────────────────
+# NEW: Memory search functions
+# ─────────────────────────────────────────────
+
+async def rpc_fuzzy_search_memories(
+    query: str, limit: int = 5, threshold: float = 0.2
+) -> list[dict]:
+    """Fuzzy search the memories table."""
+    db = get_db()
+    try:
+        res = await _async_execute(
+            lambda: db.rpc("fuzzy_search_memories", {
+                "p_query": query, "p_limit": limit, "p_threshold": threshold
+            }).execute()
+        )
+        return res.data or []
+    except Exception as e:
+        logger.warning(f"fuzzy_search_memories RPC failed: {e}")
+        return []
+
+async def rpc_semantic_search_memories(
+    embedding: list[float], limit: int = 5
+) -> list[dict]:
+    """Semantic search the memories table."""
+    db = get_db()
+    try:
+        res = await _async_execute(
+            lambda: db.rpc("semantic_search_memories", {
+                "p_embedding": embedding, "p_limit": limit
+            }).execute()
+        )
+        return res.data or []
+    except Exception as e:
+        logger.warning(f"semantic_search_memories RPC failed: {e}")
+        return []
+
+async def rpc_memory_search(
+    query: str, limit: int = 5, threshold: float = 0.2,
+    embedding: Optional[list[float]] = None
+) -> list[dict]:
+    """Search memories: fuzzy first, fall back to semantic if empty."""
+    results = await rpc_fuzzy_search_memories(query, limit, threshold)
+    if not results and embedding:
+        results = await rpc_semantic_search_memories(embedding, limit)
+    return results
+
+# ─────────────────────────────────────────────
+# NEW: Memory maintenance
+# ─────────────────────────────────────────────
+
+async def update_memory_embeddings(
+    memory_id_to_embedding: dict, batch_size: int = 50
+) -> int:
+    """Update embeddings for memories."""
+    if not memory_id_to_embedding:
+        return 0
+    db = get_db()
+    updated = 0
+    items = list(memory_id_to_embedding.items())
+    for i in range(0, len(items), batch_size):
+        batch = items[i:i + batch_size]
+        for mem_id, embedding in batch:
+            if embedding is None:
+                continue
+            try:
+                await _async_execute(
+                    lambda mid=mem_id, emb=embedding: (
+                        db.table("memories").update({"embedding": emb}).eq("id", mid).execute()
+                    )
+                )
+                updated += 1
+            except Exception as e:
+                logger.error(f"Failed to write embedding for memory {mem_id}: {e}")
+    return updated
+
+async def consolidate_memories() -> dict:
+    """Run memory consolidation (merge duplicates)."""
+    db = get_db()
+    try:
+        res = await _async_execute(lambda: db.rpc("consolidate_memories").execute())
+        return res.data if res.data else {}
+    except Exception as e:
+        logger.warning(f"consolidate_memories failed: {e}")
+        return {}
+
+async def decay_memories(days: int = 30, factor: float = 0.05) -> int:
+    """Decay confidence of old, unaccessed memories."""
+    db = get_db()
+    try:
+        res = await _async_execute(
+            lambda: db.rpc("decay_memory_confidence", {
+                "p_days_threshold": days, "p_decay_factor": factor
+            }).execute()
+        )
+        return res.data if res.data else 0
+    except Exception as e:
+        logger.warning(f"decay_memory_confidence failed: {e}")
+        return 0

@@ -309,3 +309,94 @@ DAWN response: {assistant_response[:2000]}"""
         return None
     except Exception:
         return None
+
+
+# ─────────────────────────────────────────────
+# NEW: Memory storage and retrieval
+# ─────────────────────────────────────────────
+
+async def store_memory_facts(
+    facts: list[dict],
+    source: str = "conversation",
+    source_ref: Optional[str] = None,
+) -> list[dict]:
+    """Store extracted facts into the dedicated memories table.
+    
+    Each fact dict should have: title, body (optional), tags (optional).
+    The DB trigger auto-promotes high-confidence facts to 'active'.
+    """
+    if not facts:
+        return []
+    
+    rows = []
+    for fact in facts:
+        row = {
+            "title": fact.get("title", fact.get("content", "Untitled memory")),
+            "body": fact.get("body", fact.get("content", "")),
+            "fact_type": fact.get("fact_type", "fact"),
+            "confidence": fact.get("confidence", 0.7),
+            "source": source,
+            "status": "draft",
+        }
+        if source_ref:
+            row["source_ref"] = source_ref
+        if fact.get("tags"):
+            row["tags"] = fact["tags"]
+        rows.append(row)
+    
+    return await db.create_memories_batch(rows)
+
+
+async def extract_and_store_memory(
+    conversation: str,
+    llm_complete_fn,
+    source_ref: Optional[str] = None,
+) -> list[dict]:
+    """Full pipeline: extract facts from conversation, store in memories table."""
+    facts = await extract_memory_facts(conversation, llm_complete_fn)
+    if not facts:
+        return []
+    
+    # Classify each fact
+    for fact in facts:
+        body_lower = fact.get("body", "").lower()
+        if any(w in body_lower for w in ["prefer", "like", "dislike", "favorite", "love", "hate"]):
+            fact["fact_type"] = "preference"
+        elif any(w in body_lower for w in ["decided", "chose", "going with", "will use"]):
+            fact["fact_type"] = "decision"
+        elif any(w in body_lower for w in ["always", "never", "every time", "pattern"]):
+            fact["fact_type"] = "pattern"
+        else:
+            fact["fact_type"] = "fact"
+    
+    stored = await store_memory_facts(facts, source="conversation", source_ref=source_ref)
+    return stored
+
+
+async def load_memory_context(
+    query: str,
+    max_memories: int = 5,
+    threshold: float = 0.2,
+) -> str:
+    """Load relevant memories for a query using unified search.
+    
+    Returns a formatted string of memory context, or empty string if none found.
+    """
+    memories = await db.rpc_fuzzy_search_memories(query, limit=max_memories, threshold=threshold)
+    
+    if not memories:
+        return ""
+    
+    parts = []
+    for mem in memories:
+        title = mem.get("title", "Untitled")
+        body = mem.get("body", "")
+        fact_type = mem.get("fact_type", "fact")
+        confidence = mem.get("confidence", 0.0)
+        
+        if body:
+            parts.append(f"[Memory: {fact_type} (confidence: {confidence:.2f})] {title}: {body}")
+        else:
+            parts.append(f"[Memory: {fact_type} (confidence: {confidence:.2f})] {title}")
+    
+    return "\n".join(parts)

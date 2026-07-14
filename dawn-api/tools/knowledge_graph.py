@@ -1,22 +1,21 @@
 """
 Knowledge graph tool — lets Agent mode do what Chat mode gets for free.
 
-Chat mode (routers/chat.py) always runs build_context() + _load_memory_context()
+Chat mode (routers/chat.py) always runs build_context() + load_memory_context()
 before every reply, so the model is automatically grounded in whatever DAWN
 already knows. Agent mode (llm/agent.py) deliberately doesn't do this up
-front — see build_agent_messages()'s docstring — the intent was for the
-agent to pull graph/memory context on demand via a tool instead, so it
-doesn't pay for a traversal on every single turn regardless of whether the
-task needs it. This is that tool.
+front — the intent was for the agent to pull graph/memory context on demand
+via a tool instead, so it doesn't pay for a traversal on every single turn
+regardless of whether the task needs it. This is that tool.
 
 Read-only: it never writes to nodes/edges/memory_* tables itself (that
-still only happens via the background _extract_and_store_memory task after
+still only happens via the background extract_and_store_memory task after
 a reply). Safe to expose to every trust tier, unlike tools/database.py.
 """
 import logging
 from typing import Optional
 from tools.base import BaseTool, ToolResult
-from llm.tools import build_context, extract_key_terms
+from llm.tools import build_context, extract_key_terms, load_memory_context
 import db.client as db
 
 logger = logging.getLogger(__name__)
@@ -87,23 +86,10 @@ class KnowledgeGraphTool(BaseTool):
         )
 
     async def _recall(self, query: str) -> ToolResult:
-        """Mirrors routers/chat.py's _load_memory_context, but as an
+        """Mirrors chat mode's load_memory_context, but as an
         on-demand tool call instead of something run unconditionally
-        before every reply."""
-        terms = extract_key_terms(query)
-        memory_parts: list[str] = []
-        seen: set[str] = set()
-
-        for term in terms[:3]:
-            results = await db.rpc_fuzzy_search(term, limit=3, threshold=0.2)
-            for node in results:
-                node_id = node.get("id")
-                if node_id not in seen and node.get("type") in ("memory", "fact", "preference"):
-                    seen.add(node_id)
-                    if node.get("body"):
-                        memory_parts.append(f"[{node['type']}] {node['title']}: {node['body']}")
-
-        if not memory_parts:
+        before every reply. Uses the dedicated memories table."""
+        memory_context = await load_memory_context(query, max_memories=5)
+        if not memory_context:
             return ToolResult(success=True, output="No matching memories found.")
-
-        return ToolResult(success=True, output="\n".join(memory_parts[:5]))
+        return ToolResult(success=True, output=memory_context)

@@ -730,3 +730,58 @@ async def quick_health(_=None):
         "chat_messages": chat_count,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ─────────────────────────────────────────────
+# NEW: Memory system diagnosis
+# ─────────────────────────────────────────────
+
+def _diagnose_memory_system() -> dict:
+    """Check the dedicated memories table and related infrastructure."""
+    result = {
+        "memories_table_exists": False,
+        "total_memories": 0,
+        "active_memories": 0,
+        "draft_memories": 0,
+        "stale_memories": 0,
+        "by_fact_type": {},
+        "query_cache_exists": False,
+        "query_cache_entries": 0,
+        "issues": [],
+    }
+    
+    try:
+        # Check memories table
+        total = _count_table("memories")
+        result["memories_table_exists"] = total >= 0
+        result["total_memories"] = total if total >= 0 else 0
+        
+        if total > 0:
+            result["active_memories"] = _count_table("memories", {"status": "active"})
+            result["draft_memories"] = _count_table("memories", {"status": "draft"})
+            result["stale_memories"] = _count_table("memories", {"status": "stale"})
+            
+            for ftype in ["preference", "fact", "decision", "pattern"]:
+                count = _count_table("memories", {"fact_type": ftype})
+                if count > 0:
+                    result["by_fact_type"][ftype] = count
+        
+        # Check query cache
+        cache_total = _count_table("query_cache")
+        result["query_cache_exists"] = cache_total >= 0
+        result["query_cache_entries"] = cache_total if cache_total >= 0 else 0
+        
+        # Issues
+        if result["total_memories"] == 0:
+            result["issues"].append("No memories stored yet — memory extraction has never run or found facts")
+        
+        if result["draft_memories"] > 0:
+            result["issues"].append(f"{result['draft_memories']} draft memories need review or auto-promotion")
+        
+        if result["stale_memories"] > 0:
+            result["issues"].append(f"{result['stale_memories']} stale memories may contain outdated information")
+        
+    except Exception as e:
+        result["issues"].append(f"Memory system analysis failed: {str(e)}")
+    
+    return result
