@@ -16,7 +16,7 @@ display_information:
   background_color: "#1a1a2e"
   long_description: |-
     DAWN is Regent's AI assistant and operations manager.
-    
+
     She can:
     • Answer questions about Regent, your projects, and systems
     • Run payroll through Axis ERP
@@ -26,7 +26,11 @@ display_information:
     • Execute deployments via Jarvis
     • Track leads, pipeline, and campaigns
     • Manage team and projects
-    
+    • Analyze files (PDFs, spreadsheets, code, images)
+    • Search the web and knowledge graph
+    • Run OSINT and security reconnaissance
+    • Execute decision workflows
+
     Built by Solomon John for Regent (Kampala, Uganda).
 
 features:
@@ -39,8 +43,16 @@ features:
     always_online: true
   slash_commands:
     - command: /dawn
-      description: "Ask DAWN anything"
-      usage_hint: "[your question]"
+      description: "Ask DAWN anything — full agent mode with tools"
+      usage_hint: "[your question or command]"
+      should_escape: false
+    - command: /regent
+      description: "Ask about Regent — products, clients, team, projects"
+      usage_hint: "[your question about Regent]"
+      should_escape: false
+    - command: /analyze
+      description: "Analyze a file, situation, or data"
+      usage_hint: "[what to analyze]"
       should_escape: false
     - command: /status
       description: "Check system health"
@@ -70,14 +82,6 @@ features:
       description: "Full team dashboard overview"
       usage_hint: ""
       should_escape: false
-    - command: /payroll
-      description: "Run payroll for a client (Phase 2)"
-      usage_hint: "[company name] [month]"
-      should_escape: false
-    - command: /invoice
-      description: "Generate an invoice (Phase 2)"
-      usage_hint: "[client] [amount] [description]"
-      should_escape: false
 
 oauth_config:
   scopes:
@@ -87,6 +91,7 @@ oauth_config:
       - channels:read
       - chat:write
       - commands
+      - files:read
       - groups:history
       - groups:read
       - im:history

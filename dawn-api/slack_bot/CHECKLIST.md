@@ -4,13 +4,19 @@
 
 ### What I Built
 - [x] `slack_bot/app.py` — Lazy-init Bolt app with DM, mention, and slash command handlers
-- [x] `slack_bot/manifest.yaml` — One-click Slack app config
+- [x] `slack_bot/manifest.yaml` — One-click Slack app config (with files:read scope)
 - [x] `slack_bot/README.md` — Full setup docs
-- [x] `routers/slack.py` — API endpoints to start/stop/status/send
-- [x] `scripts/setup_slack.sh` — Setup script
-- [x] `scripts/run_slack_bot.py` — Standalone runner for testing
+- [x] `routers/slack.py` — API endpoints to start/stop/status/send/upload
 - [x] `main.py` — Updated with Slack router + auto-start on boot
 - [x] `requirements.txt` — Added slack-bolt, slack-sdk
+
+### Key Architecture Change (v2)
+- [x] Bot now calls **`/agent/` endpoint** instead of `/chat/`
+- [x] Full DAWN agent with tools available from Slack
+- [x] File attachment support (download from Slack → ingest into DAWN)
+- [x] New commands: `/regent`, `/analyze`
+- [x] Long message splitting (handles responses >40K chars)
+- [x] `files:read` OAuth scope added to manifest
 
 ### What YOU Need to Do (5 minutes)
 
@@ -32,7 +38,7 @@
   SLACK_SIGNING_SECRET=...
   ```
 - [ ] **Restart** DAWN API
-- [ ] **Test:** DM @DAWN in Slack → "Hello!"
+- [ ] **Test:** DM @DAWN in Slack → "Hello, what can I help you with?"
 
 ## Phase 2: Axis ERP Monetization (Next)
 
