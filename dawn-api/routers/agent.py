@@ -8,6 +8,7 @@ from config import settings
 from llm.agent import run_agent_loop, DEFAULT_MAX_ITERATIONS
 from llm.identity import resolve_identity, Identity, TrustTier
 from llm.engine import get_engine
+from llm.tools import load_memory_context, extract_and_store_memory
 import db.client as db
 
 # Reuse the exact same persistence + title helpers routers/chat.py uses, so
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+# ── Auth ─────────────────────────────────────────────────────────────────────
 # Unlike routers/chat.py's verify_key (which only checks the key is valid),
 # this resolves *which* identity is making the request, since agent mode's
 # tool access is tiered — see llm/identity.py.
@@ -37,7 +38,7 @@ def get_identity(x_api_key: Optional[str] = Header(None)) -> Identity:
     return identity
 
 
-# ── Schema ────────────────────────────────────────────────────────────────────
+# ── Schema ───────────────────────────────────────────────────────────────────
 
 class AgentRequest(BaseModel):
     message: str
@@ -46,7 +47,7 @@ class AgentRequest(BaseModel):
     max_iterations: int = DEFAULT_MAX_ITERATIONS
 
 
-# ── SSE helper ────────────────────────────────────────────────────────────────
+# ── SSE helper ───────────────────────────────────────────────────────────────
 # Identical format to routers/chat.py's sse() — duplicated here rather than
 # imported to avoid a cross-router dependency; consider moving to a shared
 # util if a third SSE router shows up.
@@ -55,7 +56,7 @@ def sse(event_type: str, payload: dict) -> str:
     return f"data: {json.dumps({'type': event_type, **payload})}\n\n"
 
 
-# ── Main agent endpoint ───────────────────────────────────────────────────────
+# ── Main agent endpoint ──────────────────────────────────────────────────────
 
 @router.post("/")
 async def agent(
@@ -93,16 +94,22 @@ async def agent(
         db_history = _load_history_from_db(session_id)
         effective_history = db_history if db_history else req.history
 
+        # ★ v40.0: Load memory context (personal facts, preferences, past learnings)
+        # This is the same call chat mode uses — now agent mode gets it too.
+        memory_context = await load_memory_context(req.message)
+
         # Track tool calls by a unique key (name + index) so duplicate tool
         # names don't overwrite each other in pending_calls.
         pending_calls: dict[str, dict] = {}
         tool_call_counter: dict[str, int] = {}
 
+        # ★ v40.0: Pass memory_context to run_agent_loop
         async for event in run_agent_loop(
             user_message=req.message,
             identity=identity,
             history=effective_history,  # ★ Now uses DB-loaded history
             max_iterations=req.max_iterations,
+            memory_context=memory_context,  # ★ NEW: persistent memory context
         ):
             event_type = event.pop("type")
 
@@ -133,7 +140,7 @@ async def agent(
                     tc_dict["output"] = event.get("output")
                     tc_dict["error"] = event.get("error")
 
-                # ── create_chart: persist Vega-Lite spec ────────────────────────
+                # ── create_chart: persist Vega-Lite spec ──────────────────────────
                 if (
                     event.get("name") == "create_chart"
                     and event.get("success")
@@ -160,7 +167,7 @@ async def agent(
                     except Exception:
                         logger.exception("Failed to persist chart artifact")
 
-                # ── create_explainer: persist HTML code ─────────────────────────
+                # ── create_explainer: persist HTML code ───────────────────────────
                 if (
                     event.get("name") == "create_explainer"
                     and event.get("success")
@@ -221,6 +228,15 @@ async def agent(
                 assistant_content,
                 tool_calls=tool_calls_list if tool_calls_list else None,
                 artifact_ids=artifact_ids_this_turn if artifact_ids_this_turn else None,
+            )
+
+        # ★ v40.0: Background: extract memory facts from agent conversations too
+        if req.message and assistant_content:
+            background_tasks.add_task(
+                extract_and_store_memory,
+                f"User: {req.message}\nDAWN: {assistant_content}",
+                engine.complete,
+                session_id,
             )
 
     return StreamingResponse(

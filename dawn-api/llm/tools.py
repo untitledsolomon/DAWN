@@ -87,7 +87,7 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
 
     exclude_tags = None if include_code else ["code"]
 
-    # ── Stage 1: Find entry nodes via fuzzy search ──────────────────────────────
+    # ── Stage 1: Find entry nodes via fuzzy search ────────────────────────────────
     candidates = extract_key_terms(query)
     entry_nodes: list[dict] = []
 
@@ -104,7 +104,7 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
         if len(entry_nodes) >= 3:
             break  # Good enough entry points found
 
-    # ── Stage 1b: Semantic fallback if fuzzy search found nothing ───────────────
+    # ── Stage 1b: Semantic fallback if fuzzy search found nothing ─────────────────
     # Trigram similarity misses paraphrases and conceptually-related but
     # differently-worded content ("bot keeps losing money" vs a node
     # titled "Sharpe ratio degradation") — this is exactly what
@@ -136,7 +136,7 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
             node_titles=[],
         )
 
-    # ── Stage 2: Traverse from entry nodes ──────────────────────────────────────
+    # ── Stage 2: Traverse from entry nodes ────────────────────────────────────────
     # Track how many nodes we've added so we can dynamically increase the limit
     # for table-type parents
     nodes_added = 0
@@ -251,7 +251,10 @@ async def extract_memory_facts(
 ) -> list[dict]:
     """
     After a chat session, extract durable facts worth storing as memory nodes.
-    Runs as a background task — output goes to nodes table as status='draft'.
+    Runs as a background task — output goes to memories table as status='draft'.
+
+    v40.0: Increased context window from 3000 to 8000 chars so the LLM
+    sees more of the conversation before extracting facts.
     """
     prompt = f"""Extract durable facts from this conversation worth remembering long-term about Solomon, his projects, or decisions made.
 
@@ -263,7 +266,8 @@ Rules:
 - Return ONLY the JSON array, no other text
 
 Conversation:
-{conversation[-3000:]}"""
+{conversation[-8000:]}
+"""
 
     try:
         raw = await llm_complete_fn([{"role": "user", "content": prompt}])
@@ -297,7 +301,8 @@ Rules:
 - Return ONLY the JSON object, no other text
 
 User message: {user_message[:1000]}
-DAWN response: {assistant_response[:2000]}"""
+DAWN response: {assistant_response[:2000]}
+"""
 
     try:
         raw = await llm_complete_fn([{"role": "user", "content": prompt}])
@@ -311,9 +316,9 @@ DAWN response: {assistant_response[:2000]}"""
         return None
 
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # NEW: Memory storage and retrieval
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def store_memory_facts(
     facts: list[dict],
@@ -321,6 +326,9 @@ async def store_memory_facts(
     source_ref: Optional[str] = None,
 ) -> list[dict]:
     """Store extracted facts into the dedicated memories table.
+    
+    v40.0: Now generates embeddings for each fact so semantic search works.
+    Previously, memories were stored without embeddings — fuzzy search only.
     
     Each fact dict should have: title, body (optional), tags (optional).
     The DB trigger auto-promotes high-confidence facts to 'active'.
@@ -330,14 +338,23 @@ async def store_memory_facts(
     
     rows = []
     for fact in facts:
+        title = fact.get("title", fact.get("content", "Untitled memory"))
+        body = fact.get("body", fact.get("content", ""))
+        
+        # Generate embedding for semantic search
+        text_to_embed = f"{title}\n{body}" if body else title
+        embedding = embed_text(text_to_embed)
+        
         row = {
-            "title": fact.get("title", fact.get("content", "Untitled memory")),
-            "body": fact.get("body", fact.get("content", "")),
+            "title": title,
+            "body": body,
             "fact_type": fact.get("fact_type", "fact"),
             "confidence": fact.get("confidence", 0.7),
             "source": source,
             "status": "draft",
         }
+        if embedding:
+            row["embedding"] = embedding
         if source_ref:
             row["source_ref"] = source_ref
         if fact.get("tags"):
@@ -352,7 +369,13 @@ async def extract_and_store_memory(
     llm_complete_fn,
     source_ref: Optional[str] = None,
 ) -> list[dict]:
-    """Full pipeline: extract facts from conversation, store in memories table."""
+    """Full pipeline: extract facts from conversation, store in memories table.
+    
+    v40.0: Now checks for duplicate/similar memories before storing.
+    If a very similar memory already exists, it boosts the existing one's
+    confidence rather than creating a duplicate. This prevents the same
+    fact from being stored 20 times across different conversations.
+    """
     facts = await extract_memory_facts(conversation, llm_complete_fn)
     if not facts:
         return []
@@ -369,7 +392,29 @@ async def extract_and_store_memory(
         else:
             fact["fact_type"] = "fact"
     
-    stored = await store_memory_facts(facts, source="conversation", source_ref=source_ref)
+    # Check for duplicates before storing
+    stored = []
+    for fact in facts:
+        # Search for similar existing memories
+        title = fact.get("title", "")
+        body = fact.get("body", "")
+        search_text = f"{title} {body}"
+        
+        existing = await db.rpc_fuzzy_search_memories(search_text, limit=3, threshold=0.4)
+        
+        if existing:
+            # Found a similar memory — boost its confidence instead of duplicating
+            for match in existing:
+                if match.get("confidence", 0) < 0.9:
+                    new_confidence = min(match.get("confidence", 0.7) + 0.1, 0.95)
+                    await db.update_memory(match["id"], {"confidence": new_confidence})
+                    stored.append(match)
+                    break
+        else:
+            # No duplicate found — store as new
+            result = await store_memory_facts([fact], source="conversation", source_ref=source_ref)
+            stored.extend(result)
+    
     return stored
 
 
@@ -380,9 +425,20 @@ async def load_memory_context(
 ) -> str:
     """Load relevant memories for a query using unified search.
     
+    v40.0: Falls back to semantic search if fuzzy search finds nothing.
+    Previously, only fuzzy search was used — this missed memories that
+    were semantically related but phrased differently.
+    
     Returns a formatted string of memory context, or empty string if none found.
     """
+    # Try fuzzy search first
     memories = await db.rpc_fuzzy_search_memories(query, limit=max_memories, threshold=threshold)
+    
+    # Fall back to semantic search if fuzzy found nothing
+    if not memories:
+        embedding = embed_text(query)
+        if embedding:
+            memories = await db.rpc_semantic_search_memories(embedding, limit=max_memories)
     
     if not memories:
         return ""

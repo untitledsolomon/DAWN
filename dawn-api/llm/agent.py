@@ -11,6 +11,10 @@ added here: tool_call, tool_result, iteration_limit, warning.
 This module yields dicts, not raw SSE strings — routers/agent.py is
 responsible for formatting them with the existing sse() helper, keeping
 that formatting logic in one place.
+
+v40.0: Now accepts memory_context parameter and injects it into the
+system prompt, so the agent has access to persistent memories just
+like chat mode does.
 """
 from typing import AsyncGenerator, Optional
 import json
@@ -46,7 +50,11 @@ def _claims_unverified_action(text: str) -> bool:
     return any(phrase in lowered for phrase in ACTION_CLAIM_PHRASES)
 
 
-def build_agent_messages(user_message: str, history: list[dict]) -> list[dict]:
+def build_agent_messages(
+    user_message: str,
+    history: list[dict],
+    memory_context: str = "",
+) -> list[dict]:
     """
     Agent-mode message builder. Unlike llm.engine.build_messages(), this does
     NOT inject knowledge-graph context up front — the agent instead calls the
@@ -56,6 +64,7 @@ def build_agent_messages(user_message: str, history: list[dict]) -> list[dict]:
     turn regardless of whether the task needs it.
 
     v37.0: Injects sub-agent descriptions so the supervisor knows when to delegate.
+    v40.0: Injects memory_context (persistent memories) into the system prompt.
     """
     # Build base system prompt
     system = (
@@ -74,6 +83,10 @@ def build_agent_messages(user_message: str, history: list[dict]) -> list[dict]:
           "preferences) rather than relying only on conversation history or "
           "guessing — DAWN's knowledge graph and memory may already have the answer."
     )
+
+    # v40.0: Inject memory context if available
+    if memory_context:
+        system += f"\n\n─── PERSISTENT MEMORIES ───\n{memory_context}\n─────────────────────────"
 
     # v37.0: Inject sub-agent descriptions for delegation awareness
     try:
@@ -174,6 +187,7 @@ async def run_agent_loop(
     identity: Identity,
     history: Optional[list[dict]] = None,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
+    memory_context: str = "",
 ) -> AsyncGenerator[dict, None]:
     """
     Runs the agent loop, yielding event dicts as it goes:
@@ -188,6 +202,8 @@ async def run_agent_loop(
     `identity` determines which tools are even offered to the model — see
     llm/identity.py. This does not replace the consequence/harm reasoning
     in AGENT_SAFETY_PROMPT, which applies regardless of identity tier.
+
+    v40.0: Accepts memory_context parameter and passes it to build_agent_messages.
     """
     engine = get_engine()
     registry = get_registry()
@@ -223,7 +239,8 @@ async def run_agent_loop(
         yield {"type": "error", "content": "No tools are registered, or this identity is not authorized to use any."}
         return
 
-    messages = build_agent_messages(user_message, history or [])
+    # v40.0: Pass memory_context to build_agent_messages
+    messages = build_agent_messages(user_message, history or [], memory_context=memory_context)
     
     yield {"type": "thinking", "content": "Working on it..."}
 
