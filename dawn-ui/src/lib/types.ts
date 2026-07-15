@@ -271,3 +271,32 @@ export interface Artifact {
   tags: string[];
   created_at: string;
 }
+
+// v40.0: Personal Memories
+export interface MemoryItem {
+  id: string;
+  title: string;
+  body?: string;
+  fact_type: string;
+  confidence: number;
+  status: "draft" | "active" | "archived";
+  source: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+  last_accessed?: string;
+}
+
+// v40.0: Secrets Vault
+export interface SecretItem {
+  id: string;
+  name: string;
+  description?: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SecretWithValue extends SecretItem {
+  value: string;
+}

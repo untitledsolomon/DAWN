@@ -949,3 +949,166 @@ export async function listDecisionLog(params?: {
   return data.data ?? [];
 }
 
+
+// ── v40.0: Personal Memories ────────────────────────────────────────────────
+
+export interface MemoryItem {
+  id: string;
+  title: string;
+  body?: string;
+  fact_type: string;
+  confidence: number;
+  status: "draft" | "active" | "archived";
+  source: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+  last_accessed?: string;
+}
+
+export async function listMemories(params?: {
+  status?: string;
+  fact_type?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<MemoryItem[]> {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.fact_type) qs.set("fact_type", params.fact_type);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  const res = await fetch(`${BASE}/memories/?${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to list memories: ${res.status}`);
+  return res.json();
+}
+
+export async function countMemories(status?: string): Promise<number> {
+  const qs = new URLSearchParams();
+  if (status) qs.set("status", status);
+  const res = await fetch(`${BASE}/memories/count?${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to count memories: ${res.status}`);
+  const data = await res.json();
+  return data.total ?? 0;
+}
+
+export async function createMemory(data: {
+  title: string;
+  body?: string;
+  fact_type?: string;
+  confidence?: number;
+  tags?: string[];
+}): Promise<MemoryItem> {
+  const res = await fetch(`${BASE}/memories/`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to create memory");
+  return res.json();
+}
+
+export async function getMemory(id: string): Promise<MemoryItem> {
+  const res = await fetch(`${BASE}/memories/${id}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Memory not found: ${id}`);
+  return res.json();
+}
+
+export async function updateMemory(id: string, data: Partial<MemoryItem>): Promise<MemoryItem> {
+  const res = await fetch(`${BASE}/memories/${id}`, {
+    method: "PUT",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to update memory");
+  return res.json();
+}
+
+export async function deleteMemory(id: string): Promise<void> {
+  await fetch(`${BASE}/memories/${id}`, { method: "DELETE", headers: headers() });
+}
+
+export async function approveMemory(id: string): Promise<MemoryItem> {
+  const res = await fetch(`${BASE}/memories/${id}/approve`, { method: "POST", headers: headers() });
+  return res.json();
+}
+
+export async function rejectMemory(id: string): Promise<MemoryItem> {
+  const res = await fetch(`${BASE}/memories/${id}/reject`, { method: "POST", headers: headers() });
+  return res.json();
+}
+
+// ── v40.0: Secrets Vault ────────────────────────────────────────────────────
+
+export interface SecretItem {
+  id: string;
+  name: string;
+  description?: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SecretWithValue extends SecretItem {
+  value: string;
+}
+
+export async function listSecrets(params?: {
+  tag?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<SecretItem[]> {
+  const qs = new URLSearchParams();
+  if (params?.tag) qs.set("tag", params.tag);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  const res = await fetch(`${BASE}/secrets/?${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to list secrets: ${res.status}`);
+  return res.json();
+}
+
+export async function countSecrets(): Promise<number> {
+  const res = await fetch(`${BASE}/secrets/count`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to count secrets: ${res.status}`);
+  const data = await res.json();
+  return data.total ?? 0;
+}
+
+export async function createSecret(data: {
+  name: string;
+  value: string;
+  description?: string;
+  tags?: string[];
+}): Promise<SecretItem> {
+  const res = await fetch(`${BASE}/secrets/`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to create secret");
+  return res.json();
+}
+
+export async function getSecret(id: string): Promise<SecretWithValue> {
+  const res = await fetch(`${BASE}/secrets/${id}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Secret not found: ${id}`);
+  return res.json();
+}
+
+export async function updateSecret(id: string, data: {
+  name?: string;
+  value?: string;
+  description?: string;
+  tags?: string[];
+}): Promise<SecretItem> {
+  const res = await fetch(`${BASE}/secrets/${id}`, {
+    method: "PUT",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to update secret");
+  return res.json();
+}
+
+export async function deleteSecret(id: string): Promise<void> {
+  await fetch(`${BASE}/secrets/${id}`, { method: "DELETE", headers: headers() });
+}

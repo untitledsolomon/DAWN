@@ -699,3 +699,124 @@ async def decay_memories(days: int = 30, factor: float = 0.05) -> int:
     except Exception as e:
         logger.warning(f"decay_memory_confidence failed: {e}")
         return 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW: Additional memory functions needed by the memories router
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def get_all_memories(limit: int = 50, offset: int = 0) -> list[dict]:
+    """Get all memories regardless of status."""
+    db = get_db()
+    res = await _async_execute(
+        lambda: db.table("memories")
+        .select("*")
+        .order("created_at", desc=True)
+        .limit(limit)
+        .offset(offset)
+        .execute()
+    )
+    return res.data or []
+
+
+async def delete_memory(memory_id: str) -> bool:
+    """Delete a memory by ID."""
+    db = get_db()
+    await _async_execute(
+        lambda: db.table("memories").delete().eq("id", memory_id).execute()
+    )
+    return True
+
+
+async def count_memories(status: str = "active") -> int:
+    """Count memories by status."""
+    db = get_db()
+    q = db.table("memories").select("id", count="exact")
+    if status != "all":
+        q = q.eq("status", status)
+    res = await _async_execute(lambda: q.execute())
+    return res.count or 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW: Secrets CRUD — encrypted credential storage
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def create_secret(
+    name: str,
+    encrypted_value: str,
+    description: Optional[str] = None,
+    tags: Optional[list[str]] = None,
+) -> dict:
+    """Create a new secret (value is already encrypted)."""
+    db = get_db()
+    data = {
+        "name": name,
+        "encrypted_value": encrypted_value,
+    }
+    if description:
+        data["description"] = description
+    if tags:
+        data["tags"] = tags
+    res = await _async_execute(
+        lambda: db.table("secrets").insert(data).execute()
+    )
+    return res.data[0] if res.data else {}
+
+
+async def list_secrets(
+    tag: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    """List secrets (encrypted values are included — caller must strip them)."""
+    db = get_db()
+    q = db.table("secrets").select("*").order("created_at", desc=True).limit(limit).offset(offset)
+    if tag:
+        q = q.contains("tags", [tag])
+    res = await _async_execute(lambda: q.execute())
+    return res.data or []
+
+
+async def get_secret_by_id(secret_id: str) -> Optional[dict]:
+    """Get a single secret by ID (includes encrypted value)."""
+    db = get_db()
+    res = await _async_execute(
+        lambda: db.table("secrets").select("*").eq("id", secret_id).limit(1).execute()
+    )
+    return res.data[0] if res.data else None
+
+
+async def get_secret_by_name(name: str) -> Optional[dict]:
+    """Get a single secret by name (includes encrypted value)."""
+    db = get_db()
+    res = await _async_execute(
+        lambda: db.table("secrets").select("*").eq("name", name).limit(1).execute()
+    )
+    return res.data[0] if res.data else None
+
+
+async def update_secret(secret_id: str, data: dict) -> dict:
+    """Update a secret."""
+    db = get_db()
+    res = await _async_execute(
+        lambda: db.table("secrets").update(data).eq("id", secret_id).execute()
+    )
+    return res.data[0] if res.data else {}
+
+
+async def delete_secret(secret_id: str) -> bool:
+    """Delete a secret by ID."""
+    db = get_db()
+    await _async_execute(
+        lambda: db.table("secrets").delete().eq("id", secret_id).execute()
+    )
+    return True
+
+
+async def count_secrets() -> int:
+    """Count all secrets."""
+    db = get_db()
+    res = await _async_execute(
+        lambda: db.table("secrets").select("id", count="exact").execute()
+    )
+    return res.count or 0
