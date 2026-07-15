@@ -7,6 +7,10 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_service_key: str
 
+    # Control Center Supabase (separate project for jarvis_* tables)
+    cc_supabase_url: Optional[str] = None
+    cc_supabase_service_key: Optional[str] = None
+
     # LLM
     llm_mode: str = "deepseek"
 

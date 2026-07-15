@@ -1,10 +1,11 @@
 """
 DAWN Control Center API — Dashboard aggregation endpoints for the Control Center UI.
 Provides unified stats, activity logs, notifications, agent status, resources, and goals.
-Queries jarvis_* tables matching the Control Center's Supabase store.
+Queries jarvis_* tables from the Control Center's separate Supabase project.
 
 v37.0 — Control Center Integration
 v37.1 — Updated to query jarvis_* tables, added resources & goals endpoints
+v37.2 — Uses separate cc_client for Control Center Supabase project
 """
 import logging
 from datetime import datetime, timezone, timedelta
@@ -13,7 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel
 from config import settings
-import db.client as db
+import db.cc_client as cc
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -173,7 +174,7 @@ def safe_str(val, default="") -> str:
 @router.get("/dashboard/stats", response_model=DashboardStats, tags=["control-center"])
 async def get_dashboard_stats(_: None = Depends(verify_key)):
     """Aggregated dashboard statistics from jarvis_* tables."""
-    supabase = db.get_db()
+    supabase = cc.get_cc_db()
     stats = DashboardStats()
 
     # Task counts from jarvis_tasks
@@ -239,6 +240,7 @@ async def get_dashboard_stats(_: None = Depends(verify_key)):
 @router.get("/activity", response_model=list[ActivityEntry], tags=["control-center"])
 async def get_activity_log(limit: int = Query(20, ge=1, le=100), _: None = Depends(verify_key)):
     """Recent activity from jarvis_activity_log."""
+    supabase = cc.get_cc_db()
     entries = []
     try:
         resp = (
@@ -274,6 +276,7 @@ async def get_notifications(
     _: None = Depends(verify_key),
 ):
     """Get notifications from jarvis_notifications."""
+    supabase = cc.get_cc_db()
     entries = []
     try:
         query = (
@@ -307,6 +310,7 @@ async def get_notifications(
 @router.post("/notifications/{notification_id}/read", response_model=OkResponse, tags=["control-center"])
 async def mark_notification_read(notification_id: str, _: None = Depends(verify_key)):
     """Mark a notification as read in jarvis_notifications."""
+    supabase = cc.get_cc_db()
     try:
         supabase.table("jarvis_notifications").update({"is_read": True}).eq("id", notification_id).execute()
         return OkResponse(ok=True)
@@ -321,6 +325,7 @@ async def mark_notification_read(notification_id: str, _: None = Depends(verify_
 @router.get("/dashboard/activity/weekly", response_model=list[WeeklyEntry], tags=["control-center"])
 async def get_weekly_activity(_: None = Depends(verify_key)):
     """7-day activity aggregated by day from jarvis_activity_log."""
+    supabase = cc.get_cc_db()
     today = datetime.utcnow()
     days = []
     for i in range(6, -1, -1):
@@ -365,6 +370,7 @@ async def get_weekly_activity(_: None = Depends(verify_key)):
 @router.get("/dashboard/activity/hourly", response_model=list[HourlyEntry], tags=["control-center"])
 async def get_hourly_activity(_: None = Depends(verify_key)):
     """24-hour activity distribution from jarvis_activity_log."""
+    supabase = cc.get_cc_db()
     today = datetime.utcnow().strftime("%Y-%m-%d")
     hours = [f"{h:02d}" for h in range(6, 22)]  # 06:00 to 21:00
 
@@ -397,6 +403,7 @@ async def get_hourly_activity(_: None = Depends(verify_key)):
 @router.get("/agent/status", response_model=AgentStatus, tags=["control-center"])
 async def get_agent_status(_: None = Depends(verify_key)):
     """Get DAWN agent status."""
+    supabase = cc.get_cc_db()
     status = AgentStatus(status="active", version=settings.llm_mode)
 
     try:
@@ -438,6 +445,7 @@ async def send_directive(req: DirectiveRequest, _: None = Depends(verify_key)):
 @router.get("/resources", response_model=list[ResourceEntry], tags=["control-center"])
 async def get_resources(limit: int = Query(50, ge=1, le=200), _: None = Depends(verify_key)):
     """List resources from jarvis_resources."""
+    supabase = cc.get_cc_db()
     entries = []
     try:
         resp = (
@@ -465,6 +473,7 @@ async def get_resources(limit: int = Query(50, ge=1, le=200), _: None = Depends(
 @router.post("/resources", response_model=ResourceEntry, tags=["control-center"])
 async def create_resource(resource: ResourceCreate, _: None = Depends(verify_key)):
     """Create a resource in jarvis_resources."""
+    supabase = cc.get_cc_db()
     try:
         resp = (
             supabase.table("jarvis_resources")
@@ -498,6 +507,7 @@ async def create_resource(resource: ResourceCreate, _: None = Depends(verify_key
 @router.get("/goals", response_model=list[GoalEntry], tags=["control-center"])
 async def get_goals(limit: int = Query(50, ge=1, le=200), _: None = Depends(verify_key)):
     """List goals from jarvis_goals."""
+    supabase = cc.get_cc_db()
     entries = []
     try:
         resp = (
@@ -527,6 +537,7 @@ async def get_goals(limit: int = Query(50, ge=1, le=200), _: None = Depends(veri
 @router.post("/goals", response_model=GoalEntry, tags=["control-center"])
 async def create_goal(goal: GoalCreate, _: None = Depends(verify_key)):
     """Create a goal in jarvis_goals."""
+    supabase = cc.get_cc_db()
     try:
         resp = (
             supabase.table("jarvis_goals")
@@ -561,6 +572,7 @@ async def create_goal(goal: GoalCreate, _: None = Depends(verify_key)):
 @router.put("/goals/{goal_id}", response_model=GoalEntry, tags=["control-center"])
 async def update_goal(goal_id: str, goal: GoalUpdate, _: None = Depends(verify_key)):
     """Update a goal in jarvis_goals."""
+    supabase = cc.get_cc_db()
     updates = {}
     if goal.title is not None:
         updates["title"] = goal.title
@@ -604,6 +616,7 @@ async def update_goal(goal_id: str, goal: GoalUpdate, _: None = Depends(verify_k
 @router.delete("/goals/{goal_id}", response_model=OkResponse, tags=["control-center"])
 async def delete_goal(goal_id: str, _: None = Depends(verify_key)):
     """Delete a goal from jarvis_goals."""
+    supabase = cc.get_cc_db()
     try:
         supabase.table("jarvis_goals").delete().eq("id", goal_id).execute()
         return OkResponse(ok=True)
