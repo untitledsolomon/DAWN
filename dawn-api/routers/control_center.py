@@ -6,6 +6,7 @@ Queries jarvis_* tables from the Control Center's separate Supabase project.
 v37.0 — Control Center Integration
 v37.1 — Updated to query jarvis_* tables, added resources & goals endpoints
 v37.2 — Uses separate cc_client for Control Center Supabase project
+v37.3 — Fixed jarvis_resources column name (name not title), fixed notifications schema
 """
 import logging
 from datetime import datetime, timezone, timedelta
@@ -439,12 +440,12 @@ async def send_directive(req: DirectiveRequest, _: None = Depends(verify_key)):
 
 
 # ---------------------------------------------------------------------------
-# Resources (jarvis_resources)
+# Resources (jarvis_resources) — NOTE: column is 'name' not 'title'
 # ---------------------------------------------------------------------------
 
 @router.get("/resources", response_model=list[ResourceEntry], tags=["control-center"])
 async def get_resources(limit: int = Query(50, ge=1, le=200), _: None = Depends(verify_key)):
-    """List resources from jarvis_resources."""
+    """List resources from jarvis_resources. Uses 'name' column as title."""
     supabase = cc.get_cc_db()
     entries = []
     try:
@@ -459,10 +460,10 @@ async def get_resources(limit: int = Query(50, ge=1, le=200), _: None = Depends(
             for row in resp.data:
                 entries.append(ResourceEntry(
                     id=safe_str(row.get("id")),
-                    title=safe_str(row.get("title", "")),
+                    title=safe_str(row.get("name", "")),  # column is 'name' not 'title'
                     type=safe_str(row.get("type", "document")),
-                    url=row.get("url"),
-                    description=row.get("description"),
+                    url=row.get("file_url"),  # column is 'file_url' not 'url'
+                    description=safe_str(row.get("category", "")),  # use category as description
                     created_at=safe_str(row.get("created_at", "")),
                 ))
     except Exception as e:
@@ -472,16 +473,16 @@ async def get_resources(limit: int = Query(50, ge=1, le=200), _: None = Depends(
 
 @router.post("/resources", response_model=ResourceEntry, tags=["control-center"])
 async def create_resource(resource: ResourceCreate, _: None = Depends(verify_key)):
-    """Create a resource in jarvis_resources."""
+    """Create a resource in jarvis_resources. Uses 'name' column."""
     supabase = cc.get_cc_db()
     try:
         resp = (
             supabase.table("jarvis_resources")
             .insert({
-                "title": resource.title,
+                "name": resource.title,  # column is 'name' not 'title'
                 "type": resource.type,
-                "url": resource.url,
-                "description": resource.description,
+                "file_url": resource.url,  # column is 'file_url' not 'url'
+                "category": resource.description or "general",
             })
             .execute()
         )
@@ -489,10 +490,10 @@ async def create_resource(resource: ResourceCreate, _: None = Depends(verify_key
             row = resp.data[0]
             return ResourceEntry(
                 id=safe_str(row.get("id")),
-                title=safe_str(row.get("title", "")),
+                title=safe_str(row.get("name", "")),
                 type=safe_str(row.get("type", "document")),
-                url=row.get("url"),
-                description=row.get("description"),
+                url=row.get("file_url"),
+                description=safe_str(row.get("category", "")),
                 created_at=safe_str(row.get("created_at", "")),
             )
     except Exception as e:
