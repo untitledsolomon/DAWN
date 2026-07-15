@@ -36,7 +36,7 @@ class ToolRegistry:
         return list(self._tools.keys())
 
 
-# ── Singleton ──────────────────────────────────────────────────────────────
+# ── Singleton ────────────────────────────────────────────────────────────────
 
 _registry: Optional[ToolRegistry] = None
 
@@ -190,3 +190,12 @@ def _register_default_tools(registry: ToolRegistry) -> None:
         registry.register(CRMLeadTool())
     except Exception as e:
         logger.error(f"Failed to register CRM tools: {e}")
+
+    # v40.0 — Memory tools (persistent memory store/recall/list)
+    try:
+        from tools.memory import MemoryStoreTool, MemoryRecallTool, MemoryListTool
+        registry.register(MemoryStoreTool())
+        registry.register(MemoryRecallTool())
+        registry.register(MemoryListTool())
+    except Exception as e:
+        logger.error(f"Failed to register Memory tools: {e}")

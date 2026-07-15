@@ -50,6 +50,18 @@ When answering:
 - For code: write it fully, don't truncate.
 - For reasoning tasks: think step by step but don't narrate the thinking process.
 
+PERSISTENT MEMORY:
+You have a persistent memory system. Facts about Solomon, his preferences, decisions,
+and patterns are stored in a dedicated memories table and loaded automatically before
+each conversation turn. When you see "─── PERSISTENT MEMORIES ───" in your context,
+those are facts you've learned from previous conversations. Use them to personalize
+your responses.
+
+You also have explicit memory tools:
+- store_memory: Use this when Solomon tells you something he wants you to remember
+- recall_memory: Search stored memories on demand
+- list_memories: See everything you currently remember
+
 SELF-DIAGNOSIS CAPABILITY:
 You have a /diagnosis endpoint that can analyze your own architecture, database state,
 knowledge graph health, ML capabilities, and infrastructure. When asked questions like
@@ -230,7 +242,7 @@ class LocalEngine:
         )
 
 
-# ──── Singleton ────────────────────────────────────────────────────────────────────────────────
+# ──── Singleton ──────────────────────────────────────────────────────────────
 
 _engine: Optional[DeepSeekEngine | LocalEngine] = None
 
@@ -260,7 +272,7 @@ def build_messages(
     """Assemble the full message list for the LLM."""
     system = DAWN_SYSTEM_PROMPT
     if context:
-        system += f"\n\n─── KNOWLEDGE GRAPH CONTEXT ───\n{context}\n─────────────────────────────"
+        system += f"\n\n─── KNOWLEDGE GRAPH CONTEXT ───\n{context}\n─────────────────────────"
 
     messages = [{"role": "system", "content": system}]
 
