@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS memories (
   CONSTRAINT title_not_empty CHECK (char_length(title) > 0)
 );
 
+-- Safely add columns if the table already existed without them
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS last_accessed TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS access_count INT DEFAULT 0;
+
 -- Trigram index for fuzzy title matching
 CREATE INDEX IF NOT EXISTS idx_memories_title_trgm ON memories USING GIN (title gin_trgm_ops);
 

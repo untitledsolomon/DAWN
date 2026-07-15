@@ -1,6 +1,6 @@
--- ─────────────────────────────────────────────────────────────────────────────
+-- ──────────────────────────────────────────────────────────────────────────────
 -- v40.0: Secrets Vault — encrypted credential storage
--- ─────────────────────────────────────────────────────────────────────────────
+-- ──────────────────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS secrets (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -11,6 +11,10 @@ CREATE TABLE IF NOT EXISTS secrets (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Safely add columns if the table already existed without them
+ALTER TABLE secrets ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
+ALTER TABLE secrets ADD COLUMN IF NOT EXISTS description TEXT;
 
 -- Index for name lookups (used by the agent at runtime)
 CREATE INDEX IF NOT EXISTS idx_secrets_name ON secrets (name);
