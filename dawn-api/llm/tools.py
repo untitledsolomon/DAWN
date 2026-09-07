@@ -5,6 +5,7 @@ No LLM needed for retrieval — that's the whole point.
 """
 from dataclasses import dataclass, field
 from typing import Optional
+import asyncio
 import re
 import db.client as db
 from llm.embeddings import embed_text
@@ -91,8 +92,19 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
     candidates = extract_key_terms(query)
     entry_nodes: list[dict] = []
 
-    for term in candidates[:4]:  # Don't hammer the DB — first 4 candidates
-        results = await db.rpc_fuzzy_search(term, limit=3, threshold=0.15, exclude_tags=exclude_tags)
+    # Fire the fuzzy searches concurrently — each is an independent Supabase
+    # round trip, so running them one-at-a-time multiplies the latency before
+    # the first token streams (several seconds from a high-latency location).
+    terms = candidates[:4]  # Don't hammer the DB — first 4 candidates
+    term_results = await asyncio.gather(
+        *(db.rpc_fuzzy_search(t, limit=3, threshold=0.15, exclude_tags=exclude_tags) for t in terms),
+        return_exceptions=True,
+    )
+
+    for term, results in zip(terms, term_results):
+        if isinstance(results, Exception):
+            logger.warning(f"[context] fuzzy_search failed for '{term}': {results}")
+            continue
         tc = ToolCall(name="fuzzy_search", args={"query": term}, result_count=len(results))
         tool_calls.append(tc)
 
@@ -143,7 +155,19 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
     # Dynamic max_nodes: start with the default, increase for table nodes
     effective_max = max_nodes
 
-    for entry in entry_nodes[:3]:  # Top 3 entry points
+    entries = entry_nodes[:3]  # Top 3 entry points
+
+    # Fire all traversals concurrently — each is an independent Supabase round
+    # trip, so running them one-at-a-time multiplies pre-token latency.
+    traversals = await asyncio.gather(
+        *(db.rpc_traverse(e["id"], max_depth=2) for e in entries),
+        return_exceptions=True,
+    )
+
+    for entry, traversal in zip(entries, traversals):
+        if isinstance(traversal, Exception):
+            logger.warning(f"[context] traverse failed for {entry['id']}: {traversal}")
+            traversal = []
         node_id = entry["id"]
         node_ids.append(node_id)
         node_titles.append(entry["title"])
@@ -155,8 +179,6 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
         # Check if this is a table-type node — if so, we need its children
         is_table_node = entry.get("type") == "table"
 
-        # Traverse outward
-        traversal = await db.rpc_traverse(node_id, max_depth=2)
         tc = ToolCall(
             name="traverse",
             args={"node_id": node_id, "depth": 2},
