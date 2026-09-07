@@ -1,5 +1,6 @@
 import json
 import logging
+import asyncio
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -8,7 +9,7 @@ from config import settings
 from llm.agent import run_agent_loop, DEFAULT_MAX_ITERATIONS
 from llm.identity import resolve_identity, Identity, TrustTier
 from llm.engine import get_engine
-from llm.tools import load_memory_context, extract_and_store_memory
+from llm.tools import load_memory_context, load_vault_context, extract_and_store_memory
 import db.client as db
 
 # Reuse the exact same persistence + title helpers routers/chat.py uses, so
@@ -96,7 +97,12 @@ async def agent(
 
         # ★ v40.0: Load memory context (personal facts, preferences, past learnings)
         # This is the same call chat mode uses — now agent mode gets it too.
-        memory_context = await load_memory_context(req.message)
+        # The vault index (file-based long-form memory) is loaded alongside.
+        memory_context, vault_context = await asyncio.gather(
+            load_memory_context(req.message),
+            load_vault_context(),
+        )
+        combined_memory = "\n\n".join(c for c in (memory_context, vault_context) if c)
 
         # Track tool calls by a unique key (name + index) so duplicate tool
         # names don't overwrite each other in pending_calls.
@@ -109,7 +115,7 @@ async def agent(
             identity=identity,
             history=effective_history,  # ★ Now uses DB-loaded history
             max_iterations=req.max_iterations,
-            memory_context=memory_context,  # ★ NEW: persistent memory context
+            memory_context=combined_memory,  # ★ persistent memory + vault context
         ):
             event_type = event.pop("type")
 

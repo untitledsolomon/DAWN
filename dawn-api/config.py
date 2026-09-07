@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     skills_install_root: str = "./installed_skills"
     tools_enabled: str = "filesystem,git,websearch,install_skill,terminal,web_fetch,ssh,nmap,osint,mcp"
 
+    # Memory vault — file-based long-form memory (profile, daily notes,
+    # project knowledge). See vault/vault.py.
+    vault_root: str = "./vault"
+
     # Web search
     brave_search_api_key: Optional[str] = None
 

@@ -489,5 +489,24 @@ async def load_memory_context(
             parts.append(f"[Memory: {fact_type} (confidence: {confidence:.2f})] {title}: {body}")
         else:
             parts.append(f"[Memory: {fact_type} (confidence: {confidence:.2f})] {title}")
-    
+
     return "\n".join(parts)
+
+
+async def load_vault_context() -> str:
+    """Load the memory vault index (profile + structure) for conversation
+    context. This is the file-based long-form memory layer — the agent reads
+    it at the start of a conversation to know who the user is and what's
+    active, complementing the searchable `memories` table.
+
+    Returns a formatted string, or empty string if the vault isn't available.
+    """
+    try:
+        from vault import vault
+        index = vault.load_index()
+        if not index:
+            return ""
+        return f"[Memory Vault Index]\n{index}"
+    except Exception as e:
+        logger.warning(f"Failed to load vault context: {e}")
+        return ""

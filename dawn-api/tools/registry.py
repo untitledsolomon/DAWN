@@ -102,6 +102,20 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register MCPTool: {e}")
 
+    # v41. — Memory vault tools (file-based long-form memory)
+    try:
+        from tools.vault import (
+            VaultReadTool, VaultWriteTool, VaultListTool,
+            VaultDailyNoteTool, VaultIndexTool,
+        )
+        registry.register(VaultReadTool())
+        registry.register(VaultWriteTool())
+        registry.register(VaultListTool())
+        registry.register(VaultDailyNoteTool())
+        registry.register(VaultIndexTool())
+    except Exception as e:
+        logger.error(f"Failed to register vault tools: {e}")
+
     try:
         from tools.webfetch import WebFetchTool
         registry.register(WebFetchTool())

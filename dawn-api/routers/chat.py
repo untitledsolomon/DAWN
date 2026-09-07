@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from typing import Optional
 from config import settings
 from llm.engine import get_engine, build_messages
-from llm.tools import build_context, extract_memory_facts, extract_error_pattern, extract_key_terms, load_memory_context, extract_and_store_memory
+from llm.tools import build_context, extract_memory_facts, extract_error_pattern, extract_key_terms, load_memory_context, load_vault_context, extract_and_store_memory
 import db.client as db
 
 logger = logging.getLogger(__name__)
@@ -254,9 +254,10 @@ async def chat(
         # 4+5. Load memory context and build graph context concurrently —
         #       both are independent Supabase round trips, so running them
         #       one-at-a-time doubles the pre-token latency.
-        memory_context, context_result = await asyncio.gather(
+        memory_context, context_result, vault_context = await asyncio.gather(
             load_memory_context(req.message),
             build_context(req.message, web_search_enabled=req.web_search_enabled),
+            load_vault_context(),
         )
 
         # 6. Stream tool call events to frontend
@@ -275,13 +276,14 @@ async def chat(
                 "node_titles": context_result.node_titles,
             })
 
-        # 8. Build messages for LLM — include memory context
+        # 8. Build messages for LLM — include memory context + vault context
         combined_context = context_result.context
-        if memory_context:
-            if combined_context:
-                combined_context += "\n\n" + memory_context
-            else:
-                combined_context = memory_context
+        for ctx in (memory_context, vault_context):
+            if ctx:
+                if combined_context:
+                    combined_context += "\n\n" + ctx
+                else:
+                    combined_context = ctx
 
         # Add web search context note if enabled
         if req.web_search_enabled:
