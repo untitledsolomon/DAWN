@@ -20,6 +20,8 @@ from tools.base import BaseTool, ToolResult
 from tools.registry import get_registry
 from skills.manifest import parse_manifest, ManifestError
 from skills.proxy_tool import SkillProxyTool
+from skills.skillmd import parse_skill_md, SkillMDError
+from skills.skillmd_proxy import SkillMDProxyTool
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -52,11 +54,12 @@ class SkillInstallTool(BaseTool):
     description = (
         "Install a new capability from a GitHub repository URL, or from a "
         "local directory already inside the DAWN sandbox (e.g. a skill you "
-        "just wrote with the filesystem tool). The source must contain a "
-        "valid skill.yaml manifest at its root. Once installed, the skill "
-        "becomes available as a new tool (named 'skill_<name>') for the "
-        "rest of this task. Only use this when an existing tool genuinely "
-        "cannot do what's needed."
+        "just wrote with the filesystem tool). The source must contain "
+        "either a valid skill.yaml manifest (container-executed skill) or a "
+        "SKILL.md file (knowledge skill, the Claude Code format used by the "
+        "ECC library). Once installed, the skill becomes available as a new "
+        "tool (named 'skill_<name>') for the rest of this task. Only use "
+        "this when an existing tool genuinely cannot do what's needed."
     )
     input_schema = {
         "type": "object",
@@ -107,15 +110,53 @@ class SkillInstallTool(BaseTool):
                 except Exception as e:
                     return ToolResult(success=False, error=f"Failed to clone '{repo_url}': {e}")
 
+        # Two skill formats are supported:
+        #   1. skill.yaml — container-executed skills (skills/manifest.py)
+        #   2. SKILL.md — knowledge/instruction skills (skills/skillmd.py),
+        #      the Claude Code format used by the ECC library and others.
+        # Try the container format first; fall back to SKILL.md.
         try:
             manifest = parse_manifest(target)
-        except ManifestError as e:
-            # Only clean up clones — never delete a local sandbox dir the
-            # user wrote themselves just because the manifest was bad.
-            if not _is_local_path(repo_url):
-                shutil.rmtree(target, ignore_errors=True)
-            return ToolResult(success=False, error=f"Invalid skill manifest: {e}")
+        except ManifestError as yaml_err:
+            try:
+                skillmd = parse_skill_md(target)
+            except SkillMDError as md_err:
+                # Only clean up clones — never delete a local sandbox dir the
+                # user wrote themselves just because the manifest was bad.
+                if not _is_local_path(repo_url):
+                    shutil.rmtree(target, ignore_errors=True)
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"Invalid skill source: no valid skill.yaml ({yaml_err}) "
+                        f"or SKILL.md ({md_err})."
+                    ),
+                )
+            # SKILL.md knowledge skill
+            registry = get_registry()
+            proxy = SkillMDProxyTool(skillmd, target)
+            registry.register(proxy)
+            logger.info(
+                f"Installed knowledge skill '{skillmd.name}' from {repo_url} "
+                f"(SKILL.md, run_command={skillmd.run_command!r})"
+            )
+            return ToolResult(
+                success=True,
+                output=(
+                    f"Installed knowledge skill '{skillmd.name}' as tool "
+                    f"'{proxy.name}'. {skillmd.description} Call it to load the "
+                    f"skill's instructions and apply them."
+                ),
+                metadata={
+                    "skill_name": skillmd.name,
+                    "tool_name": proxy.name,
+                    "skill_type": "knowledge",
+                    "run_command": skillmd.run_command,
+                    "source": "local" if _is_local_path(repo_url) else "remote",
+                },
+            )
 
+        # skill.yaml container skill
         registry = get_registry()
         proxy = SkillProxyTool(manifest, target)
         registry.register(proxy)

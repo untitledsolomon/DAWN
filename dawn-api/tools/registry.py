@@ -80,6 +80,20 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register SkillInstallTool: {e}")
 
+    # v41.0 — ECC skill library installer (SKILL.md knowledge skills)
+    try:
+        from skills.ecc_installer import InstallECCSkillTool
+        registry.register(InstallECCSkillTool())
+    except Exception as e:
+        logger.error(f"Failed to register InstallECCSkillTool: {e}")
+
+    # v41.0 — npx tool (run npm CLI packages in an isolated container)
+    try:
+        from tools.npx import NpxTool
+        registry.register(NpxTool())
+    except Exception as e:
+        logger.error(f"Failed to register NpxTool: {e}")
+
     try:
         from tools.webfetch import WebFetchTool
         registry.register(WebFetchTool())
