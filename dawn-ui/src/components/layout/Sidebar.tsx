@@ -27,7 +27,6 @@ import {
   Puzzle,
   HeartPulse,
   BookOpen,
-  ListTodo,
   BarChart3,
   Image,
   X as XIcon,
