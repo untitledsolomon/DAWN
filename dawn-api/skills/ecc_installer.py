@@ -47,6 +47,85 @@ def _fetch_skill_md(skill_name: str) -> str:
         return resp.read().decode("utf-8")
 
 
+def _list_ecc_skills() -> list[str]:
+    """List the skill directory names in the ECC repo's .agents/skills/.
+
+    Uses the GitHub API. If a GITHUB_TOKEN is set (higher rate limit), it is
+    used; otherwise the unauthenticated API (60 req/hr) is used and may hit
+    the rate limit, in which case callers should fall back to installing by
+    name (which uses raw.githubusercontent.com and is not rate-limited).
+    """
+    import os
+    url = f"https://api.github.com/repos/{ECC_REPO}/contents/{ECC_SKILLS_PATH}"
+    headers = {"User-Agent": "DAWN"}
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        entries = json.loads(resp.read().decode("utf-8"))
+    return sorted(e["name"] for e in entries if e.get("type") == "dir")
+
+
+class ListECCSkillsTool(BaseTool):
+    name = "list_ecc_skills"
+    description = (
+        "List the available knowledge skills in the ECC skill library "
+        "(github.com/untitledsolomon/ECC). Returns the skill names so you can "
+        "pick which one to install with install_ecc_skill. Optionally filter "
+        "by a search term. Use this to browse what's available before "
+        "installing."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Optional substring to filter skill names by (e.g. 'api', 'research', 'mcp').",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of skill names to return (default 100).",
+                "default": 100,
+            },
+        },
+        "required": [],
+    }
+
+    async def run(self, query: str = "", limit: int = 100) -> ToolResult:
+        try:
+            skills = await asyncio.to_thread(_list_ecc_skills)
+        except Exception as e:
+            # The unauthenticated GitHub API is rate-limited (60 req/hr).
+            # Listing is a convenience; installing by name still works via
+            # raw.githubusercontent.com, so point the agent there.
+            return ToolResult(
+                success=False,
+                error=(
+                    f"Failed to list ECC skills (GitHub API rate limit or error: {e}). "
+                    "You can still install a skill by name with "
+                    "install_ecc_skill(skill_name='<name>') — e.g. 'api-design', "
+                    "'deep-research', 'mcp-server-patterns'."
+                ),
+            )
+
+        if query:
+            q = query.lower()
+            skills = [s for s in skills if q in s.lower()]
+
+        skills = skills[:limit]
+
+        return ToolResult(
+            success=True,
+            output={
+                "count": len(skills),
+                "skills": skills,
+                "note": "Install one with install_ecc_skill(skill_name='<name>').",
+            },
+            metadata={"count": len(skills), "source": "ecc"},
+        )
+
+
 class InstallECCSkillTool(BaseTool):
     name = "install_ecc_skill"
     description = (
