@@ -114,3 +114,31 @@ async def update_tool_permission(permission_id: str, req: dict, _: None = Depend
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/mcp/servers/{server_id}/connect", tags=["mcp"])
+async def connect_mcp_server(server_id: str, _: None = Depends(verify_key)):
+    """Connect to an MCP server and discover its tools."""
+    try:
+        from tools.mcp_server import MCPTool
+        tool = MCPTool()
+        result = await tool._connect_server(server_id)
+        if not result.success:
+            raise HTTPException(status_code=400, detail=result.error)
+        return result.output
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/mcp/servers/{server_id}/disconnect", tags=["mcp"])
+async def disconnect_mcp_server(server_id: str, _: None = Depends(verify_key)):
+    """Disconnect from an MCP server."""
+    try:
+        from tools.mcp_server import MCPTool
+        tool = MCPTool()
+        result = await tool._disconnect_server(server_id)
+        return result.output
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

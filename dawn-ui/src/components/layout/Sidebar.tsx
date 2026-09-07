@@ -36,6 +36,10 @@ import {
   FlaskConical,
   ScrollText,
   ActivitySquare,
+  FolderKanban,
+  Package,
+  Server,
+  FolderOpen,
 } from "lucide-react";
 import clsx from "clsx";
 import { listSessions, createSession, deleteSession, updateSession, countArtifacts } from "@/lib/api";
@@ -64,10 +68,17 @@ const TOOLS_NAV: NavItem[] = [
 ];
 
 const BUSINESS_NAV: NavItem[] = [
+  { href: "/projects", icon: FolderKanban, label: "Projects" },
+  { href: "/files", icon: FolderOpen, label: "Files" },
   { href: "/integrations", icon: Puzzle, label: "Integrations" },
   { href: "/monitoring", icon: HeartPulse, label: "Monitoring" },
   { href: "/books", icon: BookOpen, label: "Library" },
   { href: "/artifacts", icon: Image, label: "Artifacts" },
+];
+
+const SKILLS_NAV: NavItem[] = [
+  { href: "/skills", icon: Package, label: "Skills" },
+  { href: "/mcp", icon: Server, label: "MCP Servers" },
 ];
 
 const DECISIONS_NAV: NavItem[] = [
@@ -319,6 +330,9 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
 
         {/* Tools section */}
         <div className="flex-shrink-0"><NavSection label="Tools" items={TOOLS_NAV} /></div>
+
+        {/* Skills & MCP section */}
+        <div className="flex-shrink-0"><NavSection label="Skills" items={SKILLS_NAV} /></div>
 
         {/* Business section */}
         <div className="flex-shrink-0"><NavSection label="Business" items={BUSINESS_NAV} /></div>

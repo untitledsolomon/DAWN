@@ -1112,3 +1112,219 @@ export async function updateSecret(id: string, data: {
 export async function deleteSecret(id: string): Promise<void> {
   await fetch(`${BASE}/secrets/${id}`, { method: "DELETE", headers: headers() });
 }
+
+// ── Projects ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface Project {
+  id: string;
+  name: string;
+  description?: string | null;
+  status: string;
+  priority: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectRelated {
+  project: Project;
+  artifacts: Artifact[];
+  memories: { id: string; title: string; body?: string; fact_type?: string; confidence?: number; created_at: string }[];
+  nodes: { id: string; title: string; type?: string; status?: string; created_at: string }[];
+  sessions: { id: string; title: string; created_at: string; updated_at: string }[];
+}
+
+export async function listProjects(): Promise<Project[]> {
+  const res = await fetch(`${BASE}/projects`, { headers: headers() });
+  if (!res.ok) throw new Error("Failed to list projects");
+  return res.json();
+}
+
+export async function createProject(data: {
+  name: string;
+  description?: string;
+  status?: string;
+  priority?: string;
+  tags?: string[];
+}): Promise<Project> {
+  const res = await fetch(`${BASE}/projects`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to create project");
+  return res.json();
+}
+
+export async function updateProject(id: string, data: Partial<Project>): Promise<Project> {
+  const res = await fetch(`${BASE}/projects/${id}`, {
+    method: "PUT",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to update project");
+  return res.json();
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  await fetch(`${BASE}/projects/${id}`, { method: "DELETE", headers: headers() });
+}
+
+export async function getProjectRelated(id: string): Promise<ProjectRelated> {
+  const res = await fetch(`${BASE}/projects/${id}/related`, { headers: headers() });
+  if (!res.ok) throw new Error("Failed to get project related content");
+  return res.json();
+}
+
+// ── Files ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface FileArtifact {
+  id: string;
+  title: string;
+  description?: string | null;
+  type: string;
+  url?: string | null;
+  tags: string[];
+  created_at: string;
+}
+
+export async function listFiles(limit = 100, offset = 0): Promise<FileArtifact[]> {
+  const res = await fetch(`${BASE}/files?limit=${limit}&offset=${offset}`, { headers: headers() });
+  if (!res.ok) throw new Error("Failed to list files");
+  return res.json();
+}
+
+export async function uploadFile(file: File, title?: string, tags: string[] = []): Promise<{ id: string; title: string; filename: string; size: number }> {
+  const form = new FormData();
+  form.append("file", file);
+  if (title) form.append("title", title);
+  form.append("tags", tags.join(","));
+  const res = await fetch(`${BASE}/files/upload`, {
+    method: "POST",
+    headers: { "x-api-key": KEY },
+    body: form,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Upload failed" }));
+    throw new Error(err.detail || "Upload failed");
+  }
+  return res.json();
+}
+
+export function fileDownloadUrl(id: string): string {
+  return `${BASE}/files/${id}/download`;
+}
+
+// ── Skills ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface InstalledSkill {
+  name: string;
+  description: string;
+  type: string;
+}
+
+export async function listSkills(): Promise<InstalledSkill[]> {
+  const res = await fetch(`${BASE}/skills`, { headers: headers() });
+  if (!res.ok) throw new Error("Failed to list skills");
+  return res.json();
+}
+
+export async function installSkill(repoUrl: string): Promise<{ message?: string; skill_name?: string; tool_name?: string }> {
+  const res = await fetch(`${BASE}/skills/install`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ repo_url: repoUrl }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Install failed" }));
+    throw new Error(err.detail || "Install failed");
+  }
+  return res.json();
+}
+
+export async function installEccSkill(skillName: string): Promise<{ message?: string; skill_name?: string }> {
+  const res = await fetch(`${BASE}/skills/install-ecc`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ skill_name: skillName }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Install failed" }));
+    throw new Error(err.detail || "Install failed");
+  }
+  return res.json();
+}
+
+export async function listEccSkills(query = ""): Promise<{ skills: string[]; count: number }> {
+  const res = await fetch(`${BASE}/skills/ecc?query=${encodeURIComponent(query)}`, { headers: headers() });
+  if (!res.ok) throw new Error("Failed to list ECC skills");
+  return res.json();
+}
+
+// ── MCP ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface MCPServer {
+  id: string;
+  name: string;
+  description?: string | null;
+  server_type: string;
+  enabled: boolean;
+  tools_count: number;
+  last_connected_at?: string | null;
+  created_at: string;
+}
+
+export interface MCPTool {
+  id: string;
+  name: string;
+  description?: string;
+  server_id: string;
+  enabled: boolean;
+}
+
+export async function listMCPServers(): Promise<MCPServer[]> {
+  const res = await fetch(`${BASE}/mcp/servers`, { headers: headers() });
+  if (!res.ok) throw new Error("Failed to list MCP servers");
+  return res.json();
+}
+
+export async function createMCPServer(data: {
+  name: string;
+  description?: string;
+  server_type: string;
+  command?: string;
+  args?: string[];
+  url?: string;
+  api_key?: string;
+}): Promise<MCPServer> {
+  const res = await fetch(`${BASE}/mcp/servers`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to create MCP server");
+  return res.json();
+}
+
+export async function deleteMCPServer(id: string): Promise<void> {
+  await fetch(`${BASE}/mcp/servers/${id}`, { method: "DELETE", headers: headers() });
+}
+
+export async function connectMCPServer(id: string): Promise<{ status: string; tools_discovered?: number; tools?: string[] }> {
+  const res = await fetch(`${BASE}/mcp/servers/${id}/connect`, {
+    method: "POST",
+    headers: headers(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Connect failed" }));
+    throw new Error(err.detail || "Connect failed");
+  }
+  return res.json();
+}
+
+export async function listMCPTools(serverId?: string): Promise<MCPTool[]> {
+  const qs = serverId ? `?server_id=${serverId}` : "";
+  const res = await fetch(`${BASE}/mcp/tools${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error("Failed to list MCP tools");
+  return res.json();
+}

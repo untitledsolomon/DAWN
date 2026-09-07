@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # project knowledge). See vault/vault.py.
     vault_root: str = "./vault"
 
+    # Files — local storage for user-uploaded / DAWN-generated files.
+    files_root: str = "./files"
+
     # Web search
     brave_search_api_key: Optional[str] = None
 

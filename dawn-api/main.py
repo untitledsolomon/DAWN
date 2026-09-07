@@ -26,6 +26,9 @@ from routers import (
     secrets,   # v40.0 — Encrypted Secrets Vault
     control_center,  # v37.0 — Control Center Integration
     vault,     # v41.0 — Memory Vault (file-based long-form memory)
+    projects,  # v42.0 — Projects / goals with related content
+    files,     # v42.0 — File upload/download
+    skills,    # v42.0 — Skills list/install
 )
 
 app = FastAPI(
@@ -142,6 +145,9 @@ app.include_router(control_center.router, prefix="", tags=["control-center"])
 app.include_router(memories.router, prefix="/memories", tags=["memories"])
 app.include_router(secrets.router, prefix="/secrets", tags=["secrets"])
 app.include_router(vault.router, prefix="", tags=["vault"])
+app.include_router(projects.router, prefix="", tags=["projects"])
+app.include_router(files.router, prefix="", tags=["files"])
+app.include_router(skills.router, prefix="", tags=["skills"])
 
 
 @app.get("/health")
