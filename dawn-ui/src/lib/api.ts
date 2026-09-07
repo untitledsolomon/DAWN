@@ -143,11 +143,12 @@ export async function* streamChat(
   history: { role: string; content: string }[],
   sessionId?: string,
   webSearchEnabled?: boolean,
+  projectTags?: string[],
 ): AsyncGenerator<SSEEvent> {
   const res = await fetch(`${BASE}/chat/`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ message, history, session_id: sessionId, web_search_enabled: webSearchEnabled }),
+    body: JSON.stringify({ message, history, session_id: sessionId, web_search_enabled: webSearchEnabled, project_tags: projectTags }),
   });
 
   if (!res.ok || !res.body) {

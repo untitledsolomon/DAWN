@@ -69,7 +69,7 @@ def extract_key_terms(query: str) -> list[str]:
     return candidates
 
 
-async def build_context(query: str, max_nodes: int = 10, include_code: bool = False, web_search_enabled: bool = False) -> ContextResult:
+async def build_context(query: str, max_nodes: int = 10, include_code: bool = False, web_search_enabled: bool = False, include_tags: Optional[list[str]] = None) -> ContextResult:
     """
     Main retrieval pipeline.
     1. Try fuzzy search on full query + key terms (code-tagged nodes
@@ -143,6 +143,17 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
                     seen_ids.add(node["id"])
             if len(entry_nodes) >= 3:
                 break  # Good enough entry points found
+
+    # ── Project scoping: restrict context to nodes tagged with the project ────
+    # When a chat is scoped to a project, only nodes whose tags intersect the
+    # project's tags are kept. This keeps DAWN's context pre-filtered to the
+    # project so it doesn reach across unrelated topics.
+    if include_tags:
+        tag_set = set(include_tags)
+        entry_nodes = [
+            n for n in entry_nodes
+            if (n.get("tags") or []) and set(n.get("tags") or []) & tag_set
+        ]
 
     if not entry_nodes:
         # If web search is enabled, still return empty context but note it

@@ -34,6 +34,7 @@ class ChatRequest(BaseModel):
     history: list[dict] = []
     session_id: Optional[str] = None
     web_search_enabled: bool = False
+    project_tags: Optional[list[str]] = None
 
 
 # ── SSE helpers ───────────────────────────────────────────────────────────────
@@ -256,7 +257,7 @@ async def chat(
         #       one-at-a-time doubles the pre-token latency.
         memory_context, context_result, vault_context = await asyncio.gather(
             load_memory_context(req.message),
-            build_context(req.message, web_search_enabled=req.web_search_enabled),
+            build_context(req.message, web_search_enabled=req.web_search_enabled, include_tags=req.project_tags),
             load_vault_context(),
         )
 
