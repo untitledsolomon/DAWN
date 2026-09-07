@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   CheckCircle, XCircle, RefreshCw, Upload, FileText, GitBranch,
-  Brain, Key, Database, Plus, Trash2, Eye, EyeOff, Copy,
-  Check, X, Edit3, Shield, Lock,
+  Brain, Database, Plus, Trash2,
+  Check, X, Edit3,
 } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
 import NodeCard from "@/components/nodes/NodeCard";
@@ -13,11 +13,10 @@ import {
   getIngestionLog, ingestRepo, ingestDocument,
   listMemories, countMemories, createMemory, deleteMemory,
   approveMemory, rejectMemory,
-  listSecrets, countSecrets, createSecret, getSecret, deleteSecret,
 } from "@/lib/api";
-import type { DawnNode, IngestionLog, MemoryItem, SecretItem, SecretWithValue } from "@/lib/types";
+import type { DawnNode, IngestionLog, MemoryItem } from "@/lib/types";
 
-type TabId = "memories" | "secrets" | "review" | "ingest" | "log";
+type TabId = "memories" | "review" | "ingest" | "log";
 
 export default function MemoryPage() {
   // ── State ────────────────────────────────────────────────────────────────
@@ -38,18 +37,6 @@ export default function MemoryPage() {
   const [newMemoryType, setNewMemoryType] = useState("fact");
   const [newMemoryTags, setNewMemoryTags] = useState("");
 
-  // Secrets state
-  const [secrets, setSecrets] = useState<SecretItem[]>([]);
-  const [secretsLoading, setSecretsLoading] = useState(true);
-  const [secretCount, setSecretCount] = useState(0);
-  const [showAddSecret, setShowAddSecret] = useState(false);
-  const [newSecretName, setNewSecretName] = useState("");
-  const [newSecretValue, setNewSecretValue] = useState("");
-  const [newSecretDesc, setNewSecretDesc] = useState("");
-  const [newSecretTags, setNewSecretTags] = useState("");
-  const [revealedSecrets, setRevealedSecrets] = useState<Set<string>>(new Set());
-  const [secretValues, setSecretValues] = useState<Map<string, string>>(new Map());
-  const [copiedSecret, setCopiedSecret] = useState<string | null>(null);
 
   // Ingest state
   const [ingestType, setIngestType] = useState<"repo" | "document">("repo");
@@ -86,21 +73,10 @@ export default function MemoryPage() {
     finally { setMemoriesLoading(false); }
   }, []);
 
-  const loadSecrets = useCallback(async () => {
-    setSecretsLoading(true);
-    try {
-      const [s, c] = await Promise.all([listSecrets(), countSecrets()]);
-      setSecrets(s);
-      setSecretCount(c);
-    } catch (e) { console.error(e); }
-    finally { setSecretsLoading(false); }
-  }, []);
-
   useEffect(() => {
     loadKnowledgeGraph();
     loadMemories();
-    loadSecrets();
-  }, [loadKnowledgeGraph, loadMemories, loadSecrets]);
+  }, [loadKnowledgeGraph, loadMemories]);
 
   // ── Memory handlers ──────────────────────────────────────────────────────
 
@@ -143,56 +119,6 @@ export default function MemoryPage() {
     } catch (e) { console.error(e); }
   };
 
-  // ── Secret handlers ──────────────────────────────────────────────────────
-
-  const handleAddSecret = async () => {
-    if (!newSecretName.trim() || !newSecretValue.trim()) return;
-    try {
-      const tags = newSecretTags.split(",").map((t) => t.trim()).filter(Boolean);
-      await createSecret({
-        name: newSecretName.trim(),
-        value: newSecretValue,
-        description: newSecretDesc.trim() || undefined,
-        tags,
-      });
-      setNewSecretName("");
-      setNewSecretValue("");
-      setNewSecretDesc("");
-      setNewSecretTags("");
-      setShowAddSecret(false);
-      loadSecrets();
-    } catch (e) { console.error(e); }
-  };
-
-  const handleRevealSecret = async (id: string) => {
-    if (revealedSecrets.has(id)) {
-      setRevealedSecrets((prev) => { const n = new Set(prev); n.delete(id); return n; });
-      return;
-    }
-    try {
-      const secret = await getSecret(id);
-      setSecretValues((prev) => { const n = new Map(prev); n.set(id, secret.value); return n; });
-      setRevealedSecrets((prev) => { const n = new Set(prev); n.add(id); return n; });
-    } catch (e) { console.error(e); }
-  };
-
-  const handleCopySecret = async (id: string) => {
-    const val = secretValues.get(id);
-    if (!val) return;
-    try {
-      await navigator.clipboard.writeText(val);
-      setCopiedSecret(id);
-      setTimeout(() => setCopiedSecret(null), 2000);
-    } catch { /* clipboard not available */ }
-  };
-
-  const handleDeleteSecret = async (id: string) => {
-    try {
-      await deleteSecret(id);
-      loadSecrets();
-    } catch (e) { console.error(e); }
-  };
-
   // ── Ingest handlers ──────────────────────────────────────────────────────
 
   const handleIngest = async () => {
@@ -219,7 +145,6 @@ export default function MemoryPage() {
 
   const TABS: { id: TabId; label: string; icon: React.ElementType; count?: number }[] = [
     { id: "memories", label: "Personal Memories", icon: Brain, count: memoryCount },
-    { id: "secrets", label: "Secrets Vault", icon: Lock, count: secretCount },
     { id: "review", label: "Pending Review", icon: Database, count: pending.length },
     { id: "ingest", label: "Ingest Data", icon: Upload },
     { id: "log", label: "Ingestion Log", icon: FileText, count: log.length },
@@ -233,11 +158,11 @@ export default function MemoryPage() {
         <header className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-rim flex-shrink-0">
           <div className="min-w-0">
             <h1 className="text-text-primary font-semibold text-sm tracking-tight">Memory</h1>
-            <p className="text-text-muted text-2xs">Personal facts · Secrets vault · Knowledge graph</p>
+            <p className="text-text-muted text-2xs">Personal facts · Knowledge graph</p>
           </div>
-          <button onClick={() => { loadMemories(); loadSecrets(); loadKnowledgeGraph(); }}
+          <button onClick={() => { loadMemories(); loadKnowledgeGraph(); }}
             className="w-8 h-8 flex items-center justify-center rounded-lg text-text-muted hover:text-dawn hover:bg-dawn/10 transition-all flex-shrink-0">
-            <RefreshCw size={14} className={loading || memoriesLoading || secretsLoading ? "animate-spin" : ""} />
+            <RefreshCw size={14} className={loading || memoriesLoading ? "animate-spin" : ""} />
           </button>
         </header>
 
@@ -386,126 +311,6 @@ export default function MemoryPage() {
                             </>
                           )}
                           <button onClick={() => handleDeleteMemory(mem.id)}
-                            className="w-7 h-7 flex items-center justify-center rounded-lg text-text-muted hover:text-ember hover:bg-ember/10 transition-all"
-                            title="Delete">
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ════════════════════════════════════════════════════════════════
-              TAB: Secrets Vault
-              ════════════════════════════════════════════════════════════════ */}
-          {tab === "secrets" && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <p className="text-text-secondary text-xs">
-                  Encrypted credentials DAWN can access at runtime. Values are encrypted at rest.
-                </p>
-                <button onClick={() => setShowAddSecret(!showAddSecret)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-dawn/10 text-dawn text-xs font-medium hover:bg-dawn/20 transition-all">
-                  <Plus size={13} /> Add Secret
-                </button>
-              </div>
-
-              {showAddSecret && (
-                <div className="bg-surface border border-rim rounded-xl p-4 space-y-3">
-                  <div className="flex gap-3">
-                    <div className="flex-1">
-                      <label className="text-text-secondary text-xs block mb-1">Name</label>
-                      <input value={newSecretName} onChange={(e) => setNewSecretName(e.target.value)}
-                        placeholder="e.g. GITHUB_TOKEN"
-                        className="w-full bg-elevated/50 border border-rim rounded-lg px-3 py-2 text-text-primary text-sm placeholder:text-text-muted outline-none focus:border-dawn/50 font-mono" />
-                    </div>
-                    <div className="flex-1">
-                      <label className="text-text-secondary text-xs block mb-1">Tags (comma-sep)</label>
-                      <input value={newSecretTags} onChange={(e) => setNewSecretTags(e.target.value)}
-                        placeholder="github, auth"
-                        className="w-full bg-elevated/50 border border-rim rounded-lg px-3 py-2 text-text-primary text-sm placeholder:text-text-muted outline-none focus:border-dawn/50" />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-text-secondary text-xs block mb-1">Value</label>
-                    <textarea value={newSecretValue} onChange={(e) => setNewSecretValue(e.target.value)}
-                      rows={2} placeholder="Paste your API key, token, or credential..."
-                      className="w-full bg-elevated/50 border border-rim rounded-lg px-3 py-2 text-text-primary text-sm placeholder:text-text-muted outline-none focus:border-dawn/50 resize-none font-mono" />
-                  </div>
-                  <div>
-                    <label className="text-text-secondary text-xs block mb-1">Description (optional)</label>
-                    <input value={newSecretDesc} onChange={(e) => setNewSecretDesc(e.target.value)}
-                      placeholder="e.g. GitHub personal access token for repo operations"
-                      className="w-full bg-elevated/50 border border-rim rounded-lg px-3 py-2 text-text-primary text-sm placeholder:text-text-muted outline-none focus:border-dawn/50" />
-                  </div>
-                  <div className="flex gap-2 pt-1">
-                    <button onClick={handleAddSecret}
-                      disabled={!newSecretName.trim() || !newSecretValue.trim()}
-                      className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-dawn/90 hover:bg-dawn text-white text-xs font-medium disabled:opacity-40 transition-all">
-                      <Lock size={12} /> Encrypt & Save
-                    </button>
-                    <button onClick={() => setShowAddSecret(false)}
-                      className="px-4 py-2 rounded-lg border border-rim text-text-muted hover:text-text-secondary text-xs transition-all">
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {secretsLoading ? (
-                <div className="flex items-center justify-center h-48">
-                  <div className="w-5 h-5 border-2 border-rim border-t-dawn rounded-full animate-spin" />
-                </div>
-              ) : secrets.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-48 gap-2">
-                  <Shield size={24} className="text-text-muted/50" />
-                  <p className="text-text-muted text-sm">No secrets stored</p>
-                  <p className="text-text-muted text-2xs">Store API keys, tokens, and credentials here instead of the sandbox.</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {secrets.map((sec) => (
-                    <div key={sec.id}
-                      className="bg-surface border border-rim rounded-xl px-4 py-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <Lock size={12} className="text-dawn" />
-                            <span className="text-text-primary text-xs font-medium font-mono">{sec.name}</span>
-                            {sec.tags && sec.tags.length > 0 && sec.tags.map((tag) => (
-                              <span key={tag} className="text-2xs font-mono px-1.5 py-0.5 rounded bg-elevated/50 text-text-muted border border-rim/50">{tag}</span>
-                            ))}
-                          </div>
-                          {sec.description && (
-                            <p className="text-text-muted text-2xs mt-1">{sec.description}</p>
-                          )}
-                          {revealedSecrets.has(sec.id) && (
-                            <div className="mt-2 flex items-center gap-2">
-                              <code className="flex-1 bg-elevated/80 border border-rim rounded-lg px-3 py-2 text-xs font-mono text-text-primary break-all select-all">
-                                {secretValues.get(sec.id)}
-                              </code>
-                              <button onClick={() => handleCopySecret(sec.id)}
-                                className="w-7 h-7 flex items-center justify-center rounded-lg text-text-muted hover:text-dawn hover:bg-dawn/10 transition-all"
-                                title="Copy">
-                                {copiedSecret === sec.id ? <Check size={12} className="text-success" /> : <Copy size={12} />}
-                              </button>
-                            </div>
-                          )}
-                          <p className="text-text-muted text-2xs mt-1.5 font-mono">
-                            Created {new Date(sec.created_at).toLocaleDateString()}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-1 flex-shrink-0">
-                          <button onClick={() => handleRevealSecret(sec.id)}
-                            className="w-7 h-7 flex items-center justify-center rounded-lg text-text-muted hover:text-dawn hover:bg-dawn/10 transition-all"
-                            title={revealedSecrets.has(sec.id) ? "Hide" : "Reveal"}>
-                            {revealedSecrets.has(sec.id) ? <EyeOff size={12} /> : <Eye size={12} />}
-                          </button>
-                          <button onClick={() => handleDeleteSecret(sec.id)}
                             className="w-7 h-7 flex items-center justify-center rounded-lg text-text-muted hover:text-ember hover:bg-ember/10 transition-all"
                             title="Delete">
                             <Trash2 size={12} />
