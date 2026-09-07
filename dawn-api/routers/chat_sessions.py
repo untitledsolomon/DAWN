@@ -51,10 +51,10 @@ class SessionResponse(BaseModel):
     message_count: int = 0
 
 
-def get_message_count(supabase, session_id: str) -> int:
+async def get_message_count(supabase, session_id: str) -> int:
     """Get message count for a session, handling different Supabase client versions."""
     try:
-        res = supabase.table("chat_messages").select("id", count="exact").eq("session_id", session_id).execute()
+        res = await db._async_execute(lambda: supabase.table("chat_messages").select("id", count="exact").eq("session_id", session_id).execute())
         # Supabase v2 returns count as an attribute on the response
         if hasattr(res, 'count') and res.count is not None:
             return res.count
@@ -71,21 +71,33 @@ def get_message_count(supabase, session_id: str) -> int:
 
 @router.get("/sessions", response_model=list[SessionResponse])
 async def list_sessions(_: None = Depends(verify_key)):
-    """List all chat sessions, most recent first, with message count."""
+    """List all chat sessions, most recent first, with message count.
+
+    Message counts are gathered in a single batched query (one round trip)
+    instead of one query per session, which was N sequential blocking calls.
+    """
     try:
+        # The sidebar polls this every 10s; a short TTL keeps repeat polls
+        # from paying a full Supabase round trip while staying fresh.
+        cache_key = db._cache_key("list_sessions")
+        cached = db._cache_get(cache_key, ttl=8)
+        if cached is not None:
+            return cached
+
         supabase = db.get_db()
-        res = supabase.table("chat_sessions").select(
+        res = await db._async_execute(lambda: supabase.table("chat_sessions").select(
             "id, title, mode, created_at, updated_at"
-        ).order("updated_at", desc=True).execute()
+        ).order("updated_at", desc=True).execute())
         sessions = res.data or []
 
-        result = []
-        for s in sessions:
-            count = get_message_count(supabase, s["id"])
-            result.append({
-                **s,
-                "message_count": count,
-            })
+        # One batched query: pull every session_id, count in Python.
+        msg_res = await db._async_execute(lambda: supabase.table("chat_messages").select("session_id").execute())
+        counts = {}
+        for m in msg_res.data or []:
+            counts[m["session_id"]] = counts.get(m["session_id"], 0) + 1
+
+        result = [{**s, "message_count": counts.get(s["id"], 0)} for s in sessions]
+        db._cache_set(cache_key, result, ttl=8)
         return result
     except Exception as e:
         logger.error(f"[chat_sessions] list_sessions failed: {e}")
@@ -100,10 +112,10 @@ async def create_session(
     """Create a new chat session."""
     try:
         supabase = db.get_db()
-        res = supabase.table("chat_sessions").insert({
+        res = await db._async_execute(lambda: supabase.table("chat_sessions").insert({
             "title": req.title,
             "mode": req.mode,
-        }).execute()
+        }).execute())
         if not res.data:
             raise HTTPException(status_code=500, detail="Failed to create session")
         return {**res.data[0], "message_count": 0}
@@ -120,10 +132,10 @@ async def get_session(
     """Get a single session by ID."""
     try:
         supabase = db.get_db()
-        res = supabase.table("chat_sessions").select("*").eq("id", session_id).execute()
+        res = await db._async_execute(lambda: supabase.table("chat_sessions").select("*").eq("id", session_id).execute())
         if not res.data:
             raise HTTPException(status_code=404, detail="Session not found")
-        count = get_message_count(supabase, session_id)
+        count = await get_message_count(supabase, session_id)
         return {**res.data[0], "message_count": count}
     except HTTPException:
         raise
@@ -141,12 +153,12 @@ async def update_session(
     """Rename a session."""
     try:
         supabase = db.get_db()
-        res = supabase.table("chat_sessions").update({
+        res = await db._async_execute(lambda: supabase.table("chat_sessions").update({
             "title": req.title,
-        }).eq("id", session_id).execute()
+        }).eq("id", session_id).execute())
         if not res.data:
             raise HTTPException(status_code=404, detail="Session not found")
-        count = get_message_count(supabase, session_id)
+        count = await get_message_count(supabase, session_id)
         return {**res.data[0], "message_count": count}
     except HTTPException:
         raise
@@ -163,7 +175,7 @@ async def delete_session(
     """Delete a session and all its messages (CASCADE)."""
     try:
         supabase = db.get_db()
-        supabase.table("chat_sessions").delete().eq("id", session_id).execute()
+        await db._async_execute(lambda: supabase.table("chat_sessions").delete().eq("id", session_id).execute())
         return {"status": "deleted"}
     except Exception as e:
         logger.error(f"[chat_sessions] delete_session failed: {e}")
@@ -178,9 +190,9 @@ async def get_session_messages(
     """Get all messages for a session, oldest first."""
     try:
         supabase = db.get_db()
-        res = supabase.table("chat_messages").select(
+        res = await db._async_execute(lambda: supabase.table("chat_messages").select(
             "id, session_id, role, content, tool_calls, node_ids, node_titles, created_at"
-        ).eq("session_id", session_id).order("created_at").execute()
+        ).eq("session_id", session_id).order("created_at").execute())
         return res.data or []
     except Exception as e:
         logger.error(f"[chat_sessions] get_session_messages failed: {e}")

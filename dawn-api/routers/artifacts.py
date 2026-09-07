@@ -61,7 +61,7 @@ async def list_artifacts(
             query = query.eq("session_id", session_id)
 
         query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
-        res = query.execute()
+        res = await db._async_execute(lambda: query.execute())
 
         return res.data or []
     except Exception as e:
@@ -76,6 +76,13 @@ async def count_artifacts(
 ):
     """Count artifacts, optionally filtered by type."""
     try:
+        # The sidebar polls this every 30s; a short TTL keeps repeat polls
+        # from paying a full Supabase round trip while staying fresh.
+        cache_key = db._cache_key("count_artifacts", type=type)
+        cached = db._cache_get(cache_key, ttl=25)
+        if cached is not None:
+            return cached
+
         supabase = db.get_db()
         # NOTE: this postgrest-py version's select() doesn't support `head=`.
         # Use range(0, 0) instead so Postgres still returns an exact `count`
@@ -85,8 +92,10 @@ async def count_artifacts(
         if type:
             query = query.eq("type", type)
 
-        res = query.execute()
-        return {"total": res.count or 0}
+        res = await db._async_execute(lambda: query.execute())
+        result = {"total": res.count or 0}
+        db._cache_set(cache_key, result, ttl=25)
+        return result
     except Exception as e:
         logger.error(f"[artifacts] Failed to count: {e}")
         raise HTTPException(status_code=500, detail="Failed to count artifacts")
@@ -100,7 +109,7 @@ async def get_artifact(
     """Get a single artifact by ID."""
     try:
         supabase = db.get_db()
-        res = supabase.table("artifacts").select("*").eq("id", artifact_id).execute()
+        res = await db._async_execute(lambda: supabase.table("artifacts").select("*").eq("id", artifact_id).execute())
         if not res.data:
             raise HTTPException(status_code=404, detail="Artifact not found")
         return res.data[0]
@@ -135,9 +144,10 @@ async def create_artifact(
         if req.tags:
             data["tags"] = req.tags
 
-        res = supabase.table("artifacts").insert(data).execute()
+        res = await db._async_execute(lambda: supabase.table("artifacts").insert(data).execute())
         if not res.data:
             raise HTTPException(status_code=500, detail="Failed to create artifact")
+        db._cache_invalidate("count_artifacts")
         return res.data[0]
     except HTTPException:
         raise
@@ -166,9 +176,10 @@ async def update_artifact(
         if not data:
             raise HTTPException(status_code=400, detail="No fields to update")
 
-        res = supabase.table("artifacts").update(data).eq("id", artifact_id).execute()
+        res = await db._async_execute(lambda: supabase.table("artifacts").update(data).eq("id", artifact_id).execute())
         if not res.data:
             raise HTTPException(status_code=404, detail="Artifact not found")
+        db._cache_invalidate("count_artifacts")
         return res.data[0]
     except HTTPException:
         raise
@@ -185,9 +196,10 @@ async def delete_artifact(
     """Delete an artifact."""
     try:
         supabase = db.get_db()
-        res = supabase.table("artifacts").delete().eq("id", artifact_id).execute()
+        res = await db._async_execute(lambda: supabase.table("artifacts").delete().eq("id", artifact_id).execute())
         if not res.data:
             raise HTTPException(status_code=404, detail="Artifact not found")
+        db._cache_invalidate("count_artifacts")
         return {"status": "deleted", "id": artifact_id}
     except HTTPException:
         raise
