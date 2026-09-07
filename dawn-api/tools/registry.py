@@ -95,6 +95,13 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register NpxTool: {e}")
 
+    # MCP integration — connect to external MCP servers and expose DAWN tools
+    try:
+        from tools.mcp_server import MCPTool
+        registry.register(MCPTool())
+    except Exception as e:
+        logger.error(f"Failed to register MCPTool: {e}")
+
     try:
         from tools.webfetch import WebFetchTool
         registry.register(WebFetchTool())
