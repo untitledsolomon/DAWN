@@ -32,6 +32,8 @@ async def _async_execute(operation):
 async def create_node(data: dict) -> dict:
     db = get_db()
     res = await _async_execute(lambda: db.table("nodes").insert(data).execute())
+    _cache_invalidate("list_nodes")
+    _cache_invalidate("count_nodes")
     return res.data[0] if res.data else {}
 
 
@@ -56,18 +58,27 @@ async def get_node_by_id(node_id: str) -> Optional[dict]:
 async def update_node(node_id: str, data: dict) -> dict:
     db = get_db()
     res = await _async_execute(lambda: db.table("nodes").update(data).eq("id", node_id).execute())
+    _cache_invalidate("list_nodes")
+    _cache_invalidate("count_nodes")
     return res.data[0] if res.data else {}
 
 
 async def delete_node(node_id: str) -> bool:
     db = get_db()
     await _async_execute(lambda: db.table("nodes").delete().eq("id", node_id).execute())
+    _cache_invalidate("list_nodes")
+    _cache_invalidate("count_nodes")
     return True
 
 
 async def list_nodes(status: str = "active", node_type: Optional[str] = None,
                       tag: Optional[str] = None, limit: int = 50, offset: int = 0,
                       source_ref: Optional[str] = None) -> list[dict]:
+    cache_key = _cache_key("list_nodes", status=status, node_type=node_type,
+                           tag=tag, limit=limit, offset=offset, source_ref=source_ref)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     db = get_db()
     q = db.table("nodes").select(
         "id, title, type, body, status, source, source_ref, confidence, created_at, updated_at, node_tags(tags(name))"
@@ -83,6 +94,7 @@ async def list_nodes(status: str = "active", node_type: Optional[str] = None,
         node["tags"] = [t["tags"]["name"] for t in raw_tags if t.get("tags")]
     if tag:
         nodes = [n for n in nodes if tag in n.get("tags", [])]
+    _cache_set(cache_key, nodes)
     return nodes
 
 
@@ -159,14 +171,21 @@ async def update_node_embeddings(node_id_to_embedding: dict, batch_size: int = 5
 
 
 async def get_all_tags() -> list[dict]:
+    cache_key = _cache_key("get_all_tags")
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     db = get_db()
     res = await _async_execute(lambda: db.table("tags").select("*").order("name").execute())
-    return res.data or []
+    data = res.data or []
+    _cache_set(cache_key, data)
+    return data
 
 
 async def create_tag(name: str, description: str = "") -> dict:
     db = get_db()
     res = await _async_execute(lambda: db.table("tags").insert({"name": name, "description": description}).execute())
+    _cache_invalidate("get_all_tags")
     return res.data[0] if res.data else {}
 
 
@@ -175,12 +194,15 @@ async def update_tag_description(name: str, description: str) -> dict:
     res = await _async_execute(
         lambda: db.table("tags").update({"description": description}).eq("name", name).execute()
     )
+    _cache_invalidate("get_all_tags")
     return res.data[0] if res.data else {}
 
 
 async def attach_tag(node_id: str, tag_id: str):
     db = get_db()
     await _async_execute(lambda: db.table("node_tags").upsert({"node_id": node_id, "tag_id": tag_id}).execute())
+    _cache_invalidate("list_nodes")
+    _cache_invalidate("count_nodes")
 
 
 async def attach_tags_batch(node_ids: list[str], tag_ids: list[str], batch_size: int = 500):
@@ -191,6 +213,8 @@ async def attach_tags_batch(node_ids: list[str], tag_ids: list[str], batch_size:
     for i in range(0, len(rows), batch_size):
         batch = rows[i:i + batch_size]
         await _async_execute(lambda b=batch: db.table("node_tags").upsert(b).execute())
+    _cache_invalidate("list_nodes")
+    _cache_invalidate("count_nodes")
 
 
 async def rpc_get_node(node_id: str) -> Optional[dict]:
@@ -329,6 +353,10 @@ async def count_nodes(status: str = "active", node_type: Optional[str] = None,
     Uses Supabase count='exact' for accurate counts. Falls back to
     client-side filtering for tag-based counts (Supabase REST limitation).
     """
+    cache_key = _cache_key("count_nodes", status=status, node_type=node_type, tag=tag)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     db = get_db()
     q = db.table("nodes").select("id", count="exact").eq("status", status)
     if node_type:
@@ -348,6 +376,7 @@ async def count_nodes(status: str = "active", node_type: Optional[str] = None,
         if not all_ids:
             return 0
         # Get node IDs that have the given tag
+
         tag_res = await _async_execute(lambda: (
             db.table("node_tags")
             .select("node_id, tags!inner(name)")
@@ -355,8 +384,10 @@ async def count_nodes(status: str = "active", node_type: Optional[str] = None,
             .in_("node_id", all_ids)
             .execute()
         ))
+        _cache_set(cache_key, len(tag_res.data or []))
         return len(tag_res.data or [])
     res = await _async_execute(lambda: q.execute())
+    _cache_set(cache_key, res.count or 0)
     return res.count or 0
 
 
@@ -420,7 +451,15 @@ _cache_ttl: int = 300  # 5 minutes default
 def _cache_key(query_type: str, **params) -> str:
     import hashlib
     raw = f"{query_type}:{json.dumps(params, sort_keys=True, default=str)}"
-    return hashlib.md5(raw.encode()).hexdigest()
+    # Keep the query_type as a plain prefix so _cache_invalidate can clear
+    # every key for a given read (md5 hash alone is not prefix-matchable).
+    return f"{query_type}:" + hashlib.md5(raw.encode()).hexdigest()
+
+def _cache_invalidate(query_type: str):
+    """Drop every cached entry for one read family (e.g. 'list_nodes')."""
+    prefix = f"{query_type}:"
+    for key in [k for k in _query_cache if k.startswith(prefix)]:
+        del _query_cache[key]
 
 def _cache_get(key: str):
     import time

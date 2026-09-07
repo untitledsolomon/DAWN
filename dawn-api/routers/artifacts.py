@@ -61,7 +61,7 @@ async def list_artifacts(
             query = query.eq("session_id", session_id)
 
         query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
-        res = query.execute()
+        res = await db._async_execute(lambda: query.execute())
 
         return res.data or []
     except Exception as e:
@@ -85,7 +85,7 @@ async def count_artifacts(
         if type:
             query = query.eq("type", type)
 
-        res = query.execute()
+        res = await db._async_execute(lambda: query.execute())
         return {"total": res.count or 0}
     except Exception as e:
         logger.error(f"[artifacts] Failed to count: {e}")
@@ -100,7 +100,7 @@ async def get_artifact(
     """Get a single artifact by ID."""
     try:
         supabase = db.get_db()
-        res = supabase.table("artifacts").select("*").eq("id", artifact_id).execute()
+        res = await db._async_execute(lambda: supabase.table("artifacts").select("*").eq("id", artifact_id).execute())
         if not res.data:
             raise HTTPException(status_code=404, detail="Artifact not found")
         return res.data[0]
@@ -135,7 +135,7 @@ async def create_artifact(
         if req.tags:
             data["tags"] = req.tags
 
-        res = supabase.table("artifacts").insert(data).execute()
+        res = await db._async_execute(lambda: supabase.table("artifacts").insert(data).execute())
         if not res.data:
             raise HTTPException(status_code=500, detail="Failed to create artifact")
         return res.data[0]
@@ -166,7 +166,7 @@ async def update_artifact(
         if not data:
             raise HTTPException(status_code=400, detail="No fields to update")
 
-        res = supabase.table("artifacts").update(data).eq("id", artifact_id).execute()
+        res = await db._async_execute(lambda: supabase.table("artifacts").update(data).eq("id", artifact_id).execute())
         if not res.data:
             raise HTTPException(status_code=404, detail="Artifact not found")
         return res.data[0]
@@ -185,7 +185,7 @@ async def delete_artifact(
     """Delete an artifact."""
     try:
         supabase = db.get_db()
-        res = supabase.table("artifacts").delete().eq("id", artifact_id).execute()
+        res = await db._async_execute(lambda: supabase.table("artifacts").delete().eq("id", artifact_id).execute())
         if not res.data:
             raise HTTPException(status_code=404, detail="Artifact not found")
         return {"status": "deleted", "id": artifact_id}
