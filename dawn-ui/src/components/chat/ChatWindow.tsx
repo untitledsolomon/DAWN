@@ -79,6 +79,17 @@ export default function ChatWindow() {
   const sessionId = useRef<string | undefined>(undefined);
   const prevSessionIdRef = useRef<string | null>(null);
 
+  // Pre-fill the input from the ?q= query param (e.g. from the home search box)
+  useEffect(() => {
+    const q = searchParams.get("q");
+    if (q) {
+      setInput(q);
+      // Focus the textarea after a tick so it's ready to type
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Load messages when session ID changes ────────────────────────────────
   useEffect(() => {
     const sid = sessionIdFromUrl;

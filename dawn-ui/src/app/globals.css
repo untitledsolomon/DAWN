@@ -32,24 +32,24 @@
 /* ── Scrollbar ──────────────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #DDDAD5; border-radius: 2px; }
+::-webkit-scrollbar-thumb { background: #E2E2E6; border-radius: 2px; }
 ::-webkit-scrollbar-thumb:hover { background: #0FA8A644; }
 
 /* ── Selection ──────────────────────────────────────────────────────────────────── */
-::selection { background: #0FA8A633; color: #2B2A27; }
+::selection { background: #0FA8A633; color: #1F1F23; }
 
 /* ── Base ───────────────────────────────────────────────────────────────────────── */
 html, body { height: 100%; }
 body {
-  background-color: #F4F3F1;
-  color: #2B2A27;
+  background-color: #F7F7F8;
+  color: #1F1F23;
   font-family: var(--font-outfit), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
 /* ── Prose in DAWN responses ────────────────────────────────────────────────────── */
 .dawn-prose h1, .dawn-prose h2, .dawn-prose h3 {
-  color: #2B2A27;
+  color: #1F1F23;
   font-weight: 600;
   margin-top: 1rem;
   margin-bottom: 0.5rem;
@@ -57,19 +57,19 @@ body {
 .dawn-prose h1 { font-size: 1.125rem; letter-spacing: -0.01em; }
 .dawn-prose h2 { font-size: 1rem; letter-spacing: -0.01em; }
 .dawn-prose h3 { font-size: 0.9375rem; }
-.dawn-prose p { margin-bottom: 0.75rem; color: #45433E; line-height: 1.65; }
+.dawn-prose p { margin-bottom: 0.75rem; color: #5F5F66; line-height: 1.65; }
 .dawn-prose code {
   font-family: var(--font-jetbrains), monospace;
-  background: #EDEBE8;
-  border: 1px solid #DDDAD5;
+  background: #EEEEF0;
+  border: 1px solid #E2E2E6;
   border-radius: 4px;
   padding: 0.1em 0.4em;
   font-size: 0.85em;
-  color: #0B837F;
+  color: #0E9BA8;
 }
 .dawn-prose pre {
-  background: #F9F8F6;
-  border: 1px solid #DDDAD5;
+  background: #FCFCFD;
+  border: 1px solid #E2E2E6;
   border-radius: 8px;
   padding: 1rem;
   overflow-x: auto;
@@ -79,20 +79,20 @@ body {
   background: none;
   border: none;
   padding: 0;
-  color: #2B2A27;
+  color: #1F1F23;
 }
 .dawn-prose ul, .dawn-prose ol {
   padding-left: 1.5rem;
   margin-bottom: 0.75rem;
-  color: #45433E;
+  color: #5F5F66;
 }
 .dawn-prose li { margin-bottom: 0.25rem; }
-.dawn-prose strong { color: #2B2A27; font-weight: 600; }
+.dawn-prose strong { color: #1F1F23; font-weight: 600; }
 .dawn-prose a { color: #0FA8A6; text-decoration: underline; text-underline-offset: 3px; }
 .dawn-prose blockquote {
   border-left: 2px solid #0FA8A644;
   padding-left: 1rem;
-  color: #6B6862;
+  color: #5F5F66;
   margin: 0.75rem 0;
 }
 
@@ -122,7 +122,7 @@ body {
 }
 
 .animate-shimmer {
-  background: linear-gradient(90deg, #EDEBE8 25%, #F4F3F1 50%, #EDEBE8 75%);
+  background: linear-gradient(90deg, #EEEEF0 25%, #F7F7F8 50%, #EEEEF0 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s ease-in-out infinite;
 }
@@ -138,7 +138,7 @@ body {
 /* ── Sidebar scrollbar ──────────────────────────────────────────────────────────── */
 .sidebar-scroll::-webkit-scrollbar { width: 2px; }
 .sidebar-scroll::-webkit-scrollbar-thumb { background: transparent; }
-.sidebar-scroll:hover::-webkit-scrollbar-thumb { background: #DDDAD5; }
+.sidebar-scroll:hover::-webkit-scrollbar-thumb { background: #E2E2E6; }
 
 /* ── Input glow ─────────────────────────────────────────────────────────────────── */
 .input-glow:focus-within {
