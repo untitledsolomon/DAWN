@@ -91,7 +91,7 @@ async def agent(
         # ★ FIX: Load history from DB instead of relying on client
         # This is the critical fix for Slack bot and page-refresh forgetting.
         # The Slack bot never sends history, and the web UI loses it on refresh.
-        db_history = _load_history_from_db(session_id)
+        db_history = await _load_history_from_db(session_id)
         effective_history = db_history if db_history else req.history
 
         # ★ v40.0: Load memory context (personal facts, preferences, past learnings)

@@ -17,6 +17,7 @@ system prompt, so the agent has access to persistent memories just
 like chat mode does.
 """
 from typing import AsyncGenerator, Optional
+import asyncio
 import json
 import logging
 from llm.engine import get_engine, DeepSeekEngine, DAWN_SYSTEM_PROMPT, CompletionResult
@@ -24,6 +25,7 @@ from llm.safety import AGENT_SAFETY_PROMPT, wrap_tool_output_for_model
 from llm.identity import Identity, TrustTier
 from tools.registry import get_registry, ToolRegistry
 from tools.executor import execute_tool_call
+from tools.base import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +131,14 @@ async def _execute_tool_calls(
     """
     messages.append(engine.assistant_tool_call_message(result.content, result.tool_calls))
 
+    # Yield every tool_call event up front so the UI shows them immediately,
+    # then run the actual tool executions concurrently. Tool calls are
+    # independent — running them one-at-a-time multiplies latency when the
+    # model emits several in parallel.
     for call in result.tool_calls:
         yield {"type": "tool_call", "name": call.name, "args": call.args}
 
+    async def _run(call):
         if "__parse_error__" in call.args:
             error = (
                 f"Your tool call arguments for '{call.name}' were not valid JSON "
@@ -139,30 +146,24 @@ async def _execute_tool_calls(
                 f"multi-line string values containing quotes. Re-emit the call with "
                 f"the 'content' argument base64-encoded to avoid escaping issues."
             )
-            yield {"type": "tool_result", "name": call.name, "success": False, "output": None, "error": error}
-            messages.append(engine.tool_result_message(
-                tool_call_id=call.id,
-                tool_name=call.name,
-                result_json=json.dumps({"success": False, "output": None, "error": error, "metadata": {}}),
-            ))
-            continue
-        
+            return call, ToolResult(success=False, output=None, error=error)
+
         # Defense in depth: even though disallowed tools weren't offered in
         # tool_specs, don't trust that the model can't hallucinate a call to
         # one anyway — re-check authorization at execution time.
         if call.name not in allowed_names:
             logger.warning(f"Identity {identity.key_id} attempted disallowed tool '{call.name}'")
-            error = f"Not authorized to use tool '{call.name}'."
-            yield {"type": "tool_result", "name": call.name, "success": False, "output": None, "error": error}
-            messages.append(engine.tool_result_message(
-                tool_call_id=call.id,
-                tool_name=call.name,
-                result_json=json.dumps({"success": False, "output": None, "error": error, "metadata": {}}),
-            ))
-            continue
+            return call, ToolResult(
+                success=False, output=None, error=f"Not authorized to use tool '{call.name}'."
+            )
 
         tool_result = await execute_tool_call(registry, call.name, call.args)
+        return call, tool_result
 
+    # Run all tool executions concurrently, then stream results in order.
+    results = await asyncio.gather(*(_run(call) for call in result.tool_calls))
+
+    for call, tool_result in results:
         yield {
             "type": "tool_result",
             "name": call.name,

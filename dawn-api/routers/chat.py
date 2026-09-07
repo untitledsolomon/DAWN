@@ -195,9 +195,9 @@ async def _learn_from_error(
 
 # ── Shared: load conversation history from DB ─────────────────────────────────
 
-def _load_history_from_db(session_id: str, max_turns: int = 20) -> list[dict]:
+async def _load_history_from_db(session_id: str, max_turns: int = 20) -> list[dict]:
     """Load the last N turns of conversation history from the database.
-    
+
     This is the KEY fix for the forgetting problem: instead of relying on the
     client to send history (which breaks on page refresh, Slack, etc.), we
     independently load past messages from the DB using the session_id.
@@ -206,9 +206,9 @@ def _load_history_from_db(session_id: str, max_turns: int = 20) -> list[dict]:
         return []
     try:
         supabase = db.get_db()
-        res = supabase.table("chat_messages").select(
+        res = await db._async_execute(lambda: supabase.table("chat_messages").select(
             "role, content"
-        ).eq("session_id", session_id).order("created_at").execute()
+        ).eq("session_id", session_id).order("created_at").execute())
         if not res.data:
             return []
         # Take the last max_turns messages (each turn = user + assistant = 2 messages)
@@ -251,11 +251,13 @@ async def chat(
         yield sse("thinking", {"content": "Searching knowledge graph..."})
         await asyncio.sleep(0)
 
-        # 4. Load memory context (personal facts, preferences, past learnings)
-        memory_context = await load_memory_context(req.message)
-
-        # 5. Build context from graph
-        context_result = await build_context(req.message, web_search_enabled=req.web_search_enabled)
+        # 4+5. Load memory context and build graph context concurrently —
+        #       both are independent Supabase round trips, so running them
+        #       one-at-a-time doubles the pre-token latency.
+        memory_context, context_result = await asyncio.gather(
+            load_memory_context(req.message),
+            build_context(req.message, web_search_enabled=req.web_search_enabled),
+        )
 
         # 6. Stream tool call events to frontend
         for tc in context_result.tool_calls:
@@ -295,7 +297,7 @@ async def chat(
 
         # ★ FIX: Load history from DB instead of relying on client
         # Merge client-provided history with DB history (DB wins for completeness)
-        db_history = _load_history_from_db(session_id)
+        db_history = await _load_history_from_db(session_id)
         # Use DB history if available (it's authoritative), fall back to client history
         effective_history = db_history if db_history else req.history
 
