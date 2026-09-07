@@ -263,6 +263,70 @@ async def rpc_fuzzy_search(query: str, limit: int = 5, threshold: float = 0.2,
         raise
 
 
+async def rpc_hybrid_search(
+    query: str,
+    embedding: Optional[list[float]],
+    limit: int = 10,
+    fuzzy_threshold: float = 0.15,
+    semantic_weight: float = 0.5,
+    exclude_types: Optional[list[str]] = None,
+    exclude_tags: Optional[list[str]] = None,
+) -> list[dict]:
+    """Hybrid search: merge fuzzy (trigram) + semantic (embedding) results
+    into one ranked list. Returns [] if no embedding is available (the RPC
+    requires one), so callers should fall back to fuzzy search in that case.
+    """
+    if not embedding:
+        return []
+    db = get_db()
+    params = {
+        "p_query": query,
+        "p_embedding": embedding,
+        "p_limit": limit,
+        "p_fuzzy_threshold": fuzzy_threshold,
+        "p_semantic_weight": semantic_weight,
+        "p_exclude_types": exclude_types,
+        "p_exclude_tags": exclude_tags,
+    }
+    try:
+        res = await _async_execute(lambda: db.rpc("hybrid_search", params).execute())
+        return res.data or []
+    except Exception as e:
+        logger.warning(f"hybrid_search failed ({e}) - falling back to fuzzy search")
+        return await rpc_fuzzy_search(
+            query, limit=limit, threshold=fuzzy_threshold,
+            exclude_types=exclude_types, exclude_tags=exclude_tags,
+        )
+
+
+async def rpc_hybrid_search_memories(
+    query: str,
+    embedding: Optional[list[float]],
+    limit: int = 5,
+    fuzzy_threshold: float = 0.15,
+    semantic_weight: float = 0.5,
+) -> list[dict]:
+    """Hybrid memory search: merge fuzzy + semantic over the memories table.
+    Returns [] if no embedding is available.
+    """
+    if not embedding:
+        return []
+    db = get_db()
+    params = {
+        "p_query": query,
+        "p_embedding": embedding,
+        "p_limit": limit,
+        "p_fuzzy_threshold": fuzzy_threshold,
+        "p_semantic_weight": semantic_weight,
+    }
+    try:
+        res = await _async_execute(lambda: db.rpc("hybrid_search_memories", params).execute())
+        return res.data or []
+    except Exception as e:
+        logger.warning(f"hybrid_search_memories failed ({e}) - falling back to fuzzy memory search")
+        return await rpc_fuzzy_search_memories(query, limit=limit, threshold=fuzzy_threshold)
+
+
 async def rpc_fuzzy_search_code(query: str, limit: int = 5, threshold: float = 0.2) -> list[dict]:
     db = get_db()
     res = await _async_execute(lambda: db.rpc("fuzzy_search_code",
@@ -731,6 +795,20 @@ async def consolidate_memories() -> dict:
         return res.data if res.data else {}
     except Exception as e:
         logger.warning(f"consolidate_memories failed: {e}")
+        return {}
+
+async def consolidate_memories_semantic(distance_threshold: float = 0.35, limit: int = 500) -> dict:
+    """Merge memories whose embeddings are close (semantic duplicates that
+    title-similarity consolidation misses)."""
+    db = get_db()
+    try:
+        res = await _async_execute(lambda: db.rpc("consolidate_memories_semantic", {
+            "p_distance_threshold": distance_threshold,
+            "p_limit": limit,
+        }).execute())
+        return res.data if res.data else {}
+    except Exception as e:
+        logger.warning(f"consolidate_memories_semantic failed: {e}")
         return {}
 
 async def decay_memories(days: int = 30, factor: float = 0.05) -> int:
