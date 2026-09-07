@@ -13,7 +13,8 @@ import {
   Settings,
 } from "lucide-react";
 import Link from "next/link";
-import { streamChat, getSessionMessages, createSession } from "@/lib/api";
+import { streamChat, getSessionMessages, createSession, listProjects } from "@/lib/api";
+import type { Project } from "@/lib/api";
 import { streamAgent } from "@/lib/agent-api";
 import type { ChatMessage, ToolCall, SessionMessage } from "@/lib/types";
 import type {
@@ -55,6 +56,8 @@ export default function ChatWindow() {
   const sessionIdFromUrl = searchParams.get("id");
 
   const [mode, setMode] = useState<ChatMode>("chat");
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AgentChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -78,6 +81,17 @@ export default function ChatWindow() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sessionId = useRef<string | undefined>(undefined);
   const prevSessionIdRef = useRef<string | null>(null);
+
+  // Pre-fill the input from the ?q= query param (e.g. from the home search box)
+  useEffect(() => {
+    const q = searchParams.get("q");
+    if (q) {
+      setInput(q);
+      // Focus the textarea after a tick so it's ready to type
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Load messages when session ID changes ────────────────────────────────
   useEffect(() => {
@@ -110,6 +124,13 @@ export default function ChatWindow() {
         setLoadingSession(false);
       });
   }, [sessionIdFromUrl]);
+
+  // ── Load projects for the project-scoped chat selector ───────────────────
+  useEffect(() => {
+    listProjects()
+      .then(setProjects)
+      .catch((err) => console.error("[ChatWindow] Failed to load projects:", err));
+  }, []);
 
   // ── Load artifacts for the current session ───────────────────────────────
   // When messages are loaded (or change), fetch artifacts referenced by
@@ -215,10 +236,13 @@ export default function ChatWindow() {
       const toolCalls: ToolCall[] = [];
 
       try {
+        const activeProject = projects.find((p) => p.id === activeProjectId);
         for await (const event of streamChat(
           text,
           buildHistory(),
           sessionId.current,
+          undefined,
+          activeProject?.tags?.length ? activeProject.tags : undefined,
         )) {
           switch (event.type) {
             case "thinking":
@@ -529,7 +553,7 @@ export default function ChatWindow() {
       {/* Input bar */}
       <div className="border-t border-rim px-3 sm:px-4 pb-3 sm:pb-4 pt-2 sm:pt-3">
         {/* Mode toggle + actions */}
-        <div className="flex items-center justify-between mb-2 sm:mb-3">
+        <div className="flex items-center justify-between gap-2 mb-2 sm:mb-3">
           <div className="inline-flex items-center gap-0.5 p-0.5 rounded-lg bg-elevated/60 border border-rim">
             <button
               onClick={() => !isStreaming && setMode("chat")}
@@ -555,6 +579,22 @@ export default function ChatWindow() {
               <Bot size={12} />
               <span className="hidden xs:inline">Agent</span>
             </button>
+          </div>
+
+          {/* Project-scoped chat selector */}
+          <div className="flex items-center gap-1.5 min-w-0">
+            <select
+              value={activeProjectId ?? ""}
+              onChange={(e) => setActiveProjectId(e.target.value || null)}
+              disabled={isStreaming}
+              className="bg-elevated/60 border border-rim rounded-lg px-2 py-1.5 text-xs text-text-primary outline-none focus:border-dawn/40 transition-all disabled:opacity-50 max-w-[140px]"
+              title="Scope this chat to a project"
+            >
+              <option value="">All knowledge</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
           </div>
 
           <div className="flex items-center gap-1">

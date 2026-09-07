@@ -130,6 +130,14 @@ async def reject_memory(memory_id: str, _: None = Depends(verify_key)):
 
 @router.post("/consolidate")
 async def consolidate_memories_endpoint(_: None = Depends(verify_key)):
-    """Run memory consolidation (merge duplicates)."""
-    result = await db.consolidate_memories()
-    return result
+    """Run memory consolidation (merge duplicates).
+
+    Runs both title-similarity and semantic (embedding) consolidation so
+    duplicates phrased differently are also merged.
+    """
+    title_result = await db.consolidate_memories()
+    semantic_result = await db.consolidate_memories_semantic()
+    return {
+        "title_consolidation": title_result,
+        "semantic_consolidation": semantic_result,
+    }

@@ -1,8 +1,8 @@
-import { Sparkles, User, Zap } from "lucide-react";
+import { User, Zap } from "lucide-react";
 import clsx from "clsx";
 import type { ChatMessage } from "@/lib/types";
 import type { AgentChatMessage } from "@/lib/agent-types";
-import ToolCallIndicator from "./ToolCallIndicator";
+import ToolCallView from "./ToolCallView";
 import ChartRenderer from "../visualize/ChartRenderer";
 
 interface Props {
@@ -17,6 +17,10 @@ export default function Message({
   streamingToolCalls,
 }: Props) {
   const isUser = message.role === "user";
+
+  // Agent-mode executed tools (real results), for completed messages.
+  const trace =
+    "trace" in message ? (message as AgentChatMessage).trace : undefined;
 
   if (isUser) {
     return (
@@ -44,21 +48,18 @@ export default function Message({
       </div>
 
       <div className="flex-1 min-w-0 pt-0.5">
-        {/* Tool calls */}
-        {(isStreaming ? streamingToolCalls : message.tool_calls) && (
-          <ToolCallIndicator
-            toolCalls={
-              (isStreaming
-                ? streamingToolCalls
-                : message.tool_calls) || []
-            }
-            thinking={
-              isStreaming &&
-              (!streamingToolCalls ||
-                streamingToolCalls.length === 0)
-            }
-          />
-        )}
+        {/* Tool calls — rich, collapsible view */}
+        <ToolCallView
+          toolCalls={
+            (isStreaming ? streamingToolCalls : message.tool_calls) || []
+          }
+          trace={trace}
+          thinking={
+            isStreaming &&
+            (!streamingToolCalls || streamingToolCalls.length === 0) &&
+            !trace?.length
+          }
+        />
 
         {/* Response content */}
         <div

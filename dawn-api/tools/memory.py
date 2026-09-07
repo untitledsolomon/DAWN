@@ -117,15 +117,13 @@ class MemoryRecallTool(BaseTool):
     
     async def run(self, query: str, limit: int = 5) -> ToolResult:
         try:
-            # Try fuzzy search first
-            memories = await db.rpc_fuzzy_search_memories(query, limit=limit, threshold=0.2)
-            
-            # Fall back to semantic search if fuzzy found nothing
-            if not memories:
-                embedding = embed_text(query)
-                if embedding:
-                    memories = await db.rpc_semantic_search_memories(embedding, limit=limit)
-            
+            # Hybrid search merges trigram + embedding similarity so memories
+            # phrased differently but meaning the same thing are still found.
+            embedding = embed_text(query)
+            memories = await db.rpc_hybrid_search_memories(
+                query, embedding, limit=limit, fuzzy_threshold=0.2,
+            )
+
             if not memories:
                 return ToolResult(
                     success=True,

@@ -80,6 +80,42 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register SkillInstallTool: {e}")
 
+    # v41.0 — ECC skill library (SKILL.md knowledge skills)
+    try:
+        from skills.ecc_installer import InstallECCSkillTool, ListECCSkillsTool
+        registry.register(InstallECCSkillTool())
+        registry.register(ListECCSkillsTool())
+    except Exception as e:
+        logger.error(f"Failed to register ECC skill tools: {e}")
+
+    # v41.0 — npx tool (run npm CLI packages in an isolated container)
+    try:
+        from tools.npx import NpxTool
+        registry.register(NpxTool())
+    except Exception as e:
+        logger.error(f"Failed to register NpxTool: {e}")
+
+    # MCP integration — connect to external MCP servers and expose DAWN tools
+    try:
+        from tools.mcp_server import MCPTool
+        registry.register(MCPTool())
+    except Exception as e:
+        logger.error(f"Failed to register MCPTool: {e}")
+
+    # v41. — Memory vault tools (file-based long-form memory)
+    try:
+        from tools.vault import (
+            VaultReadTool, VaultWriteTool, VaultListTool,
+            VaultDailyNoteTool, VaultIndexTool,
+        )
+        registry.register(VaultReadTool())
+        registry.register(VaultWriteTool())
+        registry.register(VaultListTool())
+        registry.register(VaultDailyNoteTool())
+        registry.register(VaultIndexTool())
+    except Exception as e:
+        logger.error(f"Failed to register vault tools: {e}")
+
     try:
         from tools.webfetch import WebFetchTool
         registry.register(WebFetchTool())

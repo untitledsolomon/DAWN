@@ -11,17 +11,17 @@ const config: Config = {
         "2xs": ["0.625rem", { lineHeight: "0.875rem" }], // 10px
       },
       colors: {
-        // DAWN palette — warm neutral grey base, Claude-UI inspired
-        abyss: "#F4F3F1",       // main background — warm light grey
+        // DAWN palette — cool neutral grey base, modern minimalist
+        abyss: "#F7F7F8",       // main background — cool light grey
         surface: "#FFFFFF",     // cards, sidebar
-        elevated: "#EDEBE8",    // inputs, hover states
-        rim: "#DDDAD5",         // borders
-        dawn: "#0FA8A6",        // primary accent — cyan-teal
-        ember: "#C96442",       // warm accent — terracotta (Claude-ish warm tone)
+        elevated: "#EEEEF0",    // inputs, hover states
+        rim: "#E2E2E6",         // borders
+        dawn: "#0E9BA8",        // primary accent — cool cyan-teal
+        ember: "#C96442",       // warm accent — terracotta (kept for warmth)
         text: {
-          primary: "#2B2A27",   // near-black warm grey
-          secondary: "#6B6862",
-          muted: "#9C988F",
+          primary: "#1F1F23",   // near-black cool grey
+          secondary: "#5F5F66",
+          muted: "#9A9AA3",
         },
       },
       fontFamily: {

@@ -8,7 +8,19 @@ from typing import Optional
 import asyncio
 import re
 import db.client as db
-from llm.embeddings import embed_text
+from llm.embeddings import embed_text as _embed_text_sync
+
+
+async def embed_text(text: str) -> Optional[list[float]]:
+    """Embed text without blocking the event loop.
+
+    The sentence-transformers model is CPU-bound and synchronous; on first
+    call it also loads the model. Run it in the executor so it never stalls
+    the async event loop (matters on the chat hot path, where this is now
+    called on every query).
+    """
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _embed_text_sync, text)
 
 # Words not worth searching for
 STOPWORDS = {
@@ -57,7 +69,7 @@ def extract_key_terms(query: str) -> list[str]:
     return candidates
 
 
-async def build_context(query: str, max_nodes: int = 10, include_code: bool = False, web_search_enabled: bool = False) -> ContextResult:
+async def build_context(query: str, max_nodes: int = 10, include_code: bool = False, web_search_enabled: bool = False, include_tags: Optional[list[str]] = None) -> ContextResult:
     """
     Main retrieval pipeline.
     1. Try fuzzy search on full query + key terms (code-tagged nodes
@@ -88,49 +100,60 @@ async def build_context(query: str, max_nodes: int = 10, include_code: bool = Fa
 
     exclude_tags = None if include_code else ["code"]
 
-    # ── Stage 1: Find entry nodes via fuzzy search ────────────────────────────────
+    # ── Stage 1: Find entry nodes via hybrid search ────────────────────────────────
+    # Hybrid search merges trigram similarity with embedding similarity, so
+    # entry nodes come from BOTH signals instead of fuzzy-first-with-semantic-
+    # fallback. This catches paraphrases that trigram alone misses while
+    # keeping exact/keyword matches. Compute the query embedding once and use
+    # it for both node and memory hybrid search.
     candidates = extract_key_terms(query)
     entry_nodes: list[dict] = []
 
-    # Fire the fuzzy searches concurrently — each is an independent Supabase
-    # round trip, so running them one-at-a-time multiplies the latency before
-    # the first token streams (several seconds from a high-latency location).
-    terms = candidates[:4]  # Don't hammer the DB — first 4 candidates
-    term_results = await asyncio.gather(
-        *(db.rpc_fuzzy_search(t, limit=3, threshold=0.15, exclude_tags=exclude_tags) for t in terms),
-        return_exceptions=True,
+    embedding = await embed_text(query)
+
+    # Hybrid search on the full query first — it ranks by combined relevance.
+    hybrid_results = await db.rpc_hybrid_search(
+        query, embedding, limit=8, fuzzy_threshold=0.15,
+        exclude_types=None, exclude_tags=exclude_tags,
     )
+    tc = ToolCall(name="hybrid_search", args={"query": query}, result_count=len(hybrid_results))
+    tool_calls.append(tc)
+    for node in hybrid_results:
+        if node["id"] not in seen_ids:
+            entry_nodes.append(node)
+            seen_ids.add(node["id"])
 
-    for term, results in zip(terms, term_results):
-        if isinstance(results, Exception):
-            logger.warning(f"[context] fuzzy_search failed for '{term}': {results}")
-            continue
-        tc = ToolCall(name="fuzzy_search", args={"query": term}, result_count=len(results))
-        tool_calls.append(tc)
-
-        for node in results:
-            if node["id"] not in seen_ids:
-                entry_nodes.append(node)
-                seen_ids.add(node["id"])
-
-        if len(entry_nodes) >= 3:
-            break  # Good enough entry points found
-
-    # ── Stage 1b: Semantic fallback if fuzzy search found nothing ─────────────────
-    # Trigram similarity misses paraphrases and conceptually-related but
-    # differently-worded content ("bot keeps losing money" vs a node
-    # titled "Sharpe ratio degradation") — this is exactly what
-    # embeddings exist to catch, and until now nothing called it.
-    if not entry_nodes:
-        embedding = embed_text(query)
-        if embedding:
-            results = await db.rpc_semantic_search(embedding, limit=5, exclude_tags=exclude_tags)
-            tc = ToolCall(name="semantic_search", args={"query": query}, result_count=len(results))
+    # If hybrid found too few, broaden with per-term fuzzy search (parallel).
+    # Hybrid needs an embedding; if none is available this also covers that case.
+    if len(entry_nodes) < 3:
+        terms = candidates[:4]  # Don't hammer the DB — first 4 candidates
+        term_results = await asyncio.gather(
+            *(db.rpc_fuzzy_search(t, limit=3, threshold=0.15, exclude_tags=exclude_tags) for t in terms),
+            return_exceptions=True,
+        )
+        for term, results in zip(terms, term_results):
+            if isinstance(results, Exception):
+                logger.warning(f"[context] fuzzy_search failed for '{term}': {results}")
+                continue
+            tc = ToolCall(name="fuzzy_search", args={"query": term}, result_count=len(results))
             tool_calls.append(tc)
             for node in results:
                 if node["id"] not in seen_ids:
                     entry_nodes.append(node)
                     seen_ids.add(node["id"])
+            if len(entry_nodes) >= 3:
+                break  # Good enough entry points found
+
+    # ── Project scoping: restrict context to nodes tagged with the project ────
+    # When a chat is scoped to a project, only nodes whose tags intersect the
+    # project's tags are kept. This keeps DAWN's context pre-filtered to the
+    # project so it doesn reach across unrelated topics.
+    if include_tags:
+        tag_set = set(include_tags)
+        entry_nodes = [
+            n for n in entry_nodes
+            if (n.get("tags") or []) and set(n.get("tags") or []) & tag_set
+        ]
 
     if not entry_nodes:
         # If web search is enabled, still return empty context but note it
@@ -365,7 +388,7 @@ async def store_memory_facts(
         
         # Generate embedding for semantic search
         text_to_embed = f"{title}\n{body}" if body else title
-        embedding = embed_text(text_to_embed)
+        embedding = await embed_text(text_to_embed)
         
         row = {
             "title": title,
@@ -414,16 +437,20 @@ async def extract_and_store_memory(
         else:
             fact["fact_type"] = "fact"
     
-    # Check for duplicates before storing
+    # Check for duplicates before storing — use hybrid search so semantically
+    # similar memories are caught, not just trigram-similar ones.
     stored = []
     for fact in facts:
         # Search for similar existing memories
         title = fact.get("title", "")
         body = fact.get("body", "")
         search_text = f"{title} {body}"
-        
-        existing = await db.rpc_fuzzy_search_memories(search_text, limit=3, threshold=0.4)
-        
+        embedding = await embed_text(search_text)
+
+        existing = await db.rpc_hybrid_search_memories(
+            search_text, embedding, limit=3, fuzzy_threshold=0.4,
+        )
+
         if existing:
             # Found a similar memory — boost its confidence instead of duplicating
             for match in existing:
@@ -436,7 +463,7 @@ async def extract_and_store_memory(
             # No duplicate found — store as new
             result = await store_memory_facts([fact], source="conversation", source_ref=source_ref)
             stored.extend(result)
-    
+
     return stored
 
 
@@ -445,23 +472,20 @@ async def load_memory_context(
     max_memories: int = 5,
     threshold: float = 0.2,
 ) -> str:
-    """Load relevant memories for a query using unified search.
-    
-    v40.0: Falls back to semantic search if fuzzy search finds nothing.
-    Previously, only fuzzy search was used — this missed memories that
-    were semantically related but phrased differently.
-    
+    """Load relevant memories for a query using hybrid search.
+
+    Merges trigram similarity with embedding similarity so memories that are
+    semantically related but phrased differently are caught, not just exact
+    keyword matches. Falls back to fuzzy memory search if no embedding is
+    available.
+
     Returns a formatted string of memory context, or empty string if none found.
     """
-    # Try fuzzy search first
-    memories = await db.rpc_fuzzy_search_memories(query, limit=max_memories, threshold=threshold)
-    
-    # Fall back to semantic search if fuzzy found nothing
-    if not memories:
-        embedding = embed_text(query)
-        if embedding:
-            memories = await db.rpc_semantic_search_memories(embedding, limit=max_memories)
-    
+    embedding = await embed_text(query)
+    memories = await db.rpc_hybrid_search_memories(
+        query, embedding, limit=max_memories, fuzzy_threshold=threshold,
+    )
+
     if not memories:
         return ""
     
@@ -476,5 +500,24 @@ async def load_memory_context(
             parts.append(f"[Memory: {fact_type} (confidence: {confidence:.2f})] {title}: {body}")
         else:
             parts.append(f"[Memory: {fact_type} (confidence: {confidence:.2f})] {title}")
-    
+
     return "\n".join(parts)
+
+
+async def load_vault_context() -> str:
+    """Load the memory vault index (profile + structure) for conversation
+    context. This is the file-based long-form memory layer — the agent reads
+    it at the start of a conversation to know who the user is and what's
+    active, complementing the searchable `memories` table.
+
+    Returns a formatted string, or empty string if the vault isn't available.
+    """
+    try:
+        from vault import vault
+        index = vault.load_index()
+        if not index:
+            return ""
+        return f"[Memory Vault Index]\n{index}"
+    except Exception as e:
+        logger.warning(f"Failed to load vault context: {e}")
+        return ""
