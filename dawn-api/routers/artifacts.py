@@ -76,6 +76,13 @@ async def count_artifacts(
 ):
     """Count artifacts, optionally filtered by type."""
     try:
+        # The sidebar polls this every 30s; a short TTL keeps repeat polls
+        # from paying a full Supabase round trip while staying fresh.
+        cache_key = db._cache_key("count_artifacts", type=type)
+        cached = db._cache_get(cache_key, ttl=25)
+        if cached is not None:
+            return cached
+
         supabase = db.get_db()
         # NOTE: this postgrest-py version's select() doesn't support `head=`.
         # Use range(0, 0) instead so Postgres still returns an exact `count`
@@ -86,7 +93,9 @@ async def count_artifacts(
             query = query.eq("type", type)
 
         res = await db._async_execute(lambda: query.execute())
-        return {"total": res.count or 0}
+        result = {"total": res.count or 0}
+        db._cache_set(cache_key, result, ttl=25)
+        return result
     except Exception as e:
         logger.error(f"[artifacts] Failed to count: {e}")
         raise HTTPException(status_code=500, detail="Failed to count artifacts")
@@ -138,6 +147,7 @@ async def create_artifact(
         res = await db._async_execute(lambda: supabase.table("artifacts").insert(data).execute())
         if not res.data:
             raise HTTPException(status_code=500, detail="Failed to create artifact")
+        db._cache_invalidate("count_artifacts")
         return res.data[0]
     except HTTPException:
         raise
@@ -169,6 +179,7 @@ async def update_artifact(
         res = await db._async_execute(lambda: supabase.table("artifacts").update(data).eq("id", artifact_id).execute())
         if not res.data:
             raise HTTPException(status_code=404, detail="Artifact not found")
+        db._cache_invalidate("count_artifacts")
         return res.data[0]
     except HTTPException:
         raise
@@ -188,6 +199,7 @@ async def delete_artifact(
         res = await db._async_execute(lambda: supabase.table("artifacts").delete().eq("id", artifact_id).execute())
         if not res.data:
             raise HTTPException(status_code=404, detail="Artifact not found")
+        db._cache_invalidate("count_artifacts")
         return {"status": "deleted", "id": artifact_id}
     except HTTPException:
         raise

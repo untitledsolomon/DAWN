@@ -46,6 +46,8 @@ async def create_nodes_batch(rows: list[dict], batch_size: int = 200) -> list[di
         batch = rows[i:i + batch_size]
         res = await _async_execute(lambda b=batch: db.table("nodes").insert(b).execute())
         created.extend(res.data or [])
+    _cache_invalidate("list_nodes")
+    _cache_invalidate("count_nodes")
     return created
 
 
@@ -147,6 +149,8 @@ async def archive_nodes_batch(node_ids_and_titles: list[tuple], batch_size: int 
             await _async_execute(lambda nid=node_id, nt=new_title: (
                 db.table("nodes").update({"status": "archived", "title": nt}).eq("id", nid).execute()
             ))
+    _cache_invalidate("list_nodes")
+    _cache_invalidate("count_nodes")
 
 
 async def update_node_embeddings(node_id_to_embedding: dict, batch_size: int = 50) -> int:
@@ -439,6 +443,7 @@ async def create_artifact(
         data["tags"] = tags
 
     res = await _async_execute(lambda: db.table("artifacts").insert(data).execute())
+    _cache_invalidate("count_artifacts")
     return res.data[0] if res.data else {}
 
 
@@ -461,18 +466,21 @@ def _cache_invalidate(query_type: str):
     for key in [k for k in _query_cache if k.startswith(prefix)]:
         del _query_cache[key]
 
-def _cache_get(key: str):
+def _cache_get(key: str, ttl: Optional[int] = None):
     import time
     entry = _query_cache.get(key)
-    if entry and time.time() - entry["ts"] < _cache_ttl:
+    # Prefer an explicit per-call ttl, else the ttl stored at set time,
+    # else the module default.
+    effective = ttl if ttl is not None else (entry.get("ttl") if entry else None)
+    if entry and time.time() - entry["ts"] < (effective if effective is not None else _cache_ttl):
         return entry["data"]
     if entry:
         del _query_cache[key]
     return None
 
-def _cache_set(key: str, data):
+def _cache_set(key: str, data, ttl: Optional[int] = None):
     import time
-    _query_cache[key] = {"data": data, "ts": time.time()}
+    _query_cache[key] = {"data": data, "ts": time.time(), "ttl": ttl}
 
 def cache_clear():
     _query_cache.clear()

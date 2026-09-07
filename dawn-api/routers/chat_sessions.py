@@ -77,6 +77,13 @@ async def list_sessions(_: None = Depends(verify_key)):
     instead of one query per session, which was N sequential blocking calls.
     """
     try:
+        # The sidebar polls this every 10s; a short TTL keeps repeat polls
+        # from paying a full Supabase round trip while staying fresh.
+        cache_key = db._cache_key("list_sessions")
+        cached = db._cache_get(cache_key, ttl=8)
+        if cached is not None:
+            return cached
+
         supabase = db.get_db()
         res = await db._async_execute(lambda: supabase.table("chat_sessions").select(
             "id, title, mode, created_at, updated_at"
@@ -89,7 +96,9 @@ async def list_sessions(_: None = Depends(verify_key)):
         for m in msg_res.data or []:
             counts[m["session_id"]] = counts.get(m["session_id"], 0) + 1
 
-        return [{**s, "message_count": counts.get(s["id"], 0)} for s in sessions]
+        result = [{**s, "message_count": counts.get(s["id"], 0)} for s in sessions]
+        db._cache_set(cache_key, result, ttl=8)
+        return result
     except Exception as e:
         logger.error(f"[chat_sessions] list_sessions failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list sessions: {str(e)}")
