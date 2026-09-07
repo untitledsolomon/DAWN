@@ -166,6 +166,15 @@ def health():
 async def start_background_services():
     """Start background services: pentest scheduler, ingestion queue, Slack bot,
     sub-agent registry, and dynamic agents."""
+    # Run pending DB migrations (creates tables referenced by routers, e.g.
+    # mcp_servers) before any endpoint can be called.
+    try:
+        from scripts.auto_migrate import run_all_pending
+        await run_all_pending()
+        logger.info("Database migrations checked")
+    except Exception as e:
+        logger.error(f"Failed to run database migrations: {e}")
+
     # Pentest scheduler
     try:
         from tools.scheduler import get_scheduler
