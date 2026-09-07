@@ -72,10 +72,11 @@ async def upload_file(
 
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
 
-        # Register as a file artifact.
+        # Register as a file artifact. Files aren't session-bound, so we omit
+        # session_id (the column is nullable) rather than inserting a fake UUID
+        # that would violate the FK to chat_sessions.
         supabase = db.get_db()
         res = await db._async_execute(lambda: supabase.table("artifacts").insert({
-            "session_id": "00000000-0000-0000-0000-000000000000",  # placeholder; files aren't session-bound
             "type": "file",
             "title": title or safe_name,
             "url": str(dest),
