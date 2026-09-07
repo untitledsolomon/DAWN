@@ -122,15 +122,19 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
     fetchArtifactCount();
   }, [fetchSessions, fetchArtifactCount]);
 
-  // Poll for new sessions every 10s
+  // Poll for new sessions every 10s (pause when the tab is hidden)
   useEffect(() => {
-    const interval = setInterval(fetchSessions, 10000);
+    const interval = setInterval(() => {
+      if (!document.hidden) fetchSessions();
+    }, 10000);
     return () => clearInterval(interval);
   }, [fetchSessions]);
 
-  // Poll artifact count every 30s
+  // Poll artifact count every 30s (pause when the tab is hidden)
   useEffect(() => {
-    const interval = setInterval(fetchArtifactCount, 30000);
+    const interval = setInterval(() => {
+      if (!document.hidden) fetchArtifactCount();
+    }, 30000);
     return () => clearInterval(interval);
   }, [fetchArtifactCount]);
 
