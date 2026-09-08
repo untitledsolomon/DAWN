@@ -212,6 +212,7 @@ async def mcp_oauth_callback(
     server_id: str = Query(...),
     code: str = Query(...),
     state: str = Query(...),
+    iss: Optional[str] = Query(None),
 ):
     """Receive the OAuth authorization code, exchange it, and close the popup.
 
@@ -223,7 +224,7 @@ async def mcp_oauth_callback(
     """
     try:
         from tools import mcp_oauth
-        result = await mcp_oauth.handle_oauth_callback(server_id, code, state)
+        result = await mcp_oauth.handle_oauth_callback(server_id, code, state, iss=iss)
         return _callback_page(True, result.get("status", "success"))
     except Exception as e:
         logger.error(f"Failed to complete MCP OAuth callback: {e}")

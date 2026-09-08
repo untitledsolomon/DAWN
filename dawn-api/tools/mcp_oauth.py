@@ -23,10 +23,9 @@ building, response parsing) rather than hand-rolling the wire formats, but we
 drive the flow ourselves across two HTTP routes because DAWN's model needs the
 browser to open the authorization URL in a popup and hit a separate callback.
 """
-import asyncio
 import logging
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -42,12 +41,15 @@ try:
         create_client_registration_request,
         create_oauth_metadata_request,
         extract_resource_metadata_from_www_auth,
+        extract_scope_from_www_auth,
+        get_client_metadata_scopes,
         handle_auth_metadata_response,
         handle_protected_resource_response,
         handle_registration_response,
     )
     from mcp.client.auth.oauth2 import PKCEParameters
     from mcp.shared.auth import OAuthToken
+    from mcp.shared.auth_utils import resource_url_from_server_url
     from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
     HAS_OAUTH = True
 except ImportError:
@@ -79,6 +81,8 @@ class PendingFlow:
     token_endpoint: str
     redirect_uri: str
     scope: Optional[str] = None
+    resource: Optional[str] = None  # RFC 8707 resource indicator
+    issuer: Optional[str] = None    # RFC 8414 issuer, for RFC 9207 validation
 
 
 _pending_flows: dict[str, PendingFlow] = {}
@@ -167,6 +171,9 @@ async def refresh_tokens(server_id: str) -> Optional[str]:
         "refresh_token": row["refresh_token"],
         "client_id": row.get("client_id") or "",
     }
+    # RFC 8707 resource indicator — MUST be included in the token request.
+    if row.get("resource"):
+        data["resource"] = row["resource"]
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
     # Authenticate the token request per the registered method.
@@ -215,6 +222,7 @@ def _token_row_from_token(token: OAuthToken, existing: dict) -> dict:
         "token_endpoint": existing.get("token_endpoint"),
         "token_endpoint_auth_method": existing.get("token_endpoint_auth_method"),
         "scope": token.scope or existing.get("scope"),
+        "resource": existing.get("resource"),
     }
 
 
@@ -225,12 +233,21 @@ async def _send(client: httpx2.AsyncClient, request: httpx2.Request) -> httpx2.R
     return await client.send(request)
 
 
-async def probe_oauth(server_url: str) -> Optional[str]:
+@dataclass
+class OAuthDiscovery:
+    """Everything learned about a server's OAuth setup during the probe."""
+    auth_server_url: str          # issuer of the authorization server
+    protected_resource_metadata: object  # ProtectedResourceMetadata (or None)
+    authorization_server_metadata: object  # OAuthMetadata (or None)
+    challenge_scope: Optional[str]  # scope from the WWW-Authenticate header
+
+
+async def probe_oauth(server_url: str) -> Optional[OAuthDiscovery]:
     """Probe a server unauthenticated and detect whether it requires OAuth.
 
-    Returns the discovered Authorization Server Metadata URL's authorization
-    server URL (issuer) if the server challenges with a Bearer
-    resource_metadata, else None (server uses static key / no auth).
+    Returns an `OAuthDiscovery` if the server advertises OAuth (via a 401
+    Bearer challenge or RFC 9728 well-known metadata), else None (server uses
+    static key / no auth).
     """
     if not HAS_OAUTH:
         return None
@@ -266,11 +283,13 @@ async def probe_oauth(server_url: str) -> Optional[str]:
             #      (the common case: initialize is open, tools are gated).
             #   3. RFC 9728 well-known protected-resource-metadata discovery
             #      (the server may publish it even when no request 401s).
+            challenge_scope = None
             prm_url = None
             if resp.status_code == 401:
                 www_auth = resp.headers.get("www-authenticate", "")
                 if "Bearer" in www_auth:
                     prm_url = extract_resource_metadata_from_www_auth(resp)
+                    challenge_scope = extract_scope_from_www_auth(resp)
             else:
                 # initialize succeeded — try a gated call to surface the challenge.
                 tools_resp = await client.post(
@@ -286,8 +305,10 @@ async def probe_oauth(server_url: str) -> Optional[str]:
                     www_auth = tools_resp.headers.get("www-authenticate", "")
                     if "Bearer" in www_auth:
                         prm_url = extract_resource_metadata_from_www_auth(tools_resp)
+                        challenge_scope = extract_scope_from_www_auth(tools_resp)
             # Always try well-known discovery as a fallback.
             prm_urls = build_protected_resource_metadata_discovery_urls(prm_url, server_url)
+            prm = None
             for url in prm_urls:
                 try:
                     prm_resp = await _send(client, create_oauth_metadata_request(url))
@@ -295,14 +316,25 @@ async def probe_oauth(server_url: str) -> Optional[str]:
                     continue
                 prm = await handle_protected_resource_response(prm_resp)
                 if prm and prm.authorization_servers:
-                    return str(prm.authorization_servers[0])
+                    break
+            if not prm or not prm.authorization_servers:
+                return None
+            auth_server_url = str(prm.authorization_servers[0])
+            # Fetch the authorization server metadata for the discovered issuer.
+            asm = await _discover_oauth_metadata(server_url, auth_server_url)
+            return OAuthDiscovery(
+                auth_server_url=auth_server_url,
+                protected_resource_metadata=prm,
+                authorization_server_metadata=asm,
+                challenge_scope=challenge_scope,
+            )
     except Exception as e:
         logger.warning(f"OAuth probe failed for {server_url}: {e}")
     return None
 
 
-async def _discover_oauth_metadata(server_url: str, auth_server_url: str) -> Optional[dict]:
-    """Fetch the Authorization Server Metadata for the discovered issuer."""
+async def _discover_oauth_metadata(server_url: str, auth_server_url: str):
+    """Fetch the Authorization Server Metadata (OAuthMetadata) for the issuer."""
     if not HAS_OAUTH:
         return None
     async with httpx2.AsyncClient() as client:
@@ -314,7 +346,7 @@ async def _discover_oauth_metadata(server_url: str, auth_server_url: str) -> Opt
     return None
 
 
-async def _register_client(server_url: str, oauth_metadata: dict, redirect_uri: str) -> dict:
+async def _register_client(server_url: str, oauth_metadata, redirect_uri: str) -> dict:
     """Register a dynamic client (DCR) against the AS metadata."""
     from mcp.shared.auth import OAuthClientMetadata
     client_metadata = OAuthClientMetadata(
@@ -323,6 +355,9 @@ async def _register_client(server_url: str, oauth_metadata: dict, redirect_uri: 
         grant_types=["authorization_code", "refresh_token"],
         response_types=["code"],
         client_name="DAWN",
+        # DAWN is a web app (browser popup + server-side callback), not a
+        # native/loopback client, so advertise "web".
+        application_type="web",
     )
     auth_base = _origin(server_url)
     request = create_client_registration_request(oauth_metadata, client_metadata, auth_base)
@@ -342,6 +377,23 @@ def _origin(url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _canonical_resource(server_url: str, prm) -> str:
+    """RFC 8707 resource indicator: PRM resource if it's a valid parent of the
+    server URL, else the canonical server URI."""
+    try:
+        if prm is not None and prm.resource:
+            prm_resource = str(prm.resource)
+            server_canonical = resource_url_from_server_url(server_url)
+            # Prefer the PRM resource when it is a parent of the server URL.
+            if server_canonical.startswith(prm_resource.rstrip("/")) or prm_resource.rstrip("/").startswith(
+                server_canonical.rstrip("/")
+            ):
+                return prm_resource
+        return resource_url_from_server_url(server_url)
+    except Exception:
+        return resource_url_from_server_url(server_url)
+
+
 async def start_oauth_flow(server_url: str) -> dict:
     """Run discovery + DCR and build the authorization URL for a server.
 
@@ -352,11 +404,11 @@ async def start_oauth_flow(server_url: str) -> dict:
     if not HAS_OAUTH:
         raise ValueError("MCP OAuth support not available (mcp SDK missing)")
 
-    auth_server_url = await probe_oauth(server_url)
-    if not auth_server_url:
+    discovery = await probe_oauth(server_url)
+    if not discovery:
         raise ValueError("Server does not require OAuth (no 401 Bearer challenge)")
 
-    oauth_metadata = await _discover_oauth_metadata(server_url, auth_server_url)
+    oauth_metadata = discovery.authorization_server_metadata
     if not oauth_metadata or not oauth_metadata.authorization_endpoint or not oauth_metadata.token_endpoint:
         raise ValueError("Server advertised no usable OAuth authorization/token endpoint")
 
@@ -369,6 +421,18 @@ async def start_oauth_flow(server_url: str) -> dict:
     pkce = PKCEParameters.generate()
     state = secrets.token_urlsafe(32)
 
+    # RFC 8707 resource indicator — MUST be included in the authorization request.
+    resource = _canonical_resource(server_url, discovery.protected_resource_metadata)
+
+    # Scope selection per the MCP spec: challenge scope → PRM scopes → AS scopes,
+    # plus offline_access when the AS supports it (for refresh tokens).
+    scope = get_client_metadata_scopes(
+        discovery.challenge_scope,
+        discovery.protected_resource_metadata,
+        oauth_metadata,
+        client_grant_types=["authorization_code", "refresh_token"],
+    )
+
     params = {
         "response_type": "code",
         "client_id": client_info["client_id"],
@@ -376,10 +440,8 @@ async def start_oauth_flow(server_url: str) -> dict:
         "state": state,
         "code_challenge": pkce.code_challenge,
         "code_challenge_method": "S256",
+        "resource": resource,
     }
-    # Request the first scope the AS advertises (e.g. "mcp"), if any.
-    scopes_supported = oauth_metadata.scopes_supported or []
-    scope = scopes_supported[0] if scopes_supported else None
     if scope:
         params["scope"] = scope
 
@@ -396,6 +458,8 @@ async def start_oauth_flow(server_url: str) -> dict:
         token_endpoint=str(oauth_metadata.token_endpoint),
         redirect_uri=redirect_uri,
         scope=scope,
+        resource=resource,
+        issuer=str(oauth_metadata.issuer) if oauth_metadata.issuer else None,
     )
 
     return {"authorization_url": authorization_url, "state": state}
@@ -410,16 +474,22 @@ def _check_registration_usable(client_info: dict) -> None:
         raise ValueError(f"Server registered for {method!r} but issued no client_secret")
 
 
-async def handle_oauth_callback(server_id: str, code: str, state: str) -> dict:
+async def handle_oauth_callback(server_id: str, code: str, state: str, iss: Optional[str] = None) -> dict:
     """Exchange the authorization code at the token endpoint and persist tokens.
 
-    Returns a summary dict. Raises ValueError on failure.
+    Validates the RFC 9207 `iss` parameter against the recorded issuer before
+    exchanging the code. Returns a summary dict; raises ValueError on failure.
     """
     flow = _pending_flows.pop(state, None)
     if flow is None:
         raise ValueError("Unknown or expired OAuth state — please retry sign-in")
     if not HAS_OAUTH:
         raise ValueError("MCP OAuth support not available")
+
+    # RFC 9207 authorization-response issuer validation: if the AS advertises
+    # iss support and returns one, it must match the recorded issuer.
+    if flow.issuer and iss and iss != flow.issuer:
+        raise ValueError("Authorization response issuer does not match the expected authorization server")
 
     data = {
         "grant_type": "authorization_code",
@@ -428,6 +498,9 @@ async def handle_oauth_callback(server_id: str, code: str, state: str) -> dict:
         "client_id": flow.client_id,
         "code_verifier": flow.code_verifier,
     }
+    # RFC 8707 resource indicator — MUST be included in the token request.
+    if flow.resource:
+        data["resource"] = flow.resource
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     if flow.token_endpoint_auth_method == "client_secret_basic" and flow.client_secret:
         import base64
@@ -456,6 +529,7 @@ async def handle_oauth_callback(server_id: str, code: str, state: str) -> dict:
         "token_endpoint": flow.token_endpoint,
         "token_endpoint_auth_method": flow.token_endpoint_auth_method,
         "scope": token.scope or flow.scope,
+        "resource": flow.resource,
     }
     await _save_token_row(server_id, _token_row_from_token(token, existing))
 
