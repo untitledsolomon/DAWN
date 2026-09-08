@@ -98,7 +98,8 @@ async def _load_token_row(server_id: str) -> Optional[dict]:
     res = await db._async_execute(lambda: supabase.table("mcp_oauth_tokens").select(
         "*"
     ).eq("server_id", server_id).maybe_single().execute())
-    return res.data if res.data else None
+    # maybe_single() returns None when no row matches (0 rows), so guard against it.
+    return res.data if res and res.data else None
 
 
 async def _save_token_row(server_id: str, row: dict) -> None:
