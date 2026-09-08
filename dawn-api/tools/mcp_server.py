@@ -183,16 +183,19 @@ class MCPTool(BaseTool):
         except Exception as e:
             logger.warning(f"MCP connect to {server.get('name')} failed: {e}")
             # For HTTP servers, a failed connect may mean the server requires an
-            # OAuth sign-in flow rather than a static key. Probe it so the UI can
-            # offer a "Sign in" button instead of a dead-end error.
+            # OAuth sign-in flow rather than a static key. An auth failure is
+            # definitive evidence it needs a bearer token, so offer the "Sign
+            # in" flow regardless of whether the probe can fully discover the
+            # OAuth metadata.
             requires_oauth = False
-            if server_type == "http":
+            if server_type == "http" and ("unauthorized" in str(e).lower() or "401" in str(e)):
+                requires_oauth = True
                 try:
                     from tools import mcp_oauth
                     if mcp_oauth.oauth_enabled():
-                        requires_oauth = bool(await mcp_oauth.probe_oauth(server.get("url") or ""))
+                        await mcp_oauth.probe_oauth(server.get("url") or "")
                 except Exception:
-                    requires_oauth = False
+                    pass
             return ToolResult(
                 success=False,
                 error=f"Failed to connect to '{server.get('name')}': {e}",
@@ -208,16 +211,22 @@ class MCPTool(BaseTool):
             await self._disconnect_server(server_id)
             # Discovery can 401 when the server requires OAuth even though the
             # initial transport handshake succeeded (e.g. the first call is
-            # unauthenticated but tools/list is gated). Probe so the UI can
-            # offer a "Sign in" flow instead of a dead-end error.
+            # unauthenticated but tools/list is gated). An auth failure here is
+            # definitive evidence the server demands a bearer token, so offer
+            # the "Sign in" flow regardless of whether the probe can fully
+            # discover the OAuth metadata.
             requires_oauth = False
             if server_type == "http" and ("unauthorized" in str(e).lower() or "401" in str(e)):
+                requires_oauth = True
                 try:
                     from tools import mcp_oauth
                     if mcp_oauth.oauth_enabled():
-                        requires_oauth = bool(await mcp_oauth.probe_oauth(server.get("url") or ""))
+                        # Refine: if the probe succeeds we keep the flag; if it
+                        # fails (e.g. no OAuth metadata) we still offer sign-in
+                        # because the server clearly needs a token.
+                        await mcp_oauth.probe_oauth(server.get("url") or "")
                 except Exception:
-                    requires_oauth = False
+                    pass
             return ToolResult(
                 success=False,
                 error=f"Connected but failed to discover tools: {e}",
