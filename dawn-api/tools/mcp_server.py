@@ -26,6 +26,31 @@ try:
 except ImportError:
     HAS_MCP = False
 
+try:
+    from mcp.client.streamable_http import StreamableHTTPTransport
+    HAS_HTTP_TRANSPORT = True
+except ImportError:
+    HAS_HTTP_TRANSPORT = False
+
+
+class AuthStreamableHTTPTransport(StreamableHTTPTransport):
+    """StreamableHTTPTransport that injects a bearer token on every request.
+
+    The stock transport has no constructor arg for auth headers, so a
+    token-protected HTTP MCP server (e.g. one gated behind an API key) would
+    otherwise be unreachable. This subclass adds an `Authorization` header to
+    every outbound request by overriding `_prepare_headers`.
+    """
+
+    def __init__(self, url: str, bearer_token: str):
+        super().__init__(url)
+        self._bearer_token = bearer_token
+
+    def _prepare_headers(self) -> dict[str, str]:
+        headers = super()._prepare_headers()
+        headers["Authorization"] = f"Bearer {self._bearer_token}"
+        return headers
+
 
 class MCPTool(BaseTool):
     name = "mcp"
@@ -198,6 +223,10 @@ class MCPTool(BaseTool):
         url = server.get("url")
         if not url:
             raise ValueError("HTTP MCP server requires a 'url'")
+        api_key = server.get("api_key")
+        if api_key and HAS_HTTP_TRANSPORT:
+            # Token-protected server — inject the bearer token on every request.
+            return Client(AuthStreamableHTTPTransport(url, api_key))
         return Client(url)
 
     async def _discover_tools(self, server_id: str, client: Client) -> list[dict]:
