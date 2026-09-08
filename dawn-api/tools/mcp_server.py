@@ -30,26 +30,30 @@ try:
     from mcp.client.streamable_http import StreamableHTTPTransport
     HAS_HTTP_TRANSPORT = True
 except ImportError:
+    StreamableHTTPTransport = None  # type: ignore
     HAS_HTTP_TRANSPORT = False
 
 
-class AuthStreamableHTTPTransport(StreamableHTTPTransport):
-    """StreamableHTTPTransport that injects a bearer token on every request.
+if HAS_HTTP_TRANSPORT:
+    class AuthStreamableHTTPTransport(StreamableHTTPTransport):
+        """StreamableHTTPTransport that injects a bearer token on every request.
 
-    The stock transport has no constructor arg for auth headers, so a
-    token-protected HTTP MCP server (e.g. one gated behind an API key) would
-    otherwise be unreachable. This subclass adds an `Authorization` header to
-    every outbound request by overriding `_prepare_headers`.
-    """
+        The stock transport has no constructor arg for auth headers, so a
+        token-protected HTTP MCP server (e.g. one gated behind an API key) would
+        otherwise be unreachable. This subclass adds an `Authorization` header to
+        every outbound request by overriding `_prepare_headers`.
+        """
 
-    def __init__(self, url: str, bearer_token: str):
-        super().__init__(url)
-        self._bearer_token = bearer_token
+        def __init__(self, url: str, bearer_token: str):
+            super().__init__(url)
+            self._bearer_token = bearer_token
 
-    def _prepare_headers(self) -> dict[str, str]:
-        headers = super()._prepare_headers()
-        headers["Authorization"] = f"Bearer {self._bearer_token}"
-        return headers
+        def _prepare_headers(self) -> dict[str, str]:
+            headers = super()._prepare_headers()
+            headers["Authorization"] = f"Bearer {self._bearer_token}"
+            return headers
+else:
+    AuthStreamableHTTPTransport = None  # type: ignore
 
 
 class MCPTool(BaseTool):
