@@ -1273,6 +1273,7 @@ export interface MCPServer {
   tools_count: number;
   last_connected_at?: string | null;
   created_at: string;
+  has_oauth?: boolean;
 }
 
 export interface MCPTool {
@@ -1311,6 +1312,44 @@ export async function deleteMCPServer(id: string): Promise<void> {
   await fetch(`${BASE}/mcp/servers/${id}`, { method: "DELETE", headers: headers() });
 }
 
+export async function updateMCPServer(
+  id: string,
+  data: {
+    name: string;
+    description?: string;
+    server_type: string;
+    command?: string;
+    args?: string[];
+    url?: string;
+    api_key?: string;
+  }
+): Promise<MCPServer> {
+  const res = await fetch(`${BASE}/mcp/servers/${id}`, {
+    method: "PUT",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to update MCP server");
+  return res.json();
+}
+
+export async function startMCPOAuth(id: string): Promise<{ authorization_url: string; state: string }> {
+  const res = await fetch(`${BASE}/mcp/servers/${id}/oauth/start`, { headers: headers() });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Failed to start OAuth" }));
+    throw new Error(err.detail || "Failed to start OAuth");
+  }
+  return res.json();
+}
+
+export async function revokeMCPOAuth(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/mcp/servers/${id}/oauth/revoke`, {
+    method: "POST",
+    headers: headers(),
+  });
+  if (!res.ok) throw new Error("Failed to revoke OAuth connection");
+}
+
 export async function connectMCPServer(id: string): Promise<{ status: string; tools_discovered?: number; tools?: string[] }> {
   const res = await fetch(`${BASE}/mcp/servers/${id}/connect`, {
     method: "POST",
@@ -1318,7 +1357,9 @@ export async function connectMCPServer(id: string): Promise<{ status: string; to
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "Connect failed" }));
-    throw new Error(err.detail || "Connect failed");
+    const e = new Error(err.detail || "Connect failed") as Error & { requiresOAuth?: boolean };
+    e.requiresOAuth = res.headers.get("X-Requires-OAuth") === "true";
+    throw e;
   }
   return res.json();
 }
