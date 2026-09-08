@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     # ALLOWED_ORIGINS in .env for production.
     allowed_origins: str = "http://localhost:3000,http://localhost:3001"
 
+    # Public base URL of the DAWN API — used to build the OAuth redirect_uri
+    # for MCP OAuth flows (e.g. "https://dawn-api.regentplatform.com"). Falls
+    # back to localhost:8000 for local dev.
+    dawn_public_url: str = "http://localhost:8000"
+
     # Ingestion streaming config
     max_upload_gb: int = 30
     streaming_threshold_mb: int = 50

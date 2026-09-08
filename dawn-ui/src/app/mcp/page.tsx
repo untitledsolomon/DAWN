@@ -8,6 +8,8 @@ import {
   deleteMCPServer,
   connectMCPServer,
   listMCPTools,
+  startMCPOAuth,
+  revokeMCPOAuth,
 } from "@/lib/api";
 import type { MCPServer, MCPTool } from "@/lib/api";
 import {
@@ -22,6 +24,9 @@ import {
   Wrench,
   ChevronDown,
   ChevronRight,
+  LogIn,
+  LogOut,
+  RefreshCw,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -45,6 +50,9 @@ function MCPServersContent() {
   // Per-server action state
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
+  const [requiresOAuthId, setRequiresOAuthId] = useState<string | null>(null);
+  const [signingInId, setSigningInId] = useState<string | null>(null);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
 
   // Tools browsing
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
@@ -98,6 +106,7 @@ function MCPServersContent() {
     try {
       setConnectingId(server.id);
       setConnectError(null);
+      setRequiresOAuthId(null);
       await connectMCPServer(server.id);
       await fetchServers();
       // Refresh tools for the connected server if it's the selected one
@@ -106,9 +115,67 @@ function MCPServersContent() {
       }
     } catch (err) {
       console.error("[MCP] Failed to connect:", err);
+      const requiresOAuth =
+        err instanceof Error && (err as Error & { requiresOAuth?: boolean }).requiresOAuth === true;
       setConnectError(err instanceof Error ? err.message : "Failed to connect");
+      if (requiresOAuth) setRequiresOAuthId(server.id);
     } finally {
       setConnectingId(null);
+    }
+  };
+
+  const handleSignIn = async (server: MCPServer) => {
+    try {
+      setSigningInId(server.id);
+      setConnectError(null);
+      setRequiresOAuthId(null);
+      const { authorization_url } = await startMCPOAuth(server.id);
+      // Open the authorization URL in a popup and wait for the callback page to
+      // postMessage back, then retry connect automatically.
+      const popup = window.open(authorization_url, "_blank", "width=520,height=640");
+      const done = new Promise<void>((resolve) => {
+        const onMessage = (event: MessageEvent) => {
+          if (event.data && event.data.type === "mcp-oauth-result") {
+            window.removeEventListener("message", onMessage);
+            resolve();
+          }
+        };
+        window.addEventListener("message", onMessage);
+        // Fallback: if the popup closes without a postMessage, resolve anyway
+        // so we retry connect (the token may still have been persisted).
+        const poll = setInterval(() => {
+          if (popup && popup.closed) {
+            clearInterval(poll);
+            window.removeEventListener("message", onMessage);
+            resolve();
+          }
+        }, 500);
+      });
+      await done;
+      await connectMCPServer(server.id);
+      await fetchServers();
+      if (selectedServerId === server.id) {
+        await loadTools(server.id);
+      }
+    } catch (err) {
+      console.error("[MCP] Failed OAuth sign-in:", err);
+      setConnectError(err instanceof Error ? err.message : "Failed to sign in");
+    } finally {
+      setSigningInId(null);
+    }
+  };
+
+  const handleRevoke = async (server: MCPServer) => {
+    try {
+      setRevokingId(server.id);
+      setConnectError(null);
+      await revokeMCPOAuth(server.id);
+      await fetchServers();
+    } catch (err) {
+      console.error("[MCP] Failed to revoke OAuth:", err);
+      setConnectError(err instanceof Error ? err.message : "Failed to revoke OAuth");
+    } finally {
+      setRevokingId(null);
     }
   };
 
@@ -316,6 +383,20 @@ function MCPServersContent() {
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+          {connectError && (
+            <div className="mb-3 p-3 rounded-lg bg-surface border border-rim flex items-start gap-2">
+              <AlertCircle size={13} className="text-ember flex-shrink-0 mt-0.5" />
+              <div className="text-2xs text-text-secondary">
+                <p>{connectError}</p>
+                {requiresOAuthId && (
+                  <p className="text-text-muted mt-1">
+                    This server requires OAuth sign-in. Use the "Sign in" button on the server to
+                    authenticate in your browser, then connect again.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
           {loading ? (
             <div className="flex items-center justify-center h-full">
               <Loader2 size={20} className="text-dawn animate-spin" />
@@ -398,19 +479,63 @@ function MCPServersContent() {
                       </div>
 
                       <div className="flex items-center gap-1 flex-shrink-0">
-                        <button
-                          onClick={() => handleConnect(server)}
-                          disabled={isConnecting}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-dawn/10 text-dawn text-xs hover:bg-dawn/20 transition-all disabled:opacity-50"
-                          title="Connect and discover tools"
-                        >
-                          {isConnecting ? (
-                            <Loader2 size={11} className="animate-spin" />
-                          ) : (
-                            <Plug size={11} />
-                          )}
-                          Connect
-                        </button>
+                        {requiresOAuthId === server.id ? (
+                          <button
+                            onClick={() => handleSignIn(server)}
+                            disabled={signingInId === server.id}
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-dawn/10 text-dawn text-xs hover:bg-dawn/20 transition-all disabled:opacity-50"
+                            title="This server requires OAuth sign-in"
+                          >
+                            {signingInId === server.id ? (
+                              <Loader2 size={11} className="animate-spin" />
+                            ) : (
+                              <LogIn size={11} />
+                            )}
+                            Sign in
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleConnect(server)}
+                            disabled={isConnecting}
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-dawn/10 text-dawn text-xs hover:bg-dawn/20 transition-all disabled:opacity-50"
+                            title="Connect and discover tools"
+                          >
+                            {isConnecting ? (
+                              <Loader2 size={11} className="animate-spin" />
+                            ) : (
+                              <Plug size={11} />
+                            )}
+                            Connect
+                          </button>
+                        )}
+                        {server.has_oauth && (
+                          <button
+                            onClick={() => handleSignIn(server)}
+                            disabled={signingInId === server.id}
+                            className="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-dawn transition-all"
+                            title="Re-authenticate OAuth connection"
+                          >
+                            {signingInId === server.id ? (
+                              <Loader2 size={11} className="animate-spin" />
+                            ) : (
+                              <RefreshCw size={11} />
+                            )}
+                          </button>
+                        )}
+                        {server.has_oauth && (
+                          <button
+                            onClick={() => handleRevoke(server)}
+                            disabled={revokingId === server.id}
+                            className="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-ember transition-all"
+                            title="Revoke OAuth connection"
+                          >
+                            {revokingId === server.id ? (
+                              <Loader2 size={11} className="animate-spin" />
+                            ) : (
+                              <LogOut size={11} />
+                            )}
+                          </button>
+                        )}
                         <button
                           onClick={() => handleDelete(server)}
                           className="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-ember hover:border-ember/30 border border-transparent transition-all"

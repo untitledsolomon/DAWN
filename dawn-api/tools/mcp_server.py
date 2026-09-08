@@ -182,7 +182,22 @@ class MCPTool(BaseTool):
             await client.__aenter__()
         except Exception as e:
             logger.warning(f"MCP connect to {server.get('name')} failed: {e}")
-            return ToolResult(success=False, error=f"Failed to connect to '{server.get('name')}': {e}")
+            # For HTTP servers, a failed connect may mean the server requires an
+            # OAuth sign-in flow rather than a static key. Probe it so the UI can
+            # offer a "Sign in" button instead of a dead-end error.
+            requires_oauth = False
+            if server_type == "http":
+                try:
+                    from tools import mcp_oauth
+                    if mcp_oauth.oauth_enabled():
+                        requires_oauth = bool(await mcp_oauth.probe_oauth(server.get("url") or ""))
+                except Exception:
+                    requires_oauth = False
+            return ToolResult(
+                success=False,
+                error=f"Failed to connect to '{server.get('name')}': {e}",
+                metadata={"requires_oauth": requires_oauth},
+            )
 
         self._sessions[server_id] = client
 
@@ -227,6 +242,18 @@ class MCPTool(BaseTool):
         url = server.get("url")
         if not url:
             raise ValueError("HTTP MCP server requires a 'url'")
+        server_id = server.get("id")
+        # OAuth-authenticated server — use the stored access token (refreshing
+        # if needed) as the bearer instead of a static API key.
+        if server_id:
+            try:
+                from tools import mcp_oauth
+                if mcp_oauth.oauth_enabled():
+                    access_token = await mcp_oauth.get_access_token(server_id)
+                    if access_token and HAS_HTTP_TRANSPORT:
+                        return Client(AuthStreamableHTTPTransport(url, access_token))
+            except Exception as e:
+                logger.warning(f"Failed to load OAuth token for MCP server {server_id}: {e}")
         api_key = server.get("api_key")
         if api_key and HAS_HTTP_TRANSPORT:
             # Token-protected server — inject the bearer token on every request.
