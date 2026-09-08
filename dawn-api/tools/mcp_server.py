@@ -73,6 +73,37 @@ else:
     AuthStreamableHTTPTransport = None  # type: ignore
 
 
+async def _resolve_redirects(url: str) -> str:
+    """Resolve an HTTP(S) redirect chain to its final URL.
+
+    The mcp SDK's StreamableHTTPTransport refuses to follow redirects (it will
+    not silently forward an Authorization header to a different host). Many
+    real MCP endpoints sit behind a redirect (e.g. a bare domain that 301s to
+    /api/mcp), so a connect would fail with "Redirect ... not followed".
+
+    We resolve the chain up front with httpx (which follows redirects by
+    default) and return the final URL. The transport is then built against that
+    final URL, so auth headers are only ever sent to the resolved host -- never
+    to an intermediate redirector. If the URL does not redirect, or resolution
+    fails, the original URL is returned unchanged.
+    """
+    try:
+        import httpx
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            # A lightweight GET is enough to observe the redirect chain. MCP
+            # streamable HTTP servers answer POST (JSON-RPC), but a GET to the
+            # endpoint will still surface any 3xx redirect before the server
+            # rejects the method. We only care about the final URL, not the body.
+            resp = await client.get(url)
+            final_url = str(resp.url)
+            if final_url and final_url != url:
+                logger.info(f"MCP HTTP redirect resolved: {url} -> {final_url}")
+                return final_url
+    except Exception as e:
+        logger.warning(f"MCP redirect resolution failed for {url}: {e}")
+    return url
+
+
 class MCPTool(BaseTool):
     name = "mcp"
     description = (
@@ -290,6 +321,10 @@ class MCPTool(BaseTool):
         url = server.get("url")
         if not url:
             raise ValueError("HTTP MCP server requires a 'url'")
+        # Resolve any redirect chain up front. The mcp SDK transport refuses to
+        # follow redirects, so we point it at the final URL instead. Auth headers
+        # are then only ever sent to the resolved host.
+        url = await _resolve_redirects(url)
         server_id = server.get("id")
         # OAuth-authenticated server — use the stored access token (refreshing
         # if needed) as the bearer instead of a static API key.
