@@ -160,7 +160,15 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
   const [editTitle, setEditTitle] = useState("");
   const [artifactCount, setArtifactCount] = useState<number>(0);
   const [pendingCount, setPendingCount] = useState<number>(0);
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>(loadOpenState);
+  // Initialize with the server-safe defaults (never read localStorage during
+  // render — that causes an SSR hydration mismatch). Load the persisted state
+  // in a client-only effect below.
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({ ...DEFAULT_OPEN });
+
+  // Hydrate section open/closed state from localStorage on the client only.
+  useEffect(() => {
+    setOpenSections(loadOpenState());
+  }, []);
 
   // Fetch sessions
   const fetchSessions = useCallback(async () => {
