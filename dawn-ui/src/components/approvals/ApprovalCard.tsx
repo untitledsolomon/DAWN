@@ -41,7 +41,7 @@ export default function ApprovalCard({ item, resolved = false, onApprove, onReje
         <div className="mt-2.5">
           <span
             className={clsx(
-              "inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-nested border text-2xs font-medium",
+              "inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[8px] border text-2xs font-medium",
               item.impact === "production"
               ? "border-amber/40 bg-amber/5 text-amber"
               : "border-rim bg-elevated/40 text-text-secondary"

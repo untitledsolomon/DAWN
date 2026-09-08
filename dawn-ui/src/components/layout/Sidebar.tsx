@@ -328,7 +328,7 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
         onClick={handleNavClick}
         title={collapsed ? label : undefined}
         className={clsx(
-          "flex items-center gap-2.5 rounded-nested transition-all duration-150 group relative",
+          "flex items-center gap-2.5 rounded-[8px] transition-all duration-150 group relative",
           collapsed ? "w-10 h-10 justify-center" : "h-[34px] px-[9px]",
           active ? "teal-soft text-dawn font-semibold" : "text-text-muted hover:text-text-secondary hover:bg-elevated/60",
         )}
@@ -512,7 +512,7 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
       {/* Bottom section */}
       <div className={clsx("border-t border-rim pt-1 pb-2 px-2 flex flex-col gap-0.5 flex-shrink-0", collapsed && "items-center")}>
         <Link href="/settings" onClick={handleNavClick} title={collapsed ? "Settings" : undefined}
-          className={clsx("flex items-center gap-2.5 rounded-nested transition-all duration-150 group relative", collapsed ? "w-10 h-10 justify-center" : "h-[34px] px-[9px]",
+          className={clsx("flex items-center gap-2.5 rounded-[8px] transition-all duration-150 group relative", collapsed ? "w-10 h-10 justify-center" : "h-[34px] px-[9px]",
             path === "/settings" ? "teal-soft text-dawn font-semibold" : "text-text-muted hover:text-text-secondary hover:bg-elevated/60")}>
           <Settings size={16} strokeWidth={path === "/settings" ? 2 : 1.75} className="flex-none" />
           {!collapsed && <span className="text-xs font-medium">Settings</span>}
