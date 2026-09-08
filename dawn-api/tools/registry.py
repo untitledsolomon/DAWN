@@ -142,6 +142,13 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register ChartTool: {e}")
 
+    # v42.0 — General artifact tool — pushes tables/notes/files onto the Canvas
+    try:
+        from tools.artifact import CreateArtifactTool
+        registry.register(CreateArtifactTool())
+    except Exception as e:
+        logger.error(f"Failed to register CreateArtifactTool: {e}")
+
     # OSINT recon tool
     try:
         from tools.osint_tool import OSINTTool

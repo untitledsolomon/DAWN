@@ -212,6 +212,43 @@ async def agent(
                         except Exception:
                             logger.exception("Failed to persist explainer artifact")
 
+                # ── create_artifact: persist general canvas items ─────────────────
+                if (
+                    event.get("name") == "create_artifact"
+                    and event.get("success")
+                    and isinstance(event.get("output"), dict)
+                ):
+                    output = event["output"]
+                    atype = output.get("artifact_type") or "note"
+                    try:
+                        data = {
+                            "session_id": session_id,
+                            "type": atype,
+                            "title": output.get("title") or "Artifact",
+                        }
+                        if output.get("description"):
+                            data["description"] = output["description"]
+                        if atype == "table" and output.get("spec"):
+                            data["spec"] = output["spec"]
+                        elif atype == "note" and output.get("code"):
+                            data["code"] = output["code"]
+                        elif atype == "file" and output.get("url"):
+                            data["url"] = output["url"]
+                        res = supabase.table("artifacts").insert(data).execute()
+                        if res.data and res.data[0].get("id"):
+                            artifact = res.data[0]
+                            artifact_ids_this_turn.append(artifact["id"])
+                            yield sse("artifact", {
+                                "artifact_id": artifact["id"],
+                                "artifact_type": artifact.get("type", atype),
+                                "title": artifact.get("title"),
+                                "spec": artifact.get("spec"),
+                                "code": artifact.get("code"),
+                                "url": artifact.get("url"),
+                            })
+                    except Exception:
+                        logger.exception("Failed to persist artifact")
+
             elif event_type == "token":
                 full_response.append(event.get("content", ""))
 
