@@ -10,6 +10,7 @@ import {
   listMCPTools,
   startMCPOAuth,
   revokeMCPOAuth,
+  checkMCPOAuthStatus,
 } from "@/lib/api";
 import type { MCPServer, MCPTool } from "@/lib/api";
 import {
@@ -109,6 +110,22 @@ function MCPServersContent() {
       setConnectingId(server.id);
       setConnectError(null);
       setRequiresOAuthId(null);
+      // For HTTP servers, probe OAuth proactively so we don't do a doomed
+      // unauthenticated connect + reactive probe. If the server needs OAuth,
+      // go straight into the consent popup (Claude-connector behaviour).
+      if (server.server_type === "http") {
+        try {
+          const { requires_oauth } = await checkMCPOAuthStatus(server.id);
+          if (requires_oauth) {
+            setConnectingId(null);
+            await handleSignIn(server);
+            return;
+          }
+        } catch {
+          // Probe failed (e.g. server unreachable) — fall through to a normal
+          // connect so the real error surfaces.
+        }
+      }
       await connectMCPServer(server.id);
       await fetchServers();
       // Refresh tools for the connected server if it's the selected one
@@ -120,8 +137,7 @@ function MCPServersContent() {
       const requiresOAuth =
         err instanceof Error && (err as Error & { requiresOAuth?: boolean }).requiresOAuth === true;
       if (requiresOAuth) {
-        // Match Claude connectors: don't make the user notice and click a
-        // separate "Sign in" button — go straight into the consent popup.
+        // Reactive fallback: the connect itself reported an OAuth challenge.
         setRequiresOAuthId(server.id);
         setConnectingId(null);
         await handleSignIn(server);
@@ -207,7 +223,7 @@ function MCPServersContent() {
     try {
       setFormSubmitting(true);
       setFormError(null);
-      await createMCPServer({
+      const created = await createMCPServer({
         name: formName.trim(),
         description: formDescription.trim() || undefined,
         server_type: formType,
@@ -216,7 +232,6 @@ function MCPServersContent() {
         url: formType === "http" ? formUrl.trim() || undefined : undefined,
         api_key: formType === "http" ? formApiKey.trim() || undefined : undefined,
       });
-      const created = await fetchServers();
       // Reset form
       setShowForm(false);
       setFormName("");
@@ -227,14 +242,15 @@ function MCPServersContent() {
       setFormApiKey("");
 
       // Match the "add -> immediately try to connect" flow of Claude
-      // connectors: attempt connect right away. If the server turns out to
-      // need OAuth, handleConnect will set requiresOAuthId and we launch the
-      // sign-in popup automatically instead of leaving the user to notice a
-      // "Sign in" button on their own.
-      const newServer = created?.find((s) => s.name === formName.trim()) ?? null;
-      if (newServer) {
-        await handleConnect(newServer);
+      // connectors: attempt connect right away using the id returned by the
+      // create call (NOT by re-finding by name after the form is cleared --
+      // that always failed because formName is reset to "" above). If the
+      // server turns out to need OAuth, handleConnect will set requiresOAuthId
+      // and we launch the sign-in popup automatically.
+      if (created?.id) {
+        await handleConnect(created);
       }
+      await fetchServers();
     } catch (err) {
       console.error("[MCP] Failed to create:", err);
       setFormError(err instanceof Error ? err.message : "Failed to create server");

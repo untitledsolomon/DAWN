@@ -1282,6 +1282,7 @@ export interface MCPTool {
   description?: string;
   server_id: string;
   enabled: boolean;
+  pinned?: boolean;
 }
 
 export async function listMCPServers(): Promise<MCPServer[]> {
@@ -1368,5 +1369,22 @@ export async function listMCPTools(serverId?: string): Promise<MCPTool[]> {
   const qs = serverId ? `?server_id=${serverId}` : "";
   const res = await fetch(`${BASE}/mcp/tools${qs}`, { headers: headers() });
   if (!res.ok) throw new Error("Failed to list MCP tools");
+  return res.json();
+}
+
+
+export async function checkMCPOAuthStatus(id: string): Promise<{ requires_oauth: boolean }> {
+  const res = await fetch(`${BASE}/mcp/servers/${id}/oauth/status`, { headers: headers() });
+  if (!res.ok) throw new Error("Failed to check MCP OAuth status");
+  return res.json();
+}
+
+export async function pinMCPTool(toolId: string, pinned: boolean): Promise<MCPTool> {
+  const res = await fetch(`${BASE}/mcp/tools/${toolId}/pin`, {
+    method: "PUT",
+    headers: headers(),
+    body: JSON.stringify({ pinned }),
+  });
+  if (!res.ok) throw new Error("Failed to update tool pin state");
   return res.json();
 }

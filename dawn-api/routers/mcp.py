@@ -264,3 +264,64 @@ async def mcp_oauth_revoke(server_id: str, _: None = Depends(verify_key)):
         return {"status": "revoked"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/mcp/servers/{server_id}/oauth/status", tags=["mcp"])
+async def mcp_oauth_status(server_id: str, _: None = Depends(verify_key)):
+    """Proactively check whether an HTTP MCP server requires OAuth.
+
+    Runs the spec probe (401 Bearer challenge / RFC 9728 well-known metadata)
+    so the UI can launch the consent flow immediately instead of doing a doomed
+    unauthenticated connect first. Returns {"requires_oauth": bool}.
+    """
+    try:
+        from tools.mcp_server import MCPTool
+        tool = MCPTool()
+        requires_oauth = await tool.check_oauth_status(server_id)
+        return {"requires_oauth": requires_oauth}
+    except Exception as e:
+        logger.error(f"Failed to probe MCP OAuth status: {e}")
+        return {"requires_oauth": False}
+
+
+@router.put("/mcp/tools/{tool_id}/pin", tags=["mcp"])
+async def pin_mcp_tool(tool_id: str, req: dict, _: None = Depends(verify_key)):
+    """Pin or unpin a discovered MCP tool.
+
+    Pinning promotes a tool to a first-class `mcp_<name>` DAWN tool (always
+    available to the agent). Unpinning returns it to the catalog-only state
+    reachable via mcp_search_tools / mcp_call_tool. Body: {"pinned": bool}.
+    """
+    try:
+        pinned = bool(req.get("pinned", True))
+        supabase = db.get_db()
+        await db._async_execute(lambda: supabase.table("mcp_tools").update(
+            {"pinned": pinned}
+        ).eq("id", tool_id).execute())
+        res = await db._async_execute(lambda: supabase.table("mcp_tools").select(
+            "id, server_id, name, description, input_schema, pinned"
+        ).eq("id", tool_id).execute())
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Tool not found")
+        row = res.data[0]
+
+        # Reflect the change in the live registry immediately.
+        from tools.mcp_server import MCPTool, RemoteMCPTool
+        from tools.registry import get_registry
+        registry = get_registry()
+        tool = MCPTool()
+        reg_name = f"mcp_{row['name']}"
+        if pinned:
+            if registry.get(reg_name) is None:
+                registry.register(RemoteMCPTool(
+                    row["server_id"], row["name"],
+                    row.get("description") or row["name"],
+                    row.get("input_schema") or {"type": "object", "properties": {}},
+                ))
+        else:
+            registry.unregister(reg_name)
+        return row
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

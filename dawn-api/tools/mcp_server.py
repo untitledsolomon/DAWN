@@ -3,9 +3,26 @@ MCP (Model Context Protocol) integration.
 
 Two directions:
   1. DAWN connects OUT to external MCP servers (stdio or HTTP/streamable),
-     discovers their tools, and registers them as DAWN tools so the agent can
-     call them like any built-in tool.
+     discovers their tools, and exposes them to the agent.
   2. DAWN can expose its own tools via MCP (see _start_dawn_mcp_server).
+
+Progressive discovery (Anthropic client best-practice model)
+-------------------------------------------------------------
+Rather than eagerly registering every discovered tool as a first-class
+`mcp_<name>` DAWN tool (which blows up the model's context window past a few
+dozen tools), DAWN now follows the catalog -> inspect -> execute pattern:
+
+  * `mcp_search_tools`  -- a single lightweight meta-tool that returns the
+    catalog of every connected server's tools as {server, name, description}
+    (names + one-line descriptions only, no full JSON schemas).
+  * `mcp_call_tool`     -- a single meta-tool that lazily connects to the
+    owning server (if not already connected), fetches the full input schema
+    for the requested tool, and executes it.
+
+Individual tools are only registered as first-class `mcp_<name>` DAWN tools
+when they are explicitly *pinned* (see the `pinned` column on mcp_tools). This
+keeps the default context footprint tiny while still letting a user promote
+their most-used remote tools to always-available.
 
 The `mcp` Python SDK (>=1.0) is required. Connections are created lazily and
 cached per server id; a connection failure returns a clear error rather than
@@ -103,7 +120,7 @@ class MCPTool(BaseTool):
     def __init__(self):
         self._sessions = {}  # server_id -> mcp.Client (async context manager)
 
-    # ── Public dispatch ────────────────────────────────────────────────────
+    # ── Public dispatch ──────────────────────────────────────────────────────
 
     async def run(
         self,
@@ -139,7 +156,7 @@ class MCPTool(BaseTool):
             logger.exception(f"MCP operation failed: {e}")
             return ToolResult(success=False, error=f"MCP operation failed: {e}")
 
-    # ── Server registry ────────────────────────────────────────────────────
+    # ── Server registry ──────────────────────────────────────────────────────
 
     async def _list_servers(self) -> ToolResult:
         try:
@@ -185,14 +202,7 @@ class MCPTool(BaseTool):
             # For HTTP servers, a failed connect may mean the server requires an
             # OAuth sign-in flow rather than a static key. Probe it so the UI can
             # offer a "Sign in" button instead of a dead-end error.
-            requires_oauth = False
-            if server_type == "http":
-                try:
-                    from tools import mcp_oauth
-                    if mcp_oauth.oauth_enabled():
-                        requires_oauth = bool(await mcp_oauth.probe_oauth(server.get("url") or ""))
-                except Exception:
-                    requires_oauth = False
+            requires_oauth = await self._probe_requires_oauth(server_type, server)
             return ToolResult(
                 success=False,
                 error=f"Failed to connect to '{server.get('name')}': {e}",
@@ -201,23 +211,15 @@ class MCPTool(BaseTool):
 
         self._sessions[server_id] = client
 
-        # Discover and register tools, then persist them.
+        # Discover and persist tools. Discovery can 401 when the server requires
+        # OAuth even though the initial transport handshake succeeded (e.g. the
+        # first call is unauthenticated but tools/list is gated). Probe so the UI
+        # can offer a "Sign in" flow instead of a dead-end error.
         try:
             tools = await self._discover_tools(server_id, client)
         except Exception as e:
             await self._disconnect_server(server_id)
-            # Discovery can 401 when the server requires OAuth even though the
-            # initial transport handshake succeeded (e.g. the first call is
-            # unauthenticated but tools/list is gated). Probe so the UI can
-            # offer a "Sign in" flow instead of a dead-end error.
-            requires_oauth = False
-            if server_type == "http" and ("unauthorized" in str(e).lower() or "401" in str(e)):
-                try:
-                    from tools import mcp_oauth
-                    if mcp_oauth.oauth_enabled():
-                        requires_oauth = bool(await mcp_oauth.probe_oauth(server.get("url") or ""))
-                except Exception:
-                    requires_oauth = False
+            requires_oauth = await self._probe_requires_oauth(server_type, server)
             return ToolResult(
                 success=False,
                 error=f"Connected but failed to discover tools: {e}",
@@ -245,6 +247,36 @@ class MCPTool(BaseTool):
                 "tools": [t["name"] for t in tools],
             },
         )
+
+    async def _probe_requires_oauth(self, server_type: str, server: dict) -> bool:
+        """Robustly determine whether an HTTP server needs OAuth.
+
+        Runs the spec probe (401 Bearer challenge / RFC 9728 well-known metadata)
+        on any HTTP connect or discovery failure -- not just when the error text
+        happens to contain 'unauthorized' or '401'. The probe itself decides.
+        """
+        if server_type != "http":
+            return False
+        try:
+            from tools import mcp_oauth
+            if mcp_oauth.oauth_enabled():
+                return bool(await mcp_oauth.probe_oauth(server.get("url") or ""))
+        except Exception:
+            pass
+        return False
+
+    async def check_oauth_status(self, server_id: str) -> bool:
+        """Proactively probe whether a server requires OAuth (no connect needed).
+
+        Used by the UI's add/connect flow so it can launch the consent popup
+        immediately instead of doing a doomed unauthenticated connect first.
+        """
+        server = await self._get_server(server_id)
+        if not server:
+            return False
+        if server.get("server_type") != "http":
+            return False
+        return await self._probe_requires_oauth("http", server)
 
     async def _open_stdio(self, server: dict) -> Client:
         params = StdioServerParameters(
@@ -288,7 +320,14 @@ class MCPTool(BaseTool):
         return tools
 
     async def _persist_tools(self, server_id: str, tools: list[dict]) -> None:
-        """Upsert discovered tools into mcp_tools and register them as DAWN tools."""
+        """Upsert discovered tools into mcp_tools.
+
+        Under progressive discovery, tools are persisted to the catalog but NOT
+        auto-registered as first-class DAWN tools. Only tools already marked
+        `pinned` in the DB are (re)registered eagerly. This keeps the model's
+        context footprint small; the catalog is reachable via `mcp_search_tools`
+        and execution via `mcp_call_tool`.
+        """
         if not tools:
             return
         import db.client as db
@@ -301,11 +340,38 @@ class MCPTool(BaseTool):
                 "input_schema": t["input_schema"],
                 "enabled": True,
             }, on_conflict="server_id,name").execute())
-        # Register each as a DAWN tool so the agent can call it directly.
+        # Register only tools that are already pinned (so a re-connect keeps a
+        # user's pinned tools available without re-registering everything).
         registry = get_registry()
         for t in tools:
-            if registry.get(f"mcp_{t['name']}") is None:
-                registry.register(RemoteMCPTool(server_id, t["name"], t["description"], t["input_schema"]))
+            if self._is_pinned(server_id, t["name"]):
+                self._register_remote_tool(registry, server_id, t)
+
+    async def _is_pinned(self, server_id: str, tool_name: str) -> bool:
+        try:
+            import db.client as db
+            supabase = db.get_db()
+            res = await db._async_execute(lambda: supabase.table("mcp_tools").select(
+                "pinned"
+            ).eq("server_id", server_id).eq("name", tool_name).maybe_single().execute())
+            return bool(res.data and res.data.get("pinned"))
+        except Exception:
+            return False
+
+    def _register_remote_tool(self, registry, server_id: str, t: dict) -> None:
+        """Register a single remote tool as a first-class DAWN tool (pinned)."""
+        name = t["name"]
+        if registry.get(f"mcp_{name}"):
+            return
+        try:
+            registry.register(RemoteMCPTool(
+                server_id,
+                name,
+                t.get("description") or name,
+                t.get("input_schema") or {"type": "object", "properties": {}},
+            ))
+        except Exception as e:
+            logger.warning(f"Failed to register pinned MCP tool '{name}': {e}")
 
     async def _disconnect_server(self, server_id: Optional[str]) -> ToolResult:
         client = self._sessions.pop(server_id, None)
@@ -316,7 +382,7 @@ class MCPTool(BaseTool):
                 pass
         return ToolResult(success=True, output={"status": "disconnected"})
 
-    # ── Tools / resources ───────────────────────────────────────────────────
+    # ── Tools / resources ────────────────────────────────────────────────────
 
     async def _list_tools(self, server_id: Optional[str]) -> ToolResult:
         if not server_id:
@@ -396,7 +462,7 @@ class MCPTool(BaseTool):
         except Exception as e:
             return ToolResult(success=False, error=f"Failed to read resource: {e}")
 
-    # ── Expose DAWN's own tools via MCP ─────────────────────────────────────
+    # ── Expose DAWN's own tools via MCP ──────────────────────────────────────
 
     async def _start_dawn_mcp_server(self) -> ToolResult:
         """Start DAWN's own MCP server so external MCP clients (Claude Desktop,
@@ -483,24 +549,151 @@ def _make_tool_wrapper(tool: BaseTool):
     return handler
 
 
-async def load_persisted_mcp_tools() -> int:
-    """Load previously-discovered MCP tools from the DB into the registry.
+# ── Progressive discovery: catalog + lazy execution meta-tools ──────────────
+# These two tools are the ONLY MCP surface the agent sees by default. They keep
+# the model's context footprint tiny regardless of how many servers/tools are
+# connected, matching Anthropic's client best-practice pattern:
+#   catalog (names + one-liners) -> inspect (full schema on demand) -> execute.
 
-    Called at startup so tools from connected MCP servers survive a restart —
-    otherwise the agent would only see them for the lifetime of the process
-    that connected. Returns the number of tools loaded.
+
+class MCPCatalogTool(BaseTool):
+    """Search the catalog of tools exposed by connected MCP servers.
+
+    Returns lightweight entries ({server, name, description}) across every
+    enabled server. Use this to discover what remote tools are available before
+    calling one. To execute a tool, use mcp_call_tool.
     """
+    name = "mcp_search_tools"
+    description = (
+        "Search the catalog of tools exposed by connected MCP servers. Returns "
+        "lightweight {server, name, description} entries across all enabled "
+        "servers. Use this to discover what remote tools are available, then "
+        "call one with mcp_call_tool."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Optional substring to filter tool names/descriptions by.",
+            },
+            "server_id": {
+                "type": "string",
+                "description": "Optional server id to restrict the search to.",
+            },
+        },
+    }
+
+    async def run(self, query: Optional[str] = None, server_id: Optional[str] = None) -> ToolResult:
+        try:
+            import db.client as db
+            supabase = db.get_db()
+            q = supabase.table("mcp_tools").select(
+                "name, description, server_id, mcp_servers(name)"
+            ).eq("enabled", True)
+            if server_id:
+                q = q.eq("server_id", server_id)
+            res = await db._async_execute(lambda: q.order("name").execute())
+            rows = res.data or []
+            results = []
+            for r in rows:
+                name = r.get("name") or ""
+                desc = (r.get("description") or "").strip()
+                if query:
+                    ql = query.lower()
+                    if ql not in name.lower() and ql not in desc.lower():
+                        continue
+                server_name = (r.get("mcp_servers") or {}).get("name") if isinstance(r.get("mcp_servers"), dict) else None
+                results.append({
+                    "server_id": r.get("server_id"),
+                    "server": server_name or r.get("server_id"),
+                    "name": name,
+                    "description": desc,
+                })
+            return ToolResult(success=True, output=results)
+        except Exception as e:
+            return ToolResult(success=False, error=f"Failed to search MCP tools: {e}")
+
+
+class MCPCallTool(BaseTool):
+    """Call a tool on a connected MCP server by name.
+
+    Lazily connects to the owning server if needed, then executes the remote
+    tool with the given arguments. Use mcp_search_tools first to find the
+    server_id and tool name.
+    """
+    name = "mcp_call_tool"
+    description = (
+        "Call a tool exposed by a connected MCP server. Provide the server_id "
+        "and tool name (find them with mcp_search_tools) plus the arguments the "
+        "tool expects. Connects to the server on demand if it is not already "
+        "connected."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "server_id": {
+                "type": "string",
+                "description": "ID of the MCP server that owns the tool.",
+            },
+            "tool_name": {
+                "type": "string",
+                "description": "Name of the remote tool to call.",
+            },
+            "tool_args": {
+                "type": "object",
+                "description": "Arguments to pass to the remote tool.",
+            },
+        },
+        "required": ["server_id", "tool_name"],
+    }
+
+    async def run(self, server_id: str, tool_name: str, tool_args: Optional[dict] = None) -> ToolResult:
+        if not server_id or not tool_name:
+            return ToolResult(success=False, error="server_id and tool_name are required")
+        # Route through the shared MCPTool instance so connections are reused.
+        mcp_tool = next((t for t in get_registry().list_tools() if t.name == "mcp"), None)
+        if mcp_tool is None:
+            return ToolResult(success=False, error="MCP tool not available")
+        return await mcp_tool._call_tool(server_id, tool_name, tool_args or {})
+
+
+async def load_persisted_mcp_tools() -> int:
+    """Load the MCP surface into the registry at startup.
+
+    Under progressive discovery this registers ONLY:
+      1. the two meta-tools (mcp_search_tools, mcp_call_tool), and
+      2. any tools explicitly pinned by the user (mcp_<name>).
+
+    It does NOT eagerly register every discovered tool -- that would blow up the
+    model's context window as servers accumulate. Returns the number of
+    first-class tools registered (pinned tools only; meta-tools are not counted).
+    """
+    registry = get_registry()
+
+    # 1. Always ensure the two meta-tools are present.
+    if registry.get("mcp_search_tools") is None:
+        try:
+            registry.register(MCPCatalogTool())
+        except Exception as e:
+            logger.warning(f"Failed to register mcp_search_tools: {e}")
+    if registry.get("mcp_call_tool") is None:
+        try:
+            registry.register(MCPCallTool())
+        except Exception as e:
+            logger.warning(f"Failed to register mcp_call_tool: {e}")
+
+    # 2. Load only pinned tools as first-class DAWN tools.
     try:
         import db.client as db
         supabase = db.get_db()
         res = await db._async_execute(lambda: supabase.table("mcp_tools").select(
             "server_id, name, description, input_schema"
-        ).eq("enabled", True).execute())
+        ).eq("enabled", True).eq("pinned", True).execute())
     except Exception as e:
         logger.warning(f"Failed to load persisted MCP tools: {e}")
         return 0
 
-    registry = get_registry()
     count = 0
     for t in res.data or []:
         name = t.get("name")
@@ -520,13 +713,17 @@ async def load_persisted_mcp_tools() -> int:
         except Exception as e:
             logger.warning(f"Failed to register persisted MCP tool '{name}': {e}")
     if count:
-        logger.info(f"Loaded {count} persisted MCP tool(s) into the registry")
+        logger.info(f"Loaded {count} pinned MCP tool(s) into the registry")
     return count
 
 
 class RemoteMCPTool(BaseTool):
     """A tool discovered from an external MCP server, registered into DAWN's
-    registry so the agent can call it directly (name: 'mcp_<tool_name>')."""
+    registry so the agent can call it directly (name: 'mcp_<tool_name>').
+
+    Only tools explicitly pinned by the user are registered this way. All other
+    discovered tools live in the catalog and are reached via mcp_call_tool.
+    """
 
     def __init__(self, server_id: str, name: str, description: str, input_schema: dict):
         self._server_id = server_id
