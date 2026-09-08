@@ -236,20 +236,46 @@ async def probe_oauth(server_url: str) -> Optional[str]:
         return None
     try:
         async with httpx2.AsyncClient() as client:
-            resp = await client.get(
+            # MCP streamable HTTP servers only respond to POST (JSON-RPC), not
+            # GET. Send an unauthenticated `initialize` request — an
+            # OAuth-protected server answers with 401 + a `WWW-Authenticate`
+            # Bearer challenge carrying the protected-resource-metadata URL.
+            resp = await client.post(
                 server_url,
-                headers={MCP_PROTOCOL_VERSION_HEADER: "2025-06-18"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "DAWN", "version": "1.0.0"},
+                    },
+                },
+                headers={
+                    "accept": "application/json, text/event-stream",
+                    "content-type": "application/json",
+                    MCP_PROTOCOL_VERSION_HEADER: "2025-06-18",
+                },
             )
-            if resp.status_code != 401:
-                return None
-            www_auth = resp.headers.get("www-authenticate", "")
-            if "Bearer" not in www_auth:
-                return None
-            # Follow the protected-resource-metadata URL from the challenge.
-            prm_url = extract_resource_metadata_from_www_auth(resp)
+            # Some servers allow unauthenticated `initialize` but gate
+            # `tools/list` behind OAuth, so a 200 here doesn't rule OAuth out.
+            # Detect OAuth in two ways:
+            #   1. A 401 + WWW-Authenticate Bearer challenge on initialize.
+            #   2. RFC 9728 well-known protected-resource-metadata discovery
+            #      (the server may publish it even when initialize is open).
+            prm_url = None
+            if resp.status_code == 401:
+                www_auth = resp.headers.get("www-authenticate", "")
+                if "Bearer" in www_auth:
+                    prm_url = extract_resource_metadata_from_www_auth(resp)
+            # Always try well-known discovery as a fallback.
             prm_urls = build_protected_resource_metadata_discovery_urls(prm_url, server_url)
             for url in prm_urls:
-                prm_resp = await _send(client, create_oauth_metadata_request(url))
+                try:
+                    prm_resp = await _send(client, create_oauth_metadata_request(url))
+                except Exception:
+                    continue
                 prm = await handle_protected_resource_response(prm_resp)
                 if prm and prm.authorization_servers:
                     return str(prm.authorization_servers[0])
