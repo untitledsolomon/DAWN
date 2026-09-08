@@ -13,3 +13,7 @@ dawn-api/ingestion/__pycache__/
 *__pycache__/
 node_modules/
 dawn-api/sandbox.github_pat
+__pycache__/
+*.pyc
+venv/
+dawn-api/sandbox/
