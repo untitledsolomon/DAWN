@@ -1,16 +1,14 @@
 -- ──────────────────────────────────────────────────────────────────────────────
 -- v42.0: Agent Tasks + Schedules tables for the autonomous-task feature.
 --
--- The `agent_tasks` table used by routers/agent_tasks.py (and the dawn-ui
--- Agent Tasks page) stores long-running agent goals with progress tracking.
--- NOTE: Earlier migrations (003/009) created an `agent_tasks` table for a
--- *different* sub-agent concept (agent_name/task_type/input_data). If a
--- table with those columns already exists, this migration will NOT overwrite
--- it — drop that conflicting table first, or the router's inserts (goal,
--- parent_task_id, max_iterations, status) will fail against the wrong shape.
+-- `agent_tasks` stores long-running agent goals with progress tracking.
+-- `agent_schedules` drives the background scheduler that runs agent tasks
+-- autonomously on an interval basis.
 --
--- `agent_schedules` is brand new: it drives the background scheduler that
--- runs agent tasks autonomously on a cron/interval basis.
+-- Both tables may already exist in the live DB with a slightly different shape
+-- (e.g. agent_schedules historically used `is_active` / `next_run_at`). This
+-- migration is idempotent: it adds any missing columns and indexes rather than
+-- recreating the tables, so it's safe to run against an existing deployment.
 -- ──────────────────────────────────────────────────────────────────────────────
 
 -- Long-running agent tasks (goal + progress + status).
@@ -28,6 +26,12 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Add any missing agent_tasks columns (idempotent).
+ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS progress NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS iterations INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS tools_used JSONB DEFAULT '[]';
+ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
 CREATE INDEX IF NOT EXISTS idx_agent_tasks_status  ON agent_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_agent_tasks_created ON agent_tasks(created_at DESC);
 
@@ -38,14 +42,19 @@ CREATE TABLE IF NOT EXISTS agent_schedules (
     task_goal       TEXT        NOT NULL,
     cron_expression TEXT        NOT NULL DEFAULT '0 * * * *',
     max_iterations  INTEGER     NOT NULL DEFAULT 50,
-    enabled         BOOLEAN     NOT NULL DEFAULT TRUE,
+    is_active       BOOLEAN     NOT NULL DEFAULT TRUE,
     last_run_at     TIMESTAMPTZ,
-    run_count       INTEGER     NOT NULL DEFAULT 0,
+    next_run_at     TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_agent_schedules_enabled ON agent_schedules(enabled);
+-- Align an existing agent_schedules table to this schema (idempotent).
+ALTER TABLE agent_schedules ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE agent_schedules ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ;
+ALTER TABLE agent_schedules ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_agent_schedules_active ON agent_schedules(is_active);
 
 -- Auto-update updated_at on both tables.
 CREATE OR REPLACE FUNCTION update_agent_tasks_updated_at()
