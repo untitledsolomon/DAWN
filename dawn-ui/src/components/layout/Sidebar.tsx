@@ -9,7 +9,6 @@ import {
   Brain,
   Settings,
   PanelLeftClose,
-  PanelLeft,
   ChevronDown,
   Clock,
   Zap,
@@ -40,9 +39,20 @@ import {
   Server,
   FolderOpen,
   ListTodo,
+  LayoutDashboard,
+  LayoutGrid,
+  ShieldCheck,
 } from "lucide-react";
 import clsx from "clsx";
-import { listSessions, createSession, deleteSession, updateSession, countArtifacts } from "@/lib/api";
+import {
+  listSessions,
+  createSession,
+  deleteSession,
+  updateSession,
+  countArtifacts,
+  getPendingNodes,
+  listDecisionLog,
+} from "@/lib/api";
 import type { ChatSession } from "@/lib/types";
 
 // Navigation config
@@ -53,9 +63,20 @@ interface NavItem {
   badge?: number | string;
 }
 
+interface NavSectionDef {
+  key: string;
+  label: string;
+  items: NavItem[];
+}
+
+// Primary — Dashboard and Canvas are the new top-level surfaces; Approvals
+// carries a live pending-count badge. Visualize moved to Business since Canvas
+// is now the primary freeform surface.
 const PRIMARY_NAV: NavItem[] = [
+  { href: "/", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/chat", icon: MessageSquare, label: "Chat" },
-  { href: "/visualize", icon: BarChart3, label: "Visualize" },
+  { href: "/canvas", icon: LayoutGrid, label: "Canvas" },
+  { href: "/approvals", icon: ShieldCheck, label: "Approvals" },
   { href: "/nodes", icon: Database, label: "Knowledge" },
   { href: "/memory", icon: Brain, label: "Memory" },
   { href: "/agent-tasks", icon: ListTodo, label: "Agent Tasks" },
@@ -75,6 +96,7 @@ const BUSINESS_NAV: NavItem[] = [
   { href: "/monitoring", icon: HeartPulse, label: "Monitoring" },
   { href: "/books", icon: BookOpen, label: "Library" },
   { href: "/artifacts", icon: Image, label: "Artifacts" },
+  { href: "/visualize", icon: BarChart3, label: "Visualize" },
 ];
 
 const SKILLS_NAV: NavItem[] = [
@@ -89,6 +111,37 @@ const DECISIONS_NAV: NavItem[] = [
   { href: "/decisions", icon: ScrollText, label: "Decisions" },
   { href: "/admin/data-sources", icon: ActivitySquare, label: "Data Sources" },
 ];
+
+const SECTIONS: NavSectionDef[] = [
+  { key: "primary", label: "Primary", items: PRIMARY_NAV },
+  { key: "tools", label: "Tools", items: TOOLS_NAV },
+  { key: "skills", label: "Skills", items: SKILLS_NAV },
+  { key: "business", label: "Business", items: BUSINESS_NAV },
+  { key: "decisions", label: "Decisions", items: DECISIONS_NAV },
+];
+
+// Default: Primary always open; others open on first visit, then remembered.
+const DEFAULT_OPEN: Record<string, boolean> = {
+  primary: true,
+  tools: true,
+  skills: true,
+  business: true,
+  decisions: true,
+};
+
+const STORAGE_KEY = "dawn:sidebar:sections";
+
+function loadOpenState(): Record<string, boolean> {
+  if (typeof window === "undefined") return { ...DEFAULT_OPEN };
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_OPEN };
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_OPEN, ...parsed };
+  } catch {
+    return { ...DEFAULT_OPEN };
+  }
+}
 
 // Component
 interface Props {
@@ -106,6 +159,8 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [artifactCount, setArtifactCount] = useState<number>(0);
+  const [pendingCount, setPendingCount] = useState<number>(0);
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>(loadOpenState);
 
   // Fetch sessions
   const fetchSessions = useCallback(async () => {
@@ -129,10 +184,26 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
     }
   }, []);
 
+  // Fetch live pending-approvals count (pending nodes + unresolved decisions)
+  const fetchPendingCount = useCallback(async () => {
+    try {
+      const [nodes, decisions] = await Promise.all([
+        getPendingNodes().then((n) => n.length).catch(() => 0),
+        listDecisionLog({ limit: 100 })
+          .then((d) => d.filter((x) => !x.human_decision).length)
+          .catch(() => 0),
+      ]);
+      setPendingCount(nodes + decisions);
+    } catch {
+      // Silently fail — badge just stays hidden
+    }
+  }, []);
+
   useEffect(() => {
     fetchSessions();
     fetchArtifactCount();
-  }, [fetchSessions, fetchArtifactCount]);
+    fetchPendingCount();
+  }, [fetchSessions, fetchArtifactCount, fetchPendingCount]);
 
   // Poll for new sessions every 10s (pause when the tab is hidden)
   useEffect(() => {
@@ -150,12 +221,32 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
     return () => clearInterval(interval);
   }, [fetchArtifactCount]);
 
+  // Poll pending count every 15s (pause when the tab is hidden)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!document.hidden) fetchPendingCount();
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [fetchPendingCount]);
+
   // Listen for custom event from ChatWindow
   useEffect(() => {
     const handler = () => fetchSessions();
     window.addEventListener("dawn:session-changed", handler);
     return () => window.removeEventListener("dawn:session-changed", handler);
   }, [fetchSessions]);
+
+  const toggleSection = (key: string) => {
+    setOpenSections((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
 
   const handleNewChat = async () => {
     try {
@@ -223,7 +314,7 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
     ? new URLSearchParams(window.location.search).get("id")
     : null;
 
-  const isActive = (href: string) => path.startsWith(href);
+  const isActive = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
 
   const handleNavClick = () => {
     onMobileClose?.();
@@ -237,24 +328,26 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
         onClick={handleNavClick}
         title={collapsed ? label : undefined}
         className={clsx(
-          "flex items-center gap-2.5 rounded-lg transition-all duration-150 group relative",
-          collapsed ? "w-10 h-10 justify-center" : "px-2.5 py-2",
-          active ? "bg-dawn/10 text-dawn" : "text-text-muted hover:text-text-secondary hover:bg-elevated/60",
+          "flex items-center gap-2.5 rounded-nested transition-all duration-150 group relative",
+          collapsed ? "w-10 h-10 justify-center" : "h-[34px] px-[9px]",
+          active ? "teal-soft text-dawn font-semibold" : "text-text-muted hover:text-text-secondary hover:bg-elevated/60",
         )}
       >
-        <Icon size={16} strokeWidth={active ? 2 : 1.75} />
+        <Icon size={16} strokeWidth={active ? 2 : 1.75} className="flex-none" />
         {!collapsed && (
           <>
-            <span className="text-xs font-medium">{label}</span>
-            {badge && (
-              <span className="ml-auto text-2xs font-mono px-1.5 py-0.5 rounded-full bg-ember/15 text-ember">{badge}</span>
+            <span className="text-xs font-medium truncate">{label}</span>
+            {badge ? (
+              <span className="badge">{badge}</span>
+            ) : (
+              <span className="ml-auto" />
             )}
             {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-dawn rounded-r-full" />}
           </>
         )}
         {collapsed && active && <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-dawn rounded-r-full" />}
         {collapsed && (
-          <span className="absolute left-12 bg-surface border border-rim text-text-primary text-2xs px-2 py-1 rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity shadow-card z-50">
+          <span className="absolute left-12 bg-surface border border-rim text-text-primary text-2xs px-2 py-1 rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity shadow-soft z-50">
             {label}
           </span>
         )}
@@ -262,12 +355,32 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
     );
   };
 
-  const NavSection = ({ label, items }: { label: string; items: NavItem[] }) => {
+  const NavSection = ({ def }: { def: NavSectionDef }) => {
     if (collapsed) return null;
+    const open = openSections[def.key] ?? DEFAULT_OPEN[def.key];
     return (
-      <div className="pt-3 px-2">
-        <p className="text-text-muted text-2xs font-medium uppercase tracking-wider px-2.5 pb-1">{label}</p>
-        {items.map((item) => <NavLink key={item.href} {...item} />)}
+      <div className="pt-2 px-2">
+        <button
+          onClick={() => toggleSection(def.key)}
+          className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-text-muted hover:text-text-secondary transition-colors"
+          title={open ? "Collapse section" : "Expand section"}
+        >
+          <ChevronDown
+            size={11}
+            className={clsx("flex-none transition-transform duration-200", open ? "rotate-0" : "-rotate-90")}
+          />
+          <span className="text-2xs font-semibold uppercase tracking-wider">{def.label}</span>
+        </button>
+        <div
+          className={clsx(
+            "overflow-hidden transition-all duration-200",
+            open ? "max-h-96 opacity-100" : "max-h-0 opacity-0"
+          )}
+        >
+          <div className="pt-0.5 space-y-[1px]">
+            {def.items.map((item) => <NavLink key={item.href} {...item} />)}
+          </div>
+        </div>
       </div>
     );
   };
@@ -324,22 +437,16 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
 
       {/* Scrollable nav + recent area */}
       <div className="flex-1 min-h-0 overflow-y-auto sidebar-scroll flex flex-col">
-        {/* Primary navigation */}
-        <nav className={clsx("flex flex-col gap-0.5 pt-2 px-2 flex-shrink-0", collapsed && "items-center")}>
-          {PRIMARY_NAV.map((item) => <NavLink key={item.href} {...item} />)}
+        {/* Collapsible nav sections */}
+        <nav className={clsx("flex flex-col pt-1 flex-shrink-0", collapsed && "items-center")}>
+          {collapsed ? (
+            <div className="flex flex-col items-center gap-0.5 pt-1 px-2">
+              {PRIMARY_NAV.map((item) => <NavLink key={item.href} {...item} />)}
+            </div>
+          ) : (
+            SECTIONS.map((def) => <NavSection key={def.key} def={def} />)
+          )}
         </nav>
-
-        {/* Tools section */}
-        <div className="flex-shrink-0"><NavSection label="Tools" items={TOOLS_NAV} /></div>
-
-        {/* Skills & MCP section */}
-        <div className="flex-shrink-0"><NavSection label="Skills" items={SKILLS_NAV} /></div>
-
-        {/* Business section */}
-        <div className="flex-shrink-0"><NavSection label="Business" items={BUSINESS_NAV} /></div>
-
-        {/* Decision Intelligence section */}
-        <div className="flex-shrink-0"><NavSection label="Decisions" items={DECISIONS_NAV} /></div>
 
         {/* Recent conversations */}
         {!collapsed && (
@@ -405,13 +512,13 @@ export default function Sidebar({ collapsed, onToggle, onMobileClose }: Props) {
       {/* Bottom section */}
       <div className={clsx("border-t border-rim pt-1 pb-2 px-2 flex flex-col gap-0.5 flex-shrink-0", collapsed && "items-center")}>
         <Link href="/settings" onClick={handleNavClick} title={collapsed ? "Settings" : undefined}
-          className={clsx("flex items-center gap-2.5 rounded-lg transition-all duration-150 group relative", collapsed ? "w-10 h-10 justify-center" : "px-2.5 py-2",
-            path === "/settings" ? "bg-dawn/10 text-dawn" : "text-text-muted hover:text-text-secondary hover:bg-elevated/60")}>
-          <Settings size={16} strokeWidth={path === "/settings" ? 2 : 1.75} />
+          className={clsx("flex items-center gap-2.5 rounded-nested transition-all duration-150 group relative", collapsed ? "w-10 h-10 justify-center" : "h-[34px] px-[9px]",
+            path === "/settings" ? "teal-soft text-dawn font-semibold" : "text-text-muted hover:text-text-secondary hover:bg-elevated/60")}>
+          <Settings size={16} strokeWidth={path === "/settings" ? 2 : 1.75} className="flex-none" />
           {!collapsed && <span className="text-xs font-medium">Settings</span>}
           {!collapsed && path === "/settings" && <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-dawn rounded-r-full" />}
           {collapsed && (
-            <span className="absolute left-12 bg-surface border border-rim text-text-primary text-2xs px-2 py-1 rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity shadow-card z-50">Settings</span>
+            <span className="absolute left-12 bg-surface border border-rim text-text-primary text-2xs px-2 py-1 rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity shadow-soft z-50">Settings</span>
           )}
         </Link>
 
