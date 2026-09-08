@@ -51,8 +51,10 @@ class Settings(BaseSettings):
     # OCR
     tesseract_cmd: Optional[str] = None
 
-    # CORS
-    allowed_origins: str = "http://localhost:3000"
+    # CORS — comma-separated list. Defaults cover the common local dev ports
+    # (Next.js picks 3000, or 3001 if 3000 is taken). Override with
+    # ALLOWED_ORIGINS in .env for production.
+    allowed_origins: str = "http://localhost:3000,http://localhost:3001"
 
     # Ingestion streaming config
     max_upload_gb: int = 30
