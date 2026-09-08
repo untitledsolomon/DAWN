@@ -56,13 +56,6 @@ const config: Config = {
         ember: "0 0 20px rgba(184, 77, 59, 0.10)",
         soft: "0 1px 2px rgba(20, 20, 20, 0.025)",
       },
-      borderRadius: {
-        // Standardized radius scale (dawn-preview): 10px standard, 8px nested
-        DEFAULT: "10px",
-        card: "10px",
-        nested: "8px",
-        pill: "9999px",
-      },
     },
   },
   plugins: [],

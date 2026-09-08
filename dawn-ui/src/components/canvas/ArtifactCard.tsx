@@ -25,7 +25,7 @@ function CardShell({
       className={clsx(
         "p-4",
         generative
-          ? "border border-dashed border-rim bg-surface rounded-card"
+          ? "border border-dashed border-rim bg-surface rounded-[10px]"
           : "card"
       )}
     >
@@ -53,7 +53,7 @@ function ChartBody({ artifact }: { artifact: Artifact }) {
     <div className="mt-3.5">
       <Suspense
         fallback={
-          <div className="flex items-center justify-center py-8 rounded-nested border border-rim bg-surface/50">
+          <div className="flex items-center justify-center py-8 rounded-[8px] border border-rim bg-surface/50">
             <Loader2 size={16} className="text-dawn animate-spin" />
           </div>
         }
@@ -67,7 +67,7 @@ function ChartBody({ artifact }: { artifact: Artifact }) {
 function TableBody({ artifact }: { artifact: Artifact }) {
   const rows = Array.isArray(artifact.spec?.data) ? (artifact.spec!.data as Record<string, unknown>[]) : [];
   return (
-    <div className="mt-3.5 overflow-x-auto rounded-nested border border-rim">
+    <div className="mt-3.5 overflow-x-auto rounded-[8px] border border-rim">
       {rows.length === 0 ? (
         <div className="px-4 py-6 text-center text-text-muted text-xs">
           No table data available.
@@ -102,7 +102,7 @@ function TableBody({ artifact }: { artifact: Artifact }) {
 
 function ImageBody({ artifact }: { artifact: Artifact }) {
   return (
-    <div className="mt-3.5 rounded-nested overflow-hidden border border-rim">
+    <div className="mt-3.5 rounded-[8px] overflow-hidden border border-rim">
       <img src={artifact.url!} alt={artifact.title} className="w-full h-auto" />
     </div>
   );
@@ -114,9 +114,9 @@ function FileBody({ artifact }: { artifact: Artifact }) {
       href={artifact.url!}
       target="_blank"
       rel="noreferrer"
-      className="mt-3.5 flex items-center gap-2.5 px-3.5 py-3 rounded-nested border border-rim bg-surface hover:border-dawn/40 transition-colors"
+      className="mt-3.5 flex items-center gap-2.5 px-3.5 py-3 rounded-[8px] border border-rim bg-surface hover:border-dawn/40 transition-colors"
     >
-      <div className="w-8 h-8 rounded-nested bg-dawn/10 border border-dawn/20 flex items-center justify-center">
+      <div className="w-8 h-8 rounded-[8px] bg-dawn/10 border border-dawn/20 flex items-center justify-center">
         <FileText size={14} className="text-dawn" />
       </div>
       <div className="min-w-0 flex-1">
@@ -132,7 +132,7 @@ function ExplainerBody({ artifact }: { artifact: Artifact }) {
     <div className="mt-3.5">
       <Suspense
         fallback={
-          <div className="flex items-center justify-center py-8 rounded-nested border border-rim bg-surface/50">
+          <div className="flex items-center justify-center py-8 rounded-[8px] border border-rim bg-surface/50">
             <Loader2 size={16} className="text-dawn animate-spin" />
           </div>
         }
