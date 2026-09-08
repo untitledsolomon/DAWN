@@ -11,17 +11,20 @@ const config: Config = {
         "2xs": ["0.625rem", { lineHeight: "0.875rem" }], // 10px
       },
       colors: {
-        // DAWN palette — cool neutral grey base, modern minimalist
-        abyss: "#F7F7F8",       // main background — cool light grey
+        // DAWN palette — warm neutral base, modern minimalist (dawn-preview)
+        abyss: "#FBFBFA",       // main background
         surface: "#FFFFFF",     // cards, sidebar
-        elevated: "#EEEEF0",    // inputs, hover states
-        rim: "#E2E2E6",         // borders
-        dawn: "#0E9BA8",        // primary accent — cool cyan-teal
-        ember: "#C96442",       // warm accent — terracotta (kept for warmth)
+        elevated: "#F5F5F3",    // inputs, hover states, elevated surfaces
+        rim: "#E4E4E2",         // borders
+        dawn: "#15807A",        // primary accent — deep teal
+        ember: "#B84D3B",       // destructive/warning — terracotta
+        amber: "#A66A00",       // warning amber
+        success: "#15807A",     // healthy / positive (teal)
+        error: "#B84D3B",       // unhealthy / negative (ember)
         text: {
-          primary: "#1F1F23",   // near-black cool grey
+          primary: "#16171A",   // near-black warm grey
           secondary: "#5F5F66",
-          muted: "#9A9AA3",
+          muted: "#929298",
         },
       },
       fontFamily: {
@@ -49,9 +52,16 @@ const config: Config = {
         },
       },
       boxShadow: {
-        dawn: "0 0 20px rgba(15, 168, 166, 0.10)",
-        ember: "0 0 20px rgba(201, 100, 66, 0.10)",
-        soft: "0 1px 3px rgba(43, 42, 39, 0.06), 0 1px 2px rgba(43, 42, 39, 0.04)",
+        dawn: "0 0 20px rgba(21, 128, 122, 0.10)",
+        ember: "0 0 20px rgba(184, 77, 59, 0.10)",
+        soft: "0 1px 2px rgba(20, 20, 20, 0.025)",
+      },
+      borderRadius: {
+        // Standardized radius scale (dawn-preview): 10px standard, 8px nested
+        DEFAULT: "10px",
+        card: "10px",
+        nested: "8px",
+        pill: "9999px",
       },
     },
   },

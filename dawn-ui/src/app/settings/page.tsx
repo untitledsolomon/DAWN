@@ -273,7 +273,7 @@ export default function SettingsPage() {
                           <span className="text-text-primary text-sm font-medium">Solomon John</span>
                         </div>
                       </div>
-                      <div className="dawn-line" />
+                      <div className="border-t border-rim" />
                       <div className="flex items-center justify-between">
                         <span className="text-text-secondary text-sm">Tier</span>
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-ember/10 text-ember text-xs font-mono font-medium">
@@ -281,12 +281,12 @@ export default function SettingsPage() {
                           Owner
                         </span>
                       </div>
-                      <div className="dawn-line" />
+                      <div className="border-t border-rim" />
                       <div className="flex items-center justify-between">
                         <span className="text-text-secondary text-sm">Instance</span>
                         <span className="text-text-primary text-sm font-mono">Paperclip VPS</span>
                       </div>
-                      <div className="dawn-line" />
+                      <div className="border-t border-rim" />
                       <div className="flex items-center justify-between">
                         <span className="text-text-secondary text-sm">Region</span>
                         <span className="text-text-primary text-sm font-mono">Kampala, UG</span>

@@ -727,7 +727,7 @@ function EmptyState({ mode }: { mode: ChatMode }) {
       </div>
 
       {/* Horizon decorative line */}
-      <div className="w-24 sm:w-32 dawn-line opacity-30" />
+      <div className="w-24 sm:w-32 border-t border-rim opacity-30" />
     </div>
   );
 }

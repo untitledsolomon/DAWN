@@ -10,7 +10,10 @@ interface Props {
 }
 
 const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
+  "/": { title: "Dashboard", subtitle: "Command center" },
   "/chat": { title: "Chat", subtitle: "Ask DAWN anything" },
+  "/canvas": { title: "Canvas", subtitle: "Freeform workspace for artifacts" },
+  "/approvals": { title: "Approvals", subtitle: "Review queue" },
   "/visualize": { title: "Visualize", subtitle: "Data visualization and charting" },
   "/nodes": { title: "Knowledge Base", subtitle: "Browse and manage the knowledge graph" },
   "/memory": { title: "Memory & Ingestion", subtitle: "Review facts, upload files, ingest data" },
@@ -25,7 +28,6 @@ export default function TopBar({ onToggleSidebar, onToggleMobileSidebar, mobileS
 
   return (
     <header className="flex-shrink-0 bg-surface border-b border-rim relative z-50">
-      <div className="dawn-line" />
       <div className="flex items-center justify-between px-3 sm:px-4 py-2">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           {/* Mobile hamburger */}

@@ -2,54 +2,187 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Dawn horizon line ──────────────────────────────────────────────────────────── */
-.dawn-line {
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    #C96442 25%,
-    #0FA8A6 50%,
-    #C96442 75%,
-    transparent 100%
-  );
-  opacity: 0.6;
-}
-
-.dawn-line-vertical {
-  width: 1px;
-  background: linear-gradient(
-    180deg,
-    transparent 0%,
-    #C96442 25%,
-    #0FA8A6 50%,
-    #C96442 75%,
-    transparent 100%
-  );
-  opacity: 0.4;
-}
-
 /* ── Scrollbar ──────────────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #E2E2E6; border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: #0FA8A644; }
+::-webkit-scrollbar-thumb { background: #E4E4E2; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(21, 128, 122, 0.35); }
 
 /* ── Selection ──────────────────────────────────────────────────────────────────── */
-::selection { background: #0FA8A633; color: #1F1F23; }
+::selection { background: rgba(21, 128, 122, 0.18); color: #16171A; }
 
 /* ── Base ───────────────────────────────────────────────────────────────────────── */
 html, body { height: 100%; }
 body {
-  background-color: #F7F7F8;
-  color: #1F1F23;
+  background-color: #FBFBFA;
+  color: #16171A;
   font-family: var(--font-outfit), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
+/* ── Teal-soft surface (active nav, running rows) ───────────────────────────────── */
+.teal-soft {
+  background-color: rgba(21, 128, 122, 0.09);
+}
+
+/* ── Shared dashboard / preview component classes ─────────────────────────────────
+   Tailwind component layer — these resolve to real Tailwind utilities at build
+   time (via @apply), matching the dawn-preview visual language while staying
+   integrated with the app's Tailwind setup. */
+@layer components {
+  .card {
+    @apply bg-surface border border-rim rounded-card shadow-soft;
+  }
+  .cardhead {
+    @apply flex items-center justify-between px-3.5 py-3 border-b border-rim;
+  }
+  .eyebrow {
+    @apply text-[10px] font-semibold text-text-muted;
+  }
+  .subtitle {
+    @apply text-text-muted text-xs mt-1;
+  }
+  .mono {
+    @apply font-mono text-text-muted text-[10px];
+  }
+
+  /* Alerts strip */
+  .alerts {
+    @apply max-h-[202px] overflow-auto;
+  }
+  .alert {
+    @apply flex items-start gap-2.5 px-3.5 py-2.5 border-b border-elevated border-l-2 border-l-text-muted;
+  }
+  .alert:last-child {
+    @apply border-b-0;
+  }
+  .alert-icon {
+    @apply text-text-muted w-[15px] flex-none mt-0.5;
+  }
+  .alert-main {
+    @apply flex-1 min-w-0;
+  }
+  .ack {
+    @apply border-0 bg-transparent text-text-muted hover:text-dawn text-[10px] flex-none;
+  }
+
+  /* KPI grid */
+  .grid2 {
+    @apply grid grid-cols-1 md:grid-cols-2 gap-4 mt-4;
+  }
+  .kpi {
+    @apply p-3.5;
+  }
+  .kpi-top {
+    @apply flex items-center justify-between mb-3.5;
+  }
+  .status-dot {
+    @apply w-[7px] h-[7px] rounded-full;
+  }
+  .metrics {
+    @apply grid grid-cols-2 border border-rim rounded-nested overflow-hidden;
+  }
+  .metric {
+    @apply p-3 border-r border-b border-rim;
+  }
+  .metric:nth-child(2n) {
+    @apply border-r-0;
+  }
+  .metric:nth-last-child(-n+2) {
+    @apply border-b-0;
+  }
+  .metric label {
+    @apply text-[10px] text-text-muted;
+  }
+  .metric strong {
+    @apply block font-mono font-semibold text-[19px] text-text-primary mt-1 tracking-tight;
+  }
+
+  /* Activity feed */
+  .feed {
+    @apply mt-4;
+  }
+  .feedrow {
+    @apply flex items-start gap-2.5 px-3.5 py-3 border-b border-elevated;
+  }
+  .feedrow:last-child {
+    @apply border-b-0;
+  }
+  .feeddot {
+    @apply w-1.5 h-1.5 rounded-full bg-dawn/65 mt-1.5 flex-none;
+  }
+  .feedtext {
+    @apply flex-1;
+  }
+  .running {
+    @apply bg-dawn/5 border-l-2 border-l-dawn;
+  }
+  .pulse {
+    @apply w-2.5 h-2.5 rounded-full bg-dawn mt-1 relative flex-none;
+  }
+  .pulse:before {
+    content: "";
+    @apply absolute -inset-1 border border-dawn/35 rounded-full;
+    animation: pulse 1.5s infinite;
+  }
+  .progress {
+    @apply h-[5px] bg-elevated rounded-full mt-2 overflow-hidden;
+  }
+  .progress i {
+    @apply block h-full bg-dawn rounded-full;
+  }
+
+  /* Approval cards */
+  .approval {
+    @apply p-3.5 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4;
+  }
+  .approval-main {
+    @apply flex-1 min-w-0;
+  }
+  .approval-title {
+    @apply text-[13px] font-semibold text-text-primary;
+  }
+  .approval-desc {
+    @apply text-[11px] text-text-secondary mt-1;
+  }
+  .approval-actions {
+    @apply flex items-center gap-2 sm:flex-none;
+  }
+  .resolved {
+    @apply opacity-45;
+  }
+  .check {
+    @apply w-6 h-6 rounded-full grid place-items-center bg-dawn/15 text-dawn flex-none;
+  }
+
+  /* Canvas input bar */
+  .inputbar {
+    @apply sticky bottom-3 bg-surface border border-rim rounded-card p-1.5 flex items-center shadow-soft;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center gap-1 border border-rim bg-surface text-text-secondary rounded-nested h-8 px-2.5 text-xs font-medium transition-colors hover:border-rim hover:text-text-primary;
+  }
+  .btn.primary {
+    @apply bg-dawn border-dawn text-white hover:bg-dawn;
+  }
+  .btn.outline-teal {
+    @apply text-dawn border-dawn/40 bg-surface hover:bg-dawn/5;
+  }
+
+  /* Sidebar badge (approvals count) */
+  .badge {
+    @apply ml-auto min-w-[18px] h-[18px] rounded-pill bg-elevated text-text-secondary font-mono text-[11px] leading-[18px] text-center px-1.5;
+  }
+  .active .badge {
+    @apply bg-dawn/15 text-dawn;
+  }
+}
+
 /* ── Prose in DAWN responses ────────────────────────────────────────────────────── */
 .dawn-prose h1, .dawn-prose h2, .dawn-prose h3 {
-  color: #1F1F23;
+  color: #16171A;
   font-weight: 600;
   margin-top: 1rem;
   margin-bottom: 0.5rem;
@@ -60,16 +193,16 @@ body {
 .dawn-prose p { margin-bottom: 0.75rem; color: #5F5F66; line-height: 1.65; }
 .dawn-prose code {
   font-family: var(--font-jetbrains), monospace;
-  background: #EEEEF0;
-  border: 1px solid #E2E2E6;
+  background: #F5F5F3;
+  border: 1px solid #E4E4E2;
   border-radius: 4px;
   padding: 0.1em 0.4em;
   font-size: 0.85em;
-  color: #0E9BA8;
+  color: #15807A;
 }
 .dawn-prose pre {
-  background: #FCFCFD;
-  border: 1px solid #E2E2E6;
+  background: #FFFFFF;
+  border: 1px solid #E4E4E2;
   border-radius: 8px;
   padding: 1rem;
   overflow-x: auto;
@@ -79,7 +212,7 @@ body {
   background: none;
   border: none;
   padding: 0;
-  color: #1F1F23;
+  color: #16171A;
 }
 .dawn-prose ul, .dawn-prose ol {
   padding-left: 1.5rem;
@@ -87,10 +220,10 @@ body {
   color: #5F5F66;
 }
 .dawn-prose li { margin-bottom: 0.25rem; }
-.dawn-prose strong { color: #1F1F23; font-weight: 600; }
-.dawn-prose a { color: #0FA8A6; text-decoration: underline; text-underline-offset: 3px; }
+.dawn-prose strong { color: #16171A; font-weight: 600; }
+.dawn-prose a { color: #15807A; text-decoration: underline; text-underline-offset: 3px; }
 .dawn-prose blockquote {
-  border-left: 2px solid #0FA8A644;
+  border-left: 2px solid #15807A44;
   padding-left: 1rem;
   color: #5F5F66;
   margin: 0.75rem 0;
@@ -112,6 +245,12 @@ body {
   50% { opacity: 1; }
 }
 
+/* Indeterminate progress fill — used when a running task has no real % */
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
 @keyframes scan {
   0%, 100% { opacity: 0.5; }
   50% { opacity: 1; }
@@ -122,7 +261,7 @@ body {
 }
 
 .animate-shimmer {
-  background: linear-gradient(90deg, #EEEEF0 25%, #F7F7F8 50%, #EEEEF0 75%);
+  background: linear-gradient(90deg, #F5F5F3 25%, #F7F7F8 50%, #F5F5F3 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s ease-in-out infinite;
 }
@@ -138,7 +277,7 @@ body {
 /* ── Sidebar scrollbar ──────────────────────────────────────────────────────────── */
 .sidebar-scroll::-webkit-scrollbar { width: 2px; }
 .sidebar-scroll::-webkit-scrollbar-thumb { background: transparent; }
-.sidebar-scroll:hover::-webkit-scrollbar-thumb { background: #E2E2E6; }
+.sidebar-scroll:hover::-webkit-scrollbar-thumb { background: #E4E4E2; }
 
 /* ── Input glow ─────────────────────────────────────────────────────────────────── */
 .input-glow:focus-within {
