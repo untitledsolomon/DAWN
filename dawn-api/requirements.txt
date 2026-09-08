@@ -81,3 +81,6 @@ impacket>=0.11.0
 # v36.0 — Slack Integration
 slack-bolt>=1.18.0
 slack-sdk>=3.27.0
+
+# v42.0 — Autonomous Agent Scheduler
+apscheduler>=3.10.0,<4.0

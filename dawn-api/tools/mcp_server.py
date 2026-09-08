@@ -407,6 +407,47 @@ def _make_tool_wrapper(tool: BaseTool):
     return handler
 
 
+async def load_persisted_mcp_tools() -> int:
+    """Load previously-discovered MCP tools from the DB into the registry.
+
+    Called at startup so tools from connected MCP servers survive a restart —
+    otherwise the agent would only see them for the lifetime of the process
+    that connected. Returns the number of tools loaded.
+    """
+    try:
+        import db.client as db
+        supabase = db.get_db()
+        res = await db._async_execute(lambda: supabase.table("mcp_tools").select(
+            "server_id, name, description, input_schema"
+        ).eq("enabled", True).execute())
+    except Exception as e:
+        logger.warning(f"Failed to load persisted MCP tools: {e}")
+        return 0
+
+    registry = get_registry()
+    count = 0
+    for t in res.data or []:
+        name = t.get("name")
+        server_id = t.get("server_id")
+        if not name or not server_id:
+            continue
+        if registry.get(f"mcp_{name}"):
+            continue  # already registered
+        try:
+            registry.register(RemoteMCPTool(
+                server_id,
+                name,
+                t.get("description") or name,
+                t.get("input_schema") or {"type": "object", "properties": {}},
+            ))
+            count += 1
+        except Exception as e:
+            logger.warning(f"Failed to register persisted MCP tool '{name}': {e}")
+    if count:
+        logger.info(f"Loaded {count} persisted MCP tool(s) into the registry")
+    return count
+
+
 class RemoteMCPTool(BaseTool):
     """A tool discovered from an external MCP server, registered into DAWN's
     registry so the agent can call it directly (name: 'mcp_<tool_name>')."""

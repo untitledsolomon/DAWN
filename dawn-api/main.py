@@ -225,6 +225,23 @@ async def start_background_services():
     except Exception as e:
         logger.error(f"Failed to start dynamic agent scheduler: {e}")
 
+    # v42.0: Start autonomous agent-task scheduler (runs due agent_schedules)
+    try:
+        from tools.agent_scheduler import start_agent_scheduler
+        scheduler = start_agent_scheduler()
+        if scheduler:
+            logger.info("Autonomous agent scheduler started")
+    except Exception as e:
+        logger.error(f"Failed to start autonomous agent scheduler: {e}")
+
+    # v42.0: Load persisted MCP tools into the registry so connected servers'
+    # tools survive restarts. Runs after migrations so the mcp_tools table exists.
+    try:
+        from tools.mcp_server import load_persisted_mcp_tools
+        await load_persisted_mcp_tools()
+    except Exception as e:
+        logger.error(f"Failed to load persisted MCP tools: {e}")
+
     # Slack bot — auto-start if tokens are configured
     try:
         import os
