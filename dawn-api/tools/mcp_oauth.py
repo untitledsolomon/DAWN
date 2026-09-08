@@ -260,15 +260,32 @@ async def probe_oauth(server_url: str) -> Optional[str]:
             )
             # Some servers allow unauthenticated `initialize` but gate
             # `tools/list` behind OAuth, so a 200 here doesn't rule OAuth out.
-            # Detect OAuth in two ways:
+            # Detect OAuth in three ways:
             #   1. A 401 + WWW-Authenticate Bearer challenge on initialize.
-            #   2. RFC 9728 well-known protected-resource-metadata discovery
-            #      (the server may publish it even when initialize is open).
+            #   2. A 401 + WWW-Authenticate Bearer challenge on `tools/list`
+            #      (the common case: initialize is open, tools are gated).
+            #   3. RFC 9728 well-known protected-resource-metadata discovery
+            #      (the server may publish it even when no request 401s).
             prm_url = None
             if resp.status_code == 401:
                 www_auth = resp.headers.get("www-authenticate", "")
                 if "Bearer" in www_auth:
                     prm_url = extract_resource_metadata_from_www_auth(resp)
+            else:
+                # initialize succeeded — try a gated call to surface the challenge.
+                tools_resp = await client.post(
+                    server_url,
+                    json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+                    headers={
+                        "accept": "application/json, text/event-stream",
+                        "content-type": "application/json",
+                        MCP_PROTOCOL_VERSION_HEADER: "2025-06-18",
+                    },
+                )
+                if tools_resp.status_code == 401:
+                    www_auth = tools_resp.headers.get("www-authenticate", "")
+                    if "Bearer" in www_auth:
+                        prm_url = extract_resource_metadata_from_www_auth(tools_resp)
             # Always try well-known discovery as a fallback.
             prm_urls = build_protected_resource_metadata_discovery_urls(prm_url, server_url)
             for url in prm_urls:
