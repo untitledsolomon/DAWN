@@ -26,7 +26,7 @@ export default function Pill({ children, tone = "neutral", className }: Props) {
   return (
     <span
       className={clsx(
-        "inline-flex items-center rounded-pill border px-1.5 py-0.5 font-mono text-2xs uppercase tracking-wider",
+        "inline-flex items-center rounded-full border px-1.5 py-0.5 font-mono text-2xs uppercase tracking-wider",
         TONES[tone],
         className
       )}

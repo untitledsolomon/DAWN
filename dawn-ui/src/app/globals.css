@@ -31,7 +31,7 @@ body {
    integrated with the app's Tailwind setup. */
 @layer components {
   .card {
-    @apply bg-surface border border-rim rounded-card shadow-soft;
+    @apply bg-surface border border-rim rounded-[10px] shadow-soft;
   }
   .cardhead {
     @apply flex items-center justify-between px-3.5 py-3 border-b border-rim;
@@ -80,7 +80,7 @@ body {
     @apply w-[7px] h-[7px] rounded-full;
   }
   .metrics {
-    @apply grid grid-cols-2 border border-rim rounded-nested overflow-hidden;
+    @apply grid grid-cols-2 border border-rim rounded-[8px] overflow-hidden;
   }
   .metric {
     @apply p-3 border-r border-b border-rim;
@@ -157,12 +157,12 @@ body {
 
   /* Canvas input bar */
   .inputbar {
-    @apply sticky bottom-3 bg-surface border border-rim rounded-card p-1.5 flex items-center shadow-soft;
+    @apply sticky bottom-3 bg-surface border border-rim rounded-[10px] p-1.5 flex items-center shadow-soft;
   }
 
   /* Buttons */
   .btn {
-    @apply inline-flex items-center gap-1 border border-rim bg-surface text-text-secondary rounded-nested h-8 px-2.5 text-xs font-medium transition-colors hover:border-rim hover:text-text-primary;
+    @apply inline-flex items-center gap-1 border border-rim bg-surface text-text-secondary rounded-[8px] h-8 px-2.5 text-xs font-medium transition-colors hover:border-rim hover:text-text-primary;
   }
   .btn.primary {
     @apply bg-dawn border-dawn text-white hover:bg-dawn;
@@ -173,7 +173,7 @@ body {
 
   /* Sidebar badge (approvals count) */
   .badge {
-    @apply ml-auto min-w-[18px] h-[18px] rounded-pill bg-elevated text-text-secondary font-mono text-[11px] leading-[18px] text-center px-1.5;
+    @apply ml-auto min-w-[18px] h-[18px] rounded-full bg-elevated text-text-secondary font-mono text-[11px] leading-[18px] text-center px-1.5;
   }
   .active .badge {
     @apply bg-dawn/15 text-dawn;

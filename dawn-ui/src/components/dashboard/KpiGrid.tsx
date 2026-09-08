@@ -91,7 +91,7 @@ export default function KpiGrid() {
         {[0, 1].map((i) => (
           <div key={i} className="card kpi">
             <div className="h-4 w-24 rounded bg-elevated animate-pulse" />
-            <div className="mt-4 h-20 rounded-nested bg-elevated animate-pulse" />
+            <div className="mt-4 h-20 rounded-[8px] bg-elevated animate-pulse" />
           </div>
         ))}
       </div>
