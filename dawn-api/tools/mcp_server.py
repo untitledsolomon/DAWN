@@ -206,7 +206,23 @@ class MCPTool(BaseTool):
             tools = await self._discover_tools(server_id, client)
         except Exception as e:
             await self._disconnect_server(server_id)
-            return ToolResult(success=False, error=f"Connected but failed to discover tools: {e}")
+            # Discovery can 401 when the server requires OAuth even though the
+            # initial transport handshake succeeded (e.g. the first call is
+            # unauthenticated but tools/list is gated). Probe so the UI can
+            # offer a "Sign in" flow instead of a dead-end error.
+            requires_oauth = False
+            if server_type == "http" and ("unauthorized" in str(e).lower() or "401" in str(e)):
+                try:
+                    from tools import mcp_oauth
+                    if mcp_oauth.oauth_enabled():
+                        requires_oauth = bool(await mcp_oauth.probe_oauth(server.get("url") or ""))
+                except Exception:
+                    requires_oauth = False
+            return ToolResult(
+                success=False,
+                error=f"Connected but failed to discover tools: {e}",
+                metadata={"requires_oauth": requires_oauth},
+            )
         await self._persist_tools(server_id, tools)
 
         # Update last_connected_at and tools_count.
