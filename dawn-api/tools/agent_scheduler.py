@@ -39,7 +39,7 @@ def _owner_identity():
 
 
 async def _get_due_schedules() -> list[dict]:
-    """Return enabled schedules whose cron is due. For simplicity and
+    """Return active schedules whose cron is due. For simplicity and
     determinism we treat each schedule as due once per poll interval — a real
     cron evaluator can be swapped in later. `last_run_at` guards against
     re-running within the same minute."""
@@ -47,7 +47,7 @@ async def _get_due_schedules() -> list[dict]:
         supabase = db.get_db()
         res = await db._async_execute(lambda: supabase.table("agent_schedules")
             .select("*")
-            .eq("enabled", True)
+            .eq("is_active", True)
             .execute())
         now = datetime.now(timezone.utc)
         due = []
@@ -162,7 +162,7 @@ async def _run_schedule(schedule: dict) -> None:
         supabase = db.get_db()
         await db._async_execute(lambda: supabase.table("agent_schedules").update({
             "last_run_at": "now()",
-            "run_count": (schedule.get("run_count") or 0) + 1,
+            "next_run_at": None,
         }).eq("id", schedule_id).execute())
     except Exception as e:
         logger.error(f"[AgentScheduler] Failed to update schedule: {e}")
