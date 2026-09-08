@@ -34,7 +34,7 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 try:
-    import httpx2
+    import httpx
     from mcp.client.auth.utils import (
         build_oauth_authorization_server_metadata_discovery_urls,
         build_protected_resource_metadata_discovery_urls,
@@ -54,7 +54,7 @@ try:
     HAS_OAUTH = True
 except ImportError:
     HAS_OAUTH = False
-    httpx2 = None  # type: ignore
+    httpx = None  # type: ignore
 
 
 def oauth_enabled() -> bool:
@@ -189,7 +189,7 @@ async def refresh_tokens(server_id: str) -> Optional[str]:
         data["client_secret"] = client_secret
 
     try:
-        async with httpx2.AsyncClient() as client:
+        async with httpx.AsyncClient() as client:
             resp = await client.post(row["token_endpoint"], data=data, headers=headers)
         if resp.status_code != 200:
             logger.warning(f"OAuth token refresh failed for {server_id}: HTTP {resp.status_code}")
@@ -228,8 +228,8 @@ def _token_row_from_token(token: OAuthToken, existing: dict) -> dict:
 
 # ── Discovery + DCR ────────────────────────────────────────────────────────
 
-async def _send(client: httpx2.AsyncClient, request: httpx2.Request) -> httpx2.Response:
-    """Send an SDK-built httpx2.Request and return the response."""
+async def _send(client: httpx.AsyncClient, request: httpx.Request) -> httpx.Response:
+    """Send an SDK-built httpx.Request and return the response."""
     return await client.send(request)
 
 
@@ -252,7 +252,7 @@ async def probe_oauth(server_url: str) -> Optional[OAuthDiscovery]:
     if not HAS_OAUTH:
         return None
     try:
-        async with httpx2.AsyncClient() as client:
+        async with httpx.AsyncClient() as client:
             # MCP streamable HTTP servers only respond to POST (JSON-RPC), not
             # GET. Send an unauthenticated `initialize` request — an
             # OAuth-protected server answers with 401 + a `WWW-Authenticate`
@@ -337,7 +337,7 @@ async def _discover_oauth_metadata(server_url: str, auth_server_url: str):
     """Fetch the Authorization Server Metadata (OAuthMetadata) for the issuer."""
     if not HAS_OAUTH:
         return None
-    async with httpx2.AsyncClient() as client:
+    async with httpx.AsyncClient() as client:
         for url in build_oauth_authorization_server_metadata_discovery_urls(auth_server_url, server_url):
             resp = await _send(client, create_oauth_metadata_request(url))
             ok, asm = await handle_auth_metadata_response(resp)
@@ -361,7 +361,7 @@ async def _register_client(server_url: str, oauth_metadata, redirect_uri: str) -
     )
     auth_base = _origin(server_url)
     request = create_client_registration_request(oauth_metadata, client_metadata, auth_base)
-    async with httpx2.AsyncClient() as client:
+    async with httpx.AsyncClient() as client:
         resp = await _send(client, request)
         client_info = await handle_registration_response(resp)
     return {
@@ -512,7 +512,7 @@ async def handle_oauth_callback(server_id: str, code: str, state: str, iss: Opti
         data["client_secret"] = flow.client_secret
 
     try:
-        async with httpx2.AsyncClient() as client:
+        async with httpx.AsyncClient() as client:
             resp = await client.post(flow.token_endpoint, data=data, headers=headers)
         if resp.status_code not in (200, 201):
             body = (await resp.aread()).decode("utf-8", "replace")

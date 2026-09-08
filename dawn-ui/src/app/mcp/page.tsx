@@ -60,15 +60,17 @@ function MCPServersContent() {
   const [toolsLoading, setToolsLoading] = useState(false);
   const [toolsError, setToolsError] = useState<string | null>(null);
 
-  const fetchServers = useCallback(async () => {
+  const fetchServers = useCallback(async (): Promise<MCPServer[]> => {
     try {
       setLoading(true);
       const data = await listMCPServers();
       setServers(data);
       setError(null);
+      return data;
     } catch (err) {
       console.error("[MCP] Failed to load servers:", err);
       setError("Failed to load MCP servers");
+      return [];
     } finally {
       setLoading(false);
     }
@@ -117,8 +119,15 @@ function MCPServersContent() {
       console.error("[MCP] Failed to connect:", err);
       const requiresOAuth =
         err instanceof Error && (err as Error & { requiresOAuth?: boolean }).requiresOAuth === true;
+      if (requiresOAuth) {
+        // Match Claude connectors: don't make the user notice and click a
+        // separate "Sign in" button — go straight into the consent popup.
+        setRequiresOAuthId(server.id);
+        setConnectingId(null);
+        await handleSignIn(server);
+        return;
+      }
       setConnectError(err instanceof Error ? err.message : "Failed to connect");
-      if (requiresOAuth) setRequiresOAuthId(server.id);
     } finally {
       setConnectingId(null);
     }
@@ -207,7 +216,7 @@ function MCPServersContent() {
         url: formType === "http" ? formUrl.trim() || undefined : undefined,
         api_key: formType === "http" ? formApiKey.trim() || undefined : undefined,
       });
-      await fetchServers();
+      const created = await fetchServers();
       // Reset form
       setShowForm(false);
       setFormName("");
@@ -216,6 +225,16 @@ function MCPServersContent() {
       setFormArgs("");
       setFormUrl("");
       setFormApiKey("");
+
+      // Match the "add -> immediately try to connect" flow of Claude
+      // connectors: attempt connect right away. If the server turns out to
+      // need OAuth, handleConnect will set requiresOAuthId and we launch the
+      // sign-in popup automatically instead of leaving the user to notice a
+      // "Sign in" button on their own.
+      const newServer = created?.find((s) => s.name === formName.trim()) ?? null;
+      if (newServer) {
+        await handleConnect(newServer);
+      }
     } catch (err) {
       console.error("[MCP] Failed to create:", err);
       setFormError(err instanceof Error ? err.message : "Failed to create server");
