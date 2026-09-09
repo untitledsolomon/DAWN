@@ -154,29 +154,51 @@ function MCPServersContent() {
       setSigningInId(server.id);
       setConnectError(null);
       setRequiresOAuthId(null);
+
+      // Open a blank popup FIRST, synchronously inside the user gesture, so
+      // the browser does not treat it as a popup and silently block it. We
+      // navigate it to the authorization URL once startMCPOAuth returns.
+      // (Calling window.open AFTER an await makes it a non-user-gesture open,
+      // which browsers block — window.open returns null and the flow hangs.)
+      const popup = window.open("", "_blank", "width=520,height=640");
+
       const { authorization_url } = await startMCPOAuth(server.id);
-      // Open the authorization URL in a popup and wait for the callback page to
-      // postMessage back, then retry connect automatically.
-      const popup = window.open(authorization_url, "_blank", "width=520,height=640");
-      const done = new Promise<void>((resolve) => {
+
+      if (!popup) {
+        // Popup was blocked (window.open returned null). Surface a clear error
+        // instead of hanging forever on a popup that never opens.
+        setConnectError(
+          "Sign-in popup was blocked by the browser. Allow popups for this site, then try again."
+        );
+        return;
+      }
+
+      popup.location.href = authorization_url;
+
+      // Wait for the callback page to postMessage back, OR the popup to close.
+      // The popup is guaranteed non-null here, so this never hangs silently.
+      await new Promise<void>((resolve) => {
         const onMessage = (event: MessageEvent) => {
           if (event.data && event.data.type === "mcp-oauth-result") {
-            window.removeEventListener("message", onMessage);
+            cleanup();
             resolve();
           }
+        };
+        const cleanup = () => {
+          window.removeEventListener("message", onMessage);
+          clearInterval(poll);
         };
         window.addEventListener("message", onMessage);
         // Fallback: if the popup closes without a postMessage, resolve anyway
         // so we retry connect (the token may still have been persisted).
         const poll = setInterval(() => {
-          if (popup && popup.closed) {
-            clearInterval(poll);
-            window.removeEventListener("message", onMessage);
+          if (popup.closed) {
+            cleanup();
             resolve();
           }
         }, 500);
       });
-      await done;
+
       await connectMCPServer(server.id);
       await fetchServers();
       if (selectedServerId === server.id) {

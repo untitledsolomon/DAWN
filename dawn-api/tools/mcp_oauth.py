@@ -34,7 +34,7 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 try:
-    import httpx
+    import httpx2 as httpx  # SDK auth helpers use the vendored httpx2 fork
     from mcp.client.auth.utils import (
         build_oauth_authorization_server_metadata_discovery_urls,
         build_protected_resource_metadata_discovery_urls,
@@ -62,7 +62,7 @@ def oauth_enabled() -> bool:
     return HAS_OAUTH
 
 
-# ── In-memory pending flows ────────────────────────────────────────────────
+# ── In-memory pending flows ─────────────────────────────────────────────────
 # The authorization code flow is split across two routes: /oauth/start returns
 # the authorization URL, /oauth/callback receives the code. The code_verifier
 # and state must survive between the two. DAWN runs a single uvicorn worker, so
@@ -83,6 +83,7 @@ class PendingFlow:
     scope: Optional[str] = None
     resource: Optional[str] = None  # RFC 8707 resource indicator
     issuer: Optional[str] = None    # RFC 8414 issuer, for RFC 9207 validation
+    server_id: Optional[str] = None  # DAWN server id, resolved from state at callback
 
 
 _pending_flows: dict[str, PendingFlow] = {}
@@ -94,7 +95,7 @@ def _redirect_uri() -> str:
     return f"{base}/mcp/oauth/callback"
 
 
-# ── Token persistence (Supabase-backed) ────────────────────────────────────
+# ── Token persistence (Supabase-backed) ─────────────────────────────────────
 
 async def _load_token_row(server_id: str) -> Optional[dict]:
     import db.client as db
@@ -226,7 +227,7 @@ def _token_row_from_token(token: OAuthToken, existing: dict) -> dict:
     }
 
 
-# ── Discovery + DCR ────────────────────────────────────────────────────────
+# ── Discovery + DCR ─────────────────────────────────────────────────────────
 
 async def _send(client: httpx.AsyncClient, request: httpx.Request) -> httpx.Response:
     """Send an SDK-built httpx.Request and return the response."""
@@ -394,12 +395,17 @@ def _canonical_resource(server_url: str, prm) -> str:
         return resource_url_from_server_url(server_url)
 
 
-async def start_oauth_flow(server_url: str) -> dict:
+async def start_oauth_flow(server_url: str, server_id: Optional[str] = None) -> dict:
     """Run discovery + DCR and build the authorization URL for a server.
 
     Returns a dict with the authorization URL to open in a popup, plus the
     `state` used to correlate the callback. Raises ValueError if the server
     does not support OAuth.
+
+    `server_id` is stored in the in-memory pending flow (keyed by `state`) so
+    the callback can resolve which DAWN server the tokens belong to without
+    relying on the authorization server echoing a custom `server_id` query
+    param back through the redirect (many ASes strip unknown params).
     """
     if not HAS_OAUTH:
         raise ValueError("MCP OAuth support not available (mcp SDK missing)")
@@ -460,6 +466,7 @@ async def start_oauth_flow(server_url: str) -> dict:
         scope=scope,
         resource=resource,
         issuer=str(oauth_metadata.issuer) if oauth_metadata.issuer else None,
+        server_id=server_id,
     )
 
     return {"authorization_url": authorization_url, "state": state}
@@ -474,17 +481,27 @@ def _check_registration_usable(client_info: dict) -> None:
         raise ValueError(f"Server registered for {method!r} but issued no client_secret")
 
 
-async def handle_oauth_callback(server_id: str, code: str, state: str, iss: Optional[str] = None) -> dict:
+async def handle_oauth_callback(server_id: Optional[str], code: str, state: str, iss: Optional[str] = None) -> dict:
     """Exchange the authorization code at the token endpoint and persist tokens.
 
     Validates the RFC 9207 `iss` parameter against the recorded issuer before
     exchanging the code. Returns a summary dict; raises ValueError on failure.
+
+    `server_id` is resolved from the pending flow (keyed by `state`) when the
+    authorization server did not echo it back as a query param; the explicit
+    `server_id` argument is used as a fallback when it was echoed.
     """
     flow = _pending_flows.pop(state, None)
     if flow is None:
         raise ValueError("Unknown or expired OAuth state — please retry sign-in")
     if not HAS_OAUTH:
         raise ValueError("MCP OAuth support not available")
+
+    # Resolve the DAWN server id: prefer the one stored at flow start (the
+    # authoritative source), falling back to the query param the AS echoed.
+    resolved_server_id = flow.server_id or server_id
+    if not resolved_server_id:
+        raise ValueError("Could not determine which server this OAuth flow belongs to")
 
     # RFC 9207 authorization-response issuer validation: if the AS advertises
     # iss support and returns one, it must match the recorded issuer.
@@ -531,6 +548,6 @@ async def handle_oauth_callback(server_id: str, code: str, state: str, iss: Opti
         "scope": token.scope or flow.scope,
         "resource": flow.resource,
     }
-    await _save_token_row(server_id, _token_row_from_token(token, existing))
+    await _save_token_row(resolved_server_id, _token_row_from_token(token, existing))
 
-    return {"status": "success", "server_id": server_id}
+    return {"status": "success", "server_id": resolved_server_id}

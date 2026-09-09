@@ -176,7 +176,7 @@ async def disconnect_mcp_server(server_id: str, _: None = Depends(verify_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── OAuth 2.1 (MCP Authorization spec) ─────────────────────────────────────
+# ── OAuth 2.1 (MCP Authorization spec) ──────────────────────────────────────
 
 @router.get("/mcp/servers/{server_id}/oauth/start", tags=["mcp"])
 async def mcp_oauth_start(server_id: str, _: None = Depends(verify_key)):
@@ -196,7 +196,7 @@ async def mcp_oauth_start(server_id: str, _: None = Depends(verify_key)):
         url = (res.data[0] or {}).get("url")
         if not url:
             raise HTTPException(status_code=400, detail="Server has no URL")
-        result = await mcp_oauth.start_oauth_flow(url)
+        result = await mcp_oauth.start_oauth_flow(url, server_id=server_id)
         return result
     except HTTPException:
         raise
@@ -209,9 +209,9 @@ async def mcp_oauth_start(server_id: str, _: None = Depends(verify_key)):
 
 @router.get("/mcp/oauth/callback", response_class=HTMLResponse)
 async def mcp_oauth_callback(
-    server_id: str = Query(...),
     code: str = Query(...),
     state: str = Query(...),
+    server_id: Optional[str] = Query(None),
     iss: Optional[str] = Query(None),
 ):
     """Receive the OAuth authorization code, exchange it, and close the popup.
@@ -221,6 +221,10 @@ async def mcp_oauth_callback(
     postMessages back to the opener (the MCP servers page) so the frontend can
     retry connect automatically. No API key is required here — the AS redirects
     the browser to this URL.
+
+    `server_id` is optional: it is resolved from the pending flow keyed by
+    `state` (stored when the flow started), so the callback works even when the
+    authorization server does not echo the custom `server_id` param back.
     """
     try:
         from tools import mcp_oauth

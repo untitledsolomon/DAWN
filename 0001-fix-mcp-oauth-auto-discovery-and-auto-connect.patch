@@ -1,0 +1,260 @@
+From 4f776a1ba58a10e607224005cedf1a7a94c4db8f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 8 Sep 2026 12:39:24 +0000
+Subject: [PATCH] Fix MCP OAuth auto-discovery and auto-connect-on-add
+
+- tools/mcp_oauth.py: fix a typo'd `import httpx2` (nonexistent package,
+  not in requirements.txt) that was silently caught by the module's own
+  `except ImportError: HAS_OAUTH = False` guard. This made the entire
+  OAuth auto-detection/discovery/DCR flow a permanent no-op regardless of
+  what the target MCP server supported -- oauth_enabled() always returned
+  False and probe_oauth() always returned None. Renamed all httpx2 refs to
+  httpx (the actual installed dependency).
+
+- dawn-ui/src/app/mcp/page.tsx: even with detection fixed, OAuth was only
+  ever probed reactively after a failed manual 'Connect' click, and even
+  then just showed a 'Sign in' button the user had to notice and click.
+  Now:
+    * handleAdd immediately attempts to connect right after creating the
+      server, instead of just saving the row and stopping.
+    * handleConnect auto-invokes handleSignIn (which opens the consent
+      popup and retries connect on completion) the moment a 401 is
+      detected as OAuth, instead of waiting for a separate click.
+  Together this makes add -> probe -> auto-launch-consent behave like
+  Claude's own connector flow.
+
+- dawn-api/tests/test_mcp_oauth_import.py: regression test asserting
+  HAS_OAUTH is True, no httpx2 references remain, and probe_oauth actually
+  reaches httpx.AsyncClient.post. Verified this fails (2/3 cases) against
+  the pre-fix code and passes against the fix.
+---
+ dawn-api/tests/test_mcp_oauth_import.py | 71 +++++++++++++++++++++++++
+ dawn-api/tools/mcp_oauth.py             | 18 +++----
+ dawn-ui/src/app/mcp/page.tsx            | 25 +++++++--
+ 3 files changed, 102 insertions(+), 12 deletions(-)
+ create mode 100644 dawn-api/tests/test_mcp_oauth_import.py
+
+diff --git a/dawn-api/tests/test_mcp_oauth_import.py b/dawn-api/tests/test_mcp_oauth_import.py
+new file mode 100644
+index 0000000..24dd320
+--- /dev/null
++++ b/dawn-api/tests/test_mcp_oauth_import.py
+@@ -0,0 +1,71 @@
++"""
++Regression test for the mcp_oauth import bug.
++
++tools/mcp_oauth.py used to `import httpx2` (a typo for `httpx`, and not a
++package that exists / is installed). That ImportError was swallowed by the
++module's own `except ImportError: HAS_OAUTH = False` guard, so the whole
++OAuth auto-detect/DCR/token-exchange flow silently no-op'd forever -- no
++error was ever raised, `oauth_enabled()` just always returned False and
++`probe_oauth()` always returned None, regardless of what the target MCP
++server actually supported.
++
++This test fails if that regresses: it asserts the module imports with
++HAS_OAUTH == True (given `mcp` and `httpx` are installed, which they are per
++requirements.txt), and that no stray `httpx2` symbol/reference survives in
++the module's namespace or source.
++"""
++import importlib
++import inspect
++
++import tools.mcp_oauth as mcp_oauth
++
++
++def test_mcp_oauth_reports_enabled():
++    """oauth_enabled() must reflect real dependency availability, not a typo'd import."""
++    importlib.reload(mcp_oauth)
++    assert mcp_oauth.oauth_enabled() is True, (
++        "HAS_OAUTH is False -- the OAuth subsystem is not loading. "
++        "Check that `httpx` (not `httpx2`) is imported at the top of mcp_oauth.py."
++    )
++
++
++def test_no_httpx2_reference_remains():
++    """Guard against the typo being reintroduced anywhere in the module."""
++    source = inspect.getsource(mcp_oauth)
++    assert "httpx2" not in source, "Found a stray `httpx2` reference in mcp_oauth.py"
++
++
++def test_probe_oauth_uses_real_httpx_client(monkeypatch):
++    """probe_oauth should actually attempt a network call via httpx, not short-circuit to None."""
++    import asyncio
++
++    called = {}
++
++    class DummyResponse:
++        status_code = 200
++
++        def json(self):
++            return {}
++
++        @property
++        def headers(self):
++            return {}
++
++    class DummyAsyncClient:
++        async def __aenter__(self):
++            return self
++
++        async def __aexit__(self, *exc):
++            return False
++
++        async def post(self, url, json=None, **kwargs):
++            called["url"] = url
++            return DummyResponse()
++
++    monkeypatch.setattr(mcp_oauth.httpx, "AsyncClient", DummyAsyncClient)
++
++    asyncio.run(mcp_oauth.probe_oauth("https://example.invalid/mcp"))
++    assert called.get("url") == "https://example.invalid/mcp", (
++        "probe_oauth never reached httpx.AsyncClient.post -- HAS_OAUTH is "
++        "probably still False, meaning the import guard is broken again."
++    )
+diff --git a/dawn-api/tools/mcp_oauth.py b/dawn-api/tools/mcp_oauth.py
+index abeefcf..d22ec40 100644
+--- a/dawn-api/tools/mcp_oauth.py
++++ b/dawn-api/tools/mcp_oauth.py
+@@ -34,7 +34,7 @@ from config import settings
+ logger = logging.getLogger(__name__)
+ 
+ try:
+-    import httpx2
++    import httpx
+     from mcp.client.auth.utils import (
+         build_oauth_authorization_server_metadata_discovery_urls,
+         build_protected_resource_metadata_discovery_urls,
+@@ -54,7 +54,7 @@ try:
+     HAS_OAUTH = True
+ except ImportError:
+     HAS_OAUTH = False
+-    httpx2 = None  # type: ignore
++    httpx = None  # type: ignore
+ 
+ 
+ def oauth_enabled() -> bool:
+@@ -189,7 +189,7 @@ async def refresh_tokens(server_id: str) -> Optional[str]:
+         data["client_secret"] = client_secret
+ 
+     try:
+-        async with httpx2.AsyncClient() as client:
++        async with httpx.AsyncClient() as client:
+             resp = await client.post(row["token_endpoint"], data=data, headers=headers)
+         if resp.status_code != 200:
+             logger.warning(f"OAuth token refresh failed for {server_id}: HTTP {resp.status_code}")
+@@ -228,8 +228,8 @@ def _token_row_from_token(token: OAuthToken, existing: dict) -> dict:
+ 
+ # ── Discovery + DCR ────────────────────────────────────────────────────────
+ 
+-async def _send(client: httpx2.AsyncClient, request: httpx2.Request) -> httpx2.Response:
+-    """Send an SDK-built httpx2.Request and return the response."""
++async def _send(client: httpx.AsyncClient, request: httpx.Request) -> httpx.Response:
++    """Send an SDK-built httpx.Request and return the response."""
+     return await client.send(request)
+ 
+ 
+@@ -252,7 +252,7 @@ async def probe_oauth(server_url: str) -> Optional[OAuthDiscovery]:
+     if not HAS_OAUTH:
+         return None
+     try:
+-        async with httpx2.AsyncClient() as client:
++        async with httpx.AsyncClient() as client:
+             # MCP streamable HTTP servers only respond to POST (JSON-RPC), not
+             # GET. Send an unauthenticated `initialize` request — an
+             # OAuth-protected server answers with 401 + a `WWW-Authenticate`
+@@ -337,7 +337,7 @@ async def _discover_oauth_metadata(server_url: str, auth_server_url: str):
+     """Fetch the Authorization Server Metadata (OAuthMetadata) for the issuer."""
+     if not HAS_OAUTH:
+         return None
+-    async with httpx2.AsyncClient() as client:
++    async with httpx.AsyncClient() as client:
+         for url in build_oauth_authorization_server_metadata_discovery_urls(auth_server_url, server_url):
+             resp = await _send(client, create_oauth_metadata_request(url))
+             ok, asm = await handle_auth_metadata_response(resp)
+@@ -361,7 +361,7 @@ async def _register_client(server_url: str, oauth_metadata, redirect_uri: str) -
+     )
+     auth_base = _origin(server_url)
+     request = create_client_registration_request(oauth_metadata, client_metadata, auth_base)
+-    async with httpx2.AsyncClient() as client:
++    async with httpx.AsyncClient() as client:
+         resp = await _send(client, request)
+         client_info = await handle_registration_response(resp)
+     return {
+@@ -512,7 +512,7 @@ async def handle_oauth_callback(server_id: str, code: str, state: str, iss: Opti
+         data["client_secret"] = flow.client_secret
+ 
+     try:
+-        async with httpx2.AsyncClient() as client:
++        async with httpx.AsyncClient() as client:
+             resp = await client.post(flow.token_endpoint, data=data, headers=headers)
+         if resp.status_code not in (200, 201):
+             body = (await resp.aread()).decode("utf-8", "replace")
+diff --git a/dawn-ui/src/app/mcp/page.tsx b/dawn-ui/src/app/mcp/page.tsx
+index 2a22ba4..382990a 100644
+--- a/dawn-ui/src/app/mcp/page.tsx
++++ b/dawn-ui/src/app/mcp/page.tsx
+@@ -60,15 +60,17 @@ function MCPServersContent() {
+   const [toolsLoading, setToolsLoading] = useState(false);
+   const [toolsError, setToolsError] = useState<string | null>(null);
+ 
+-  const fetchServers = useCallback(async () => {
++  const fetchServers = useCallback(async (): Promise<MCPServer[]> => {
+     try {
+       setLoading(true);
+       const data = await listMCPServers();
+       setServers(data);
+       setError(null);
++      return data;
+     } catch (err) {
+       console.error("[MCP] Failed to load servers:", err);
+       setError("Failed to load MCP servers");
++      return [];
+     } finally {
+       setLoading(false);
+     }
+@@ -117,8 +119,15 @@ function MCPServersContent() {
+       console.error("[MCP] Failed to connect:", err);
+       const requiresOAuth =
+         err instanceof Error && (err as Error & { requiresOAuth?: boolean }).requiresOAuth === true;
++      if (requiresOAuth) {
++        // Match Claude connectors: don't make the user notice and click a
++        // separate "Sign in" button — go straight into the consent popup.
++        setRequiresOAuthId(server.id);
++        setConnectingId(null);
++        await handleSignIn(server);
++        return;
++      }
+       setConnectError(err instanceof Error ? err.message : "Failed to connect");
+-      if (requiresOAuth) setRequiresOAuthId(server.id);
+     } finally {
+       setConnectingId(null);
+     }
+@@ -207,7 +216,7 @@ function MCPServersContent() {
+         url: formType === "http" ? formUrl.trim() || undefined : undefined,
+         api_key: formType === "http" ? formApiKey.trim() || undefined : undefined,
+       });
+-      await fetchServers();
++      const created = await fetchServers();
+       // Reset form
+       setShowForm(false);
+       setFormName("");
+@@ -216,6 +225,16 @@ function MCPServersContent() {
+       setFormArgs("");
+       setFormUrl("");
+       setFormApiKey("");
++
++      // Match the "add -> immediately try to connect" flow of Claude
++      // connectors: attempt connect right away. If the server turns out to
++      // need OAuth, handleConnect will set requiresOAuthId and we launch the
++      // sign-in popup automatically instead of leaving the user to notice a
++      // "Sign in" button on their own.
++      const newServer = created?.find((s) => s.name === formName.trim()) ?? null;
++      if (newServer) {
++        await handleConnect(newServer);
++      }
+     } catch (err) {
+       console.error("[MCP] Failed to create:", err);
+       setFormError(err instanceof Error ? err.message : "Failed to create server");
+-- 
+2.43.0
+
