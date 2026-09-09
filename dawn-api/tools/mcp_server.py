@@ -44,33 +44,30 @@ except ImportError:
     HAS_MCP = False
 
 try:
-    from mcp.client.streamable_http import StreamableHTTPTransport
+    from mcp.client.streamable_http import streamable_http_client
     HAS_HTTP_TRANSPORT = True
 except ImportError:
-    StreamableHTTPTransport = None  # type: ignore
+    streamable_http_client = None  # type: ignore
     HAS_HTTP_TRANSPORT = False
 
 
-if HAS_HTTP_TRANSPORT:
-    class AuthStreamableHTTPTransport(StreamableHTTPTransport):
-        """StreamableHTTPTransport that injects a bearer token on every request.
+def _build_http_client(bearer_token: Optional[str] = None):
+    """Build an httpx.AsyncClient for an MCP streamable-HTTP connection.
 
-        The stock transport has no constructor arg for auth headers, so a
-        token-protected HTTP MCP server (e.g. one gated behind an API key) would
-        otherwise be unreachable. This subclass adds an `Authorization` header to
-        every outbound request by overriding `_prepare_headers`.
-        """
+    mcp >= 2.0 changed the client API: `Client` no longer accepts a
+    `StreamableHTTPTransport` object (that class is not an async context
+    manager in 2.x). The supported way to attach auth headers is to pass a
+    pre-configured `httpx.AsyncClient` to `streamable_http_client(url,
+    http_client=...)`, then hand that async context manager to `Client`.
 
-        def __init__(self, url: str, bearer_token: str):
-            super().__init__(url)
-            self._bearer_token = bearer_token
-
-        def _prepare_headers(self) -> dict[str, str]:
-            headers = super()._prepare_headers()
-            headers["Authorization"] = f"Bearer {self._bearer_token}"
-            return headers
-else:
-    AuthStreamableHTTPTransport = None  # type: ignore
+    This returns an httpx.AsyncClient that injects an `Authorization: Bearer`
+    header on every request when a token is supplied.
+    """
+    import httpx
+    headers = {}
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
+    return httpx.AsyncClient(headers=headers, timeout=30.0)
 
 
 async def _resolve_redirects(url: str) -> str:
@@ -326,6 +323,7 @@ class MCPTool(BaseTool):
         # are then only ever sent to the resolved host.
         url = await _resolve_redirects(url)
         server_id = server.get("id")
+        bearer = None
         # OAuth-authenticated server — use the stored access token (refreshing
         # if needed) as the bearer instead of a static API key.
         if server_id:
@@ -333,15 +331,19 @@ class MCPTool(BaseTool):
                 from tools import mcp_oauth
                 if mcp_oauth.oauth_enabled():
                     access_token = await mcp_oauth.get_access_token(server_id)
-                    if access_token and HAS_HTTP_TRANSPORT:
-                        return Client(AuthStreamableHTTPTransport(url, access_token))
+                    if access_token:
+                        bearer = access_token
             except Exception as e:
                 logger.warning(f"Failed to load OAuth token for MCP server {server_id}: {e}")
-        api_key = server.get("api_key")
-        if api_key and HAS_HTTP_TRANSPORT:
-            # Token-protected server — inject the bearer token on every request.
-            return Client(AuthStreamableHTTPTransport(url, api_key))
-        return Client(url)
+        if not bearer:
+            bearer = server.get("api_key")
+        if not HAS_HTTP_TRANSPORT:
+            raise RuntimeError("MCP streamable-HTTP transport not available")
+        # mcp >= 2.0: build an authenticated httpx client and hand it to
+        # streamable_http_client, then wrap that async context manager in Client.
+        # (Client(AuthStreamableHTTPTransport(...)) no longer works in 2.x.)
+        http_client = _build_http_client(bearer)
+        return Client(streamable_http_client(url, http_client=http_client))
 
     async def _discover_tools(self, server_id: str, client: Client) -> list[dict]:
         result = await client.list_tools()
