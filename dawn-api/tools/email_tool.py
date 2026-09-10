@@ -35,6 +35,9 @@ class EmailSendTool(BaseTool):
     """Send emails via SMTP."""
 
     name = "send_email"
+    # Sending email is a mutating action on real communications — gate behind
+    # human approval via the pending_actions queue.
+    is_mutating = True
     description = (
         "Send an email via SMTP. Supports plain text and HTML content. "
         "Use for sending notifications, reports, invoices, or any email communications."

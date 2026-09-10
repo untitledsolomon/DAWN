@@ -191,6 +191,13 @@ async def scheduler_loop() -> None:
             await run_due_schedules()
         except Exception as e:
             logger.exception(f"[AgentScheduler] Poll cycle failed: {e}")
+        # Refresh dashboard alerts (aging approvals, failed tasks) so AlertStrip
+        # has a live source without a separate process.
+        try:
+            from tools.alerts import write_alerts
+            await write_alerts()
+        except Exception as e:
+            logger.exception(f"[AgentScheduler] Alert write cycle failed: {e}")
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
 

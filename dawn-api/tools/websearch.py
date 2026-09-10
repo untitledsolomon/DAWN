@@ -32,6 +32,18 @@ class WebSearchTool(BaseTool):
                 "type": "integer",
                 "description": "Number of results to return. Defaults to 5, max 10.",
             },
+            "allowed_domains": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional list of domains to restrict results to (e.g. ['docs.anthropic.com']). "
+                               "Applied as site: filters on the query.",
+            },
+            "blocked_domains": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional list of domains to exclude from results (e.g. ['spam.com']). "
+                               "Applied as -site: filters on the query.",
+            },
         },
         "required": ["query"],
     }
@@ -44,7 +56,13 @@ class WebSearchTool(BaseTool):
                 "calls will fail until it's configured."
             )
 
-    async def run(self, query: str, count: int = 5) -> ToolResult:
+    async def run(
+        self,
+        query: str,
+        count: int = 5,
+        allowed_domains: list[str] | None = None,
+        blocked_domains: list[str] | None = None,
+    ) -> ToolResult:
         if not self.api_key:
             return ToolResult(
                 success=False,
@@ -53,11 +71,19 @@ class WebSearchTool(BaseTool):
 
         count = max(1, min(count, 10))
 
+        # Domain scoping: Brave has no native allowed/blocked-domain param, so
+        # inject site: / -site: filters into the query.
+        q = query
+        if allowed_domains:
+            q = f"{q} " + " ".join(f"site:{d}" for d in allowed_domains)
+        if blocked_domains:
+            q = f"{q} " + " ".join(f"-site:{d}" for d in blocked_domains)
+
         try:
             async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
                 response = await client.get(
                     BRAVE_ENDPOINT,
-                    params={"q": query, "count": count},
+                    params={"q": q, "count": count},
                     headers={
                         "Accept": "application/json",
                         "X-Subscription-Token": self.api_key,

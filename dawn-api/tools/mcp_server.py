@@ -147,6 +147,10 @@ class MCPTool(BaseTool):
 
     def __init__(self):
         self._sessions = {}  # server_id -> mcp.Client (async context manager)
+        # Register this tool as the executor for approved mutating MCP actions.
+        # Native tools register a different executor (see tools/executor.py).
+        from tools import pending_actions
+        pending_actions.register_mcp_executor(self._execute_remote_call)
 
     # ── Public dispatch ──────────────────────────────────────────────────────
 
@@ -330,11 +334,18 @@ class MCPTool(BaseTool):
             try:
                 from tools import mcp_oauth
                 if mcp_oauth.oauth_enabled():
-                    access_token = await mcp_oauth.get_access_token(server_id)
-                    if access_token:
+                    is_oauth_server = await mcp_oauth.has_oauth_tokens(server_id)
+                    if is_oauth_server:
+                        access_token = await mcp_oauth.get_access_token(server_id)
+                        if not access_token:
+                            raise RuntimeError(
+                                "OAuth token unavailable or refresh failed for this "
+                                "server — re-authenticate via the Sign in flow."
+                            )
                         bearer = access_token
             except Exception as e:
                 logger.warning(f"Failed to load OAuth token for MCP server {server_id}: {e}")
+                raise  # don't silently fall through to api_key for an OAuth-only server
         if not bearer:
             bearer = server.get("api_key")
         if not HAS_HTTP_TRANSPORT:
@@ -381,7 +392,7 @@ class MCPTool(BaseTool):
         # user's pinned tools available without re-registering everything).
         registry = get_registry()
         for t in tools:
-            if self._is_pinned(server_id, t["name"]):
+            if await self._is_pinned(server_id, t["name"]):
                 self._register_remote_tool(registry, server_id, t)
 
     async def _is_pinned(self, server_id: str, tool_name: str) -> bool:
@@ -440,6 +451,21 @@ class MCPTool(BaseTool):
         if not HAS_MCP:
             return ToolResult(success=False, error="MCP library not installed")
 
+        # Write-gating: mutating tools are queued for human approval instead of
+        # executing immediately. Read-only tools continue straight through.
+        from tools.pending_actions import is_mutating_tool, queue_pending_action
+        if is_mutating_tool(tool_name):
+            return await queue_pending_action(server_id, tool_name, args)
+
+        return await self._execute_remote_call(server_id, tool_name, args)
+
+    async def _execute_remote_call(self, server_id: str, tool_name: str, args: dict) -> ToolResult:
+        """Shared execution path for a remote MCP tool call.
+
+        Used by both the read-only path in `_call_tool` and by the approval
+        execution path (`execute_pending_action`), so there is exactly one code
+        path that actually talks to the MCP server.
+        """
         client = self._sessions.get(server_id)
         if client is None:
             # Try connecting on demand.

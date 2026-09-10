@@ -37,14 +37,32 @@ def _skills_dir() -> Path:
 
 
 def _fetch_skill_md(skill_name: str) -> str:
-    """Fetch a single SKILL.md from the ECC repo via the GitHub API."""
+    """Fetch a single SKILL.md from the ECC repo via the GitHub API.
+
+    Retries transient failures (5xx/timeout) with exponential backoff; a
+    genuine 404 is reported distinctly and not retried.
+    """
+    import time
+    import urllib.error
     url = (
         f"https://raw.githubusercontent.com/{ECC_REPO}/main/"
         f"{ECC_SKILLS_PATH}/{skill_name}/SKILL.md"
     )
-    req = urllib.request.Request(url, headers={"User-Agent": "DAWN"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read().decode("utf-8")
+    last_error = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "DAWN"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return resp.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise
+            last_error = e
+        except Exception as e:
+            last_error = e
+        if attempt < 2:
+            time.sleep(2 ** attempt)
+    raise last_error if last_error else RuntimeError(f"Failed to fetch {url}")
 
 
 def _list_ecc_skills() -> list[str]:

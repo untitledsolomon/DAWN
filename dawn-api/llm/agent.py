@@ -29,7 +29,13 @@ from tools.base import ToolResult
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_ITERATIONS = 500
+DEFAULT_MAX_ITERATIONS = 25
+
+# No-progress early exit: stop if the same tool call repeats with identical
+# arguments this many times in a row — a much stronger safety net than a raw
+# iteration ceiling, because it catches a stuck loop immediately instead of
+# burning through completions until the numeric limit is approached.
+REPEAT_THRESHOLD = 3
 
 # Phrases that claim a real-world action was taken. If these appear in a
 # "final answer" (i.e. a response with no accompanying tool_call), the model
@@ -104,7 +110,7 @@ def build_agent_messages(
                 "This is more efficient than doing everything yourself."
             )
     except Exception as e:
-        logger.debug(f"Could not load sub-agent descriptions: {e}")
+        logger.warning(f"Could not load sub-agent descriptions — delegation will be unavailable this run: {e}")
 
     system += "\n" + AGENT_SAFETY_PROMPT
 
@@ -209,9 +215,6 @@ async def run_agent_loop(
     engine = get_engine()
     registry = get_registry()
 
-    engine = get_engine()
-    registry = get_registry()
-
     if not isinstance(engine, DeepSeekEngine):
         yield {"type": "error", "content": (
             "Agent/tool workflows currently require LLM_MODE=deepseek — "
@@ -245,6 +248,11 @@ async def run_agent_loop(
     
     yield {"type": "thinking", "content": "Working on it..."}
 
+    # No-progress detection: track the last few tool calls (name + args) and
+    # stop if the same call repeats with identical arguments. Catches a stuck
+    # loop immediately rather than burning through completions to the ceiling.
+    recent_calls: list[tuple[str, str]] = []
+
     for iteration in range(1, max_iterations + 1):
         try:
             result = await engine.complete_with_tools(messages, tools=tool_specs)
@@ -254,6 +262,19 @@ async def run_agent_loop(
             return
 
         if result.wants_tool_call:
+            # Record the call signatures before executing, for repeat detection.
+            for call in result.tool_calls:
+                recent_calls.append((call.name, json.dumps(call.args, sort_keys=True)))
+            recent_calls = recent_calls[-REPEAT_THRESHOLD:]
+            if len(recent_calls) == REPEAT_THRESHOLD and len(set(recent_calls)) == 1:
+                yield {"type": "warning", "content": (
+                    f"Stopped: the same tool call ('{recent_calls[0][0]}') repeated "
+                    f"{REPEAT_THRESHOLD} times with identical arguments and no "
+                    f"progress. This usually means the tool is failing the same way "
+                    f"each time — check the tool's error output above."
+                )}
+                yield {"type": "done", "content": "Stopped due to a repeated, non-progressing tool call.", "iterations": iteration}
+                return
             async for event in _execute_tool_calls(result, messages, registry, allowed_names, engine, identity):
                 yield event
             allowed_names, tool_specs = _current_tools()

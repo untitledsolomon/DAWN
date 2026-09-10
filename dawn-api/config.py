@@ -61,6 +61,23 @@ class Settings(BaseSettings):
     # back to localhost:8000 for local dev.
     dawn_public_url: str = "http://localhost:8000"
 
+    # Fernet key used to encrypt MCP OAuth tokens at rest (access_token,
+    # refresh_token, client_secret). Must be a 32-byte urlsafe base64 key
+    # (generate with `python -c "from cryptography.fernet import Fernet;
+    # print(Fernet.generate_key().decode())"`). If unset, tokens are stored
+    # in plaintext (dev fallback) and a warning is logged.
+    dawn_token_encryption_key: Optional[str] = None
+
+    # GitHub App credentials — used by the GitHub integration (tools/github.py
+    # + routers/github_webhooks.py). Register a GitHub App in the org, generate
+    # a private key, and set these the same way other secrets are handled.
+    github_app_id: Optional[str] = None
+    github_app_private_key: Optional[str] = None
+    github_webhook_secret: Optional[str] = None
+    # The GitHub App's own bot username — used to ignore events DAWN itself
+    # authored (loop prevention).
+    github_bot_username: Optional[str] = None
+
     # Ingestion streaming config
     max_upload_gb: int = 30
     streaming_threshold_mb: int = 50

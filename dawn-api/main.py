@@ -29,6 +29,7 @@ from routers import (
     projects,  # v42.0 — Projects / goals with related content
     files,     # v42.0 — File upload/download
     skills,    # v42.0 — Skills list/install
+    github_webhooks,  # v45.0 — GitHub integration webhook receiver
 )
 
 app = FastAPI(
@@ -148,6 +149,7 @@ app.include_router(vault.router, prefix="", tags=["vault"])
 app.include_router(projects.router, prefix="", tags=["projects"])
 app.include_router(files.router, prefix="", tags=["files"])
 app.include_router(skills.router, prefix="", tags=["skills"])
+app.include_router(github_webhooks.router, prefix="", tags=["github"])
 
 
 @app.get("/health")
@@ -174,15 +176,6 @@ async def start_background_services():
         logger.info("Database migrations checked")
     except Exception as e:
         logger.error(f"Failed to run database migrations: {e}")
-
-    # Pentest scheduler
-    try:
-        from tools.scheduler import get_scheduler
-        scheduler = get_scheduler()
-        await scheduler.start()
-        logger.info("Pentest scheduler started")
-    except Exception as e:
-        logger.error(f"Failed to start pentest scheduler: {e}")
 
     # Ingestion queue
     try:
@@ -242,6 +235,14 @@ async def start_background_services():
     except Exception as e:
         logger.error(f"Failed to load persisted MCP tools: {e}")
 
+    # v44.0: Register the native-tool executor for the pending_actions queue,
+    # so approved native mutating actions (e.g. send_email) can run.
+    try:
+        from tools.executor import _register_native_executor
+        _register_native_executor()
+    except Exception as e:
+        logger.error(f"Failed to register native action executor: {e}")
+
     # Slack bot — auto-start if tokens are configured
     try:
         import os
@@ -262,15 +263,6 @@ async def start_background_services():
 @app.on_event("shutdown")
 async def stop_background_services():
     """Stop background services."""
-    # Pentest scheduler
-    try:
-        from tools.scheduler import get_scheduler
-        scheduler = get_scheduler()
-        await scheduler.stop()
-        logger.info("Pentest scheduler stopped")
-    except Exception as e:
-        logger.error(f"Failed to stop pentest scheduler: {e}")
-
     # Ingestion queue
     try:
         from routers.ingest import ingestion_queue

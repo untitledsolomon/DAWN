@@ -41,6 +41,11 @@ class BaseTool(ABC):
     description: str
     input_schema: dict
 
+    # Whether this tool performs a mutating action (writes to real data).
+    # Mutating tools are gated behind human approval via the pending_actions
+    # queue. Defaults to False; native mutating tools set it True.
+    is_mutating: bool = False
+
     @abstractmethod
     async def run(self, **kwargs) -> ToolResult:
         """

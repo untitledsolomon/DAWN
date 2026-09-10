@@ -162,6 +162,21 @@ async def _link_node_to_related(node_id: str, title: str, max_links: int = 3) ->
         logger.warning(f"[memory] Related-node lookup failed for node {node_id}: {e}")
 
 
+def _worth_extracting(user_message: str, assistant_response: str) -> bool:
+    """Cheap heuristic gate — skip LLM extraction for messages unlikely to
+    contain anything durable. Errs toward skipping; extraction is meant for
+    facts, preferences, decisions — not lookups or chit-chat."""
+    combined = f"{user_message} {assistant_response}"
+    if len(user_message.split()) < 6:
+        return False  # too short to contain a durable fact
+    signal_words = (
+        "prefer", "always", "never", "decided", "decision", "going with",
+        "will use", "switch to", "remember", "from now on", "my stack",
+        "i use", "i work", "i'm building", "i live", "our team",
+    )
+    return any(w in combined.lower() for w in signal_words)
+
+
 async def _learn_from_error(
     user_message: str,
     assistant_response: str,
@@ -331,8 +346,11 @@ async def chat(
             node_titles=final_node_titles if final_node_titles else None,
         )
 
-        # 12. Background: extract memory facts into dedicated memories table
-        if req.message and assistant_content:
+        # 12. Background: extract memory facts into dedicated memories table.
+        #     Gated by a cheap heuristic so trivial messages never reach the
+        #     LLM extractor — extraction is for durable facts, not lookups or
+        #     chit-chat (drives down DeepSeek API cost).
+        if req.message and assistant_content and _worth_extracting(req.message, assistant_content):
             background_tasks.add_task(
                 extract_and_store_memory,
                 f"User: {req.message}\nDAWN: {assistant_content}",

@@ -6,9 +6,12 @@ No LLM needed for retrieval — that's the whole point.
 from dataclasses import dataclass, field
 from typing import Optional
 import asyncio
+import logging
 import re
 import db.client as db
 from llm.embeddings import embed_text as _embed_text_sync
+
+logger = logging.getLogger(__name__)
 
 
 async def embed_text(text: str) -> Optional[list[float]]:
@@ -409,6 +412,25 @@ async def store_memory_facts(
     return await db.create_memories_batch(rows)
 
 
+def _dedupe_facts_in_batch(facts: list[dict]) -> list[dict]:
+    """Drop near-duplicate facts within a single extraction batch.
+
+    Uses a simple title-based key so a batch of facts that are really the
+    same fact (e.g. the LLM emitted the same fact twice with slightly
+    different wording) doesn't trigger repeated embed+search round trips.
+    """
+    seen_titles = set()
+    deduped = []
+    for f in facts:
+        key = f.get("title", "").strip().lower()
+        if key and key not in seen_titles:
+            seen_titles.add(key)
+            deduped.append(f)
+        elif not key:
+            deduped.append(f)
+    return deduped
+
+
 async def extract_and_store_memory(
     conversation: str,
     llm_complete_fn,
@@ -424,7 +446,12 @@ async def extract_and_store_memory(
     facts = await extract_memory_facts(conversation, llm_complete_fn)
     if not facts:
         return []
-    
+
+    # Dedupe near-duplicate facts within the same batch before the per-fact
+    # embed/search round trips, so a batch of 5 facts that are really 2
+    # distinct facts doesn't do 5 embed+search calls.
+    facts = _dedupe_facts_in_batch(facts)
+
     # Classify each fact
     for fact in facts:
         body_lower = fact.get("body", "").lower()
@@ -488,18 +515,43 @@ async def load_memory_context(
 
     if not memories:
         return ""
-    
+
+    # Raise the relevance floor: drop results below the threshold rather than
+    # treating "top N of whatever exists" as good context. Treat "nothing good
+    # enough" the same as "nothing found."
+    memories = [m for m in memories if m.get("relevance", 1.0) >= threshold]
+    if not memories:
+        return ""
+
+    # Cap memory context by size, not just count — 5 short memories vs. 5 long
+    # ones cost very differently.
+    MAX_CONTEXT_CHARS = 1200
     parts = []
+    total = 0
+    included_ids = []
     for mem in memories:
         title = mem.get("title", "Untitled")
         body = mem.get("body", "")
         fact_type = mem.get("fact_type", "fact")
         confidence = mem.get("confidence", 0.0)
-        
-        if body:
-            parts.append(f"[Memory: {fact_type} (confidence: {confidence:.2f})] {title}: {body}")
-        else:
-            parts.append(f"[Memory: {fact_type} (confidence: {confidence:.2f})] {title}")
+
+        line = f"[Memory: {fact_type} (confidence: {confidence:.2f})] {title}: {body}"
+        if total + len(line) > MAX_CONTEXT_CHARS:
+            break
+        parts.append(line)
+        total += len(line)
+        if mem.get("id"):
+            included_ids.append(mem["id"])
+
+    # Usage tracking: bump access_count/last_accessed for memories actually
+    # included in returned context (not merely searched), so future ranking can
+    # prefer memories that have proven useful. Uses the existing columns.
+    if included_ids:
+        try:
+            for mid in included_ids:
+                await db.update_memory(mid, {"last_accessed": "now()"})
+        except Exception as e:
+            logger.warning(f"Failed to update memory usage tracking: {e}")
 
     return "\n".join(parts)
 

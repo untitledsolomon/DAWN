@@ -79,24 +79,43 @@ def _raw_file_url(source: str) -> str | None:
     return source
 
 
-def _fetch_raw_skill(raw_url: str, folder_name: str) -> Path | None:
+def _fetch_raw_skill(raw_url: str, folder_name: str, max_retries: int = 3) -> Path | None:
     """Download a single skill file (SKILL.md or skill.yaml) into the skills
-    dir. Returns the target directory, or None on failure."""
+    dir. Returns the target directory, or None on failure.
+
+    Retries transient failures (5xx/timeout) with exponential backoff —
+    GitHub's raw content CDN intermittently 503s under load. A genuine 404
+    ("doesn't exist") is reported distinctly and not retried.
+    """
+    import time
     import urllib.request
+    import urllib.error
     skills_dir = _skills_dir()
     folder_name = "".join(c for c in folder_name if c.isalnum() or c in "-_") or "skill"
     target = skills_dir / folder_name
     target.mkdir(parents=True, exist_ok=True)
     filename = "SKILL.md" if raw_url.lower().endswith("skill.md") else "skill.yaml"
-    try:
-        req = urllib.request.Request(raw_url, headers={"User-Agent": "DAWN"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            content = resp.read().decode("utf-8")
-        (target / filename).write_text(content, encoding="utf-8")
-        return target
-    except Exception as e:
-        logger.warning(f"Failed to fetch raw skill {raw_url}: {e}")
-        return None
+
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            req = urllib.request.Request(raw_url, headers={"User-Agent": "DAWN"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                content = resp.read().decode("utf-8")
+            (target / filename).write_text(content, encoding="utf-8")
+            return target
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                logger.warning(f"Skill file not found (404): {raw_url}")
+                return None  # don't retry a genuine 404
+            last_error = e
+        except Exception as e:
+            last_error = e
+        if attempt < max_retries - 1:
+            time.sleep(2 ** attempt)  # 1s, 2s backoff
+
+    logger.warning(f"Failed to fetch raw skill {raw_url} after {max_retries} attempts: {last_error}")
+    return None
 
 
 class SkillInstallTool(BaseTool):

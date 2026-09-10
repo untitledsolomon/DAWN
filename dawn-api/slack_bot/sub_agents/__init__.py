@@ -9,8 +9,6 @@ Architecture:
     ├── code_agent     → Filesystem, git, terminal operations
     ├── comms_agent    → Email, Slack broadcasts, scheduling
     ├── data_agent     → BI, charts, revenue analysis
-    ├── axis_agent     → Payroll, tax, URA compliance (Axis ERP)
-    ├── forge_agent    → CMS content management (Forge)
     └── security_agent → OSINT, pentest, audit, compliance
 
 Each sub-agent has:

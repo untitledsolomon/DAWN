@@ -5,7 +5,7 @@ import clsx from "clsx";
 import Pill from "@/components/ui/Pill";
 import { timeAgo } from "@/lib/format";
 
-export type ApprovalKind = "node" | "decision";
+export type ApprovalKind = "node" | "decision" | "mcp_action";
 
 export interface ApprovalItem {
   id: string;
