@@ -5,6 +5,7 @@ person DAWN works for and the map of this vault.
 
 ## Who I Am
 
+<<<<<<< Updated upstream
 Solomon — founder of Regent, a Kampala-based firm positioned as a "mini
 Palantir" for East African SMEs, serving real clients across Uganda and
 South Sudan. Building DAWN as an internal AI agent ops command center
@@ -15,20 +16,36 @@ overseeing two domains: Axis (infrastructure/systems) and Regent
 North star for DAWN: a functional assistant, not a demo — one that adapts
 to my workflow, surfaces what needs attention, and acts autonomously on
 read-only/diagnostic work while gating anything mutating behind approval.
+=======
+Solomon John — founder/principal at Regent, a digital systems and strategy
+firm based in Kampala, Uganda. Also builds trading systems (Sentinel RL bot,
+nyao_scalper), EconSim (C++/SFML town simulator), and Mabruk Atelier (luxury
+fashion). DAWN is his internal AI layer. He moves fast, wants concise
+actionable answers, and expects DAWN to act autonomously toward Regent's
+goals — not only when he chats.
+>>>>>>> Stashed changes
 
 ## Vault Structure
 
 ```
 00 - Inbox          ← Capture everything, sort later
 01 - Daily Notes    ← Dated logs of what got done, one file per day
+<<<<<<< Updated upstream
 Projects            ← Project knowledge (DAWN, Regent ops, etc.)
 Personal            ← Life outside work
 Archive             ← Completed projects and old notes
 Resources           ← Cross-project reference material
+=======
+Personal           ← Life outside work
+Archive            ← Completed projects and old notes
+Resources          ← Cross-project reference material
+Projects           ← Per-project notes (e.g. Projects/DAWN/...)
+>>>>>>> Stashed changes
 ```
 
 ## What's Active Right Now
 
+<<<<<<< Updated upstream
 - MCP OAuth 2.1 PR review (regent-website-mcp): plaintext token storage and
   missing `_pending_flows` TTL are confirmed issues; `_open_http` fallback
   behavior review still pending.
@@ -48,3 +65,15 @@ Keep this section short — it's loaded in full on every single message, so
 it should stay a snapshot of current priorities, not a running log. Move
 anything that becomes historical into a dated note under 01 - Daily Notes
 or the relevant file under Projects instead of leaving it here.
+=======
+- **DAWN MCP → Regent Website**: connection working end-to-end (2026-09-08).
+  Call MCP tools sequentially (parallel calls over one stream → ConnectionTerminated).
+- **CRM (Regent Growth Engine) & Forge CMS**: under heavy dev. DAWN does NOT yet
+  have their repos in the sandbox — needs cloning to track state.
+- **Background/autonomous tasks**: NOT running. DAWN only acts on chat. This is the
+  biggest structural gap and is being addressed.
+- **Daily notes**: bug — created empty instead of pre-populated with the day's activity.
+- **Open decision**: live requirements.txt out of sync with installed mcp (1.9.4) /
+  pydantic-settings (2.15.0). mcp 2.x migration is a deliberate choice (needs httpx/
+  uvicorn pin updates too).
+>>>>>>> Stashed changes

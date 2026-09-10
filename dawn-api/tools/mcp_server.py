@@ -31,6 +31,7 @@ crashing the agent loop.
 import asyncio
 import json
 import logging
+import os
 from typing import Optional
 from tools.base import BaseTool, ToolResult
 from tools.registry import get_registry
@@ -52,7 +53,8 @@ except ImportError:
 
 
 def _build_http_client(bearer_token: Optional[str] = None):
-    """Build an httpx.AsyncClient for an MCP streamable-HTTP connection.
+    """
+    Build an httpx.AsyncClient for an MCP streamable-HTTP connection.
 
     mcp >= 2.0 changed the client API: `Client` no longer accepts a
     `StreamableHTTPTransport` object (that class is not an async context
@@ -71,7 +73,8 @@ def _build_http_client(bearer_token: Optional[str] = None):
 
 
 async def _resolve_redirects(url: str) -> str:
-    """Resolve an HTTP(S) redirect chain to its final URL.
+    """
+    Resolve an HTTP(S) redirect chain to its final URL.
 
     The mcp SDK's StreamableHTTPTransport refuses to follow redirects (it will
     not silently forward an Authorization header to a different host). Many
@@ -281,7 +284,8 @@ class MCPTool(BaseTool):
         )
 
     async def _probe_requires_oauth(self, server_type: str, server: dict) -> bool:
-        """Robustly determine whether an HTTP server needs OAuth.
+        """
+        Robustly determine whether an HTTP server needs OAuth.
 
         Runs the spec probe (401 Bearer challenge / RFC 9728 well-known metadata)
         on any HTTP connect or discovery failure -- not just when the error text
@@ -298,7 +302,8 @@ class MCPTool(BaseTool):
         return False
 
     async def check_oauth_status(self, server_id: str) -> bool:
-        """Proactively probe whether a server requires OAuth (no connect needed).
+        """
+        Proactively probe whether a server requires OAuth (no connect needed).
 
         Used by the UI's add/connect flow so it can launch the consent popup
         immediately instead of doing a doomed unauthenticated connect first.
@@ -311,10 +316,31 @@ class MCPTool(BaseTool):
         return await self._probe_requires_oauth("http", server)
 
     async def _open_stdio(self, server: dict) -> Client:
+        """
+        Open a stdio MCP server connection.
+
+        The child process environment is built by MERGING the parent (DAWN)
+        process's environment with any per-server overrides stored in the
+        server row's `env` field. This is essential: without inheriting
+        os.environ, shell-set variables (PATH, and any *_KEY / *_TOKEN /
+        *_CLIENT_SECRETS_FILE vars the remote server needs) never reach the
+        spawned child, because DAWN may be launched from a shell or service
+        whose environment differs from what a bare DB row can express.
+
+        Precedence: the row's `env` entries override the inherited parent env,
+        so an operator can pin a specific value for a given server regardless
+        of what the parent process has set.
+        """
+        import os
+        env = dict(os.environ)
+        for e in (server.get("env") or []):
+            if "=" in e:
+                key, _, value = e.partition("=")
+                env[key] = value
         params = StdioServerParameters(
             command=server.get("command") or "",
             args=server.get("args") or [],
-            env=dict(e.split("=", 1) for e in (server.get("env") or []) if "=" in e) or None,
+            env=env,
         )
         return Client(params)
 
@@ -368,7 +394,8 @@ class MCPTool(BaseTool):
         return tools
 
     async def _persist_tools(self, server_id: str, tools: list[dict]) -> None:
-        """Upsert discovered tools into mcp_tools.
+        """
+        Upsert discovered tools into mcp_tools.
 
         Under progressive discovery, tools are persisted to the catalog but NOT
         auto-registered as first-class DAWN tools. Only tools already marked
@@ -528,7 +555,8 @@ class MCPTool(BaseTool):
     # ── Expose DAWN's own tools via MCP ──────────────────────────────────────
 
     async def _start_dawn_mcp_server(self) -> ToolResult:
-        """Start DAWN's own MCP server so external MCP clients (Claude Desktop,
+        """
+        Start DAWN's own MCP server so external MCP clients (Claude Desktop,
         Cursor, etc.) can use DAWN's tools.
 
         Handles both mcp v1 (FastMCP) and mcp v2 (MCPServer) APIs.
@@ -620,7 +648,8 @@ def _make_tool_wrapper(tool: BaseTool):
 
 
 class MCPCatalogTool(BaseTool):
-    """Search the catalog of tools exposed by connected MCP servers.
+    """
+    Search the catalog of tools exposed by connected MCP servers.
 
     Returns lightweight entries ({server, name, description}) across every
     enabled server. Use this to discover what remote tools are available before
@@ -679,7 +708,8 @@ class MCPCatalogTool(BaseTool):
 
 
 class MCPCallTool(BaseTool):
-    """Call a tool on a connected MCP server by name.
+    """
+    Call a tool on a connected MCP server by name.
 
     Lazily connects to the owning server if needed, then executes the remote
     tool with the given arguments. Use mcp_search_tools first to find the
@@ -722,7 +752,8 @@ class MCPCallTool(BaseTool):
 
 
 async def load_persisted_mcp_tools() -> int:
-    """Load the MCP surface into the registry at startup.
+    """
+    Load the MCP surface into the registry at startup.
 
     Under progressive discovery this registers ONLY:
       1. the two meta-tools (mcp_search_tools, mcp_call_tool), and
@@ -781,7 +812,8 @@ async def load_persisted_mcp_tools() -> int:
 
 
 class RemoteMCPTool(BaseTool):
-    """A tool discovered from an external MCP server, registered into DAWN's
+    """
+    A tool discovered from an external MCP server, registered into DAWN's
     registry so the agent can call it directly (name: 'mcp_<tool_name>').
 
     Only tools explicitly pinned by the user are registered this way. All other

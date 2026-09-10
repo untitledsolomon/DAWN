@@ -77,6 +77,16 @@ class Settings(BaseSettings):
     # The GitHub App's own bot username — used to ignore events DAWN itself
     # authored (loop prevention).
     github_bot_username: Optional[str] = None
+    
+    # SMTP — outbound email (e.g. Resend)
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_from_email: Optional[str] = None
+
+    # Google Search Console OAuth
+    gsc_oauth_client_secrets_file: Optional[str] = None
 
     # Ingestion streaming config
     max_upload_gb: int = 30
