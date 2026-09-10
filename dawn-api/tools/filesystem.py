@@ -17,8 +17,9 @@ class FilesystemTool(BaseTool):
     name = "filesystem"
     description = (
         "Read, write, append, list, delete, view, surgically edit (str_replace / "
-        "insert), or check existence of files within the DAWN sandbox directory. "
-        "All paths are relative to the sandbox root — you cannot access files outside it. "
+        "insert), or check existence of files. Paths are resolved against the "
+        "machine (absolute paths used as-is; relative paths resolve against the "
+        "current working directory). "
         "For large files (roughly >2000 words / >8000 characters), do NOT attempt one giant "
         "'write' call — it will be truncated by the response token limit. Instead: use 'write' "
         "for the first chunk, then one or more 'append' calls for the rest, writing the content "
@@ -37,7 +38,7 @@ class FilesystemTool(BaseTool):
             },
             "path": {
                 "type": "string",
-                "description": "Path relative to the sandbox root, e.g. 'projects/foo/notes.md'.",
+                "description": "Path to the file, e.g. 'projects/foo/notes.md' or an absolute path like 'C:/Users/me/notes.md'.",
             },
             "content": {
                 "type": "string",
@@ -81,12 +82,21 @@ class FilesystemTool(BaseTool):
     }
 
     def __init__(self):
+        self.sandbox_enabled = getattr(settings, "filesystem_sandbox_enabled", True)
         root = getattr(settings, "filesystem_sandbox_root", None) or "./sandbox"
         self.root = Path(root).resolve()
-        self.root.mkdir(parents=True, exist_ok=True)
-        logger.info(f"FilesystemTool sandboxed to: {self.root}")
+        if self.sandbox_enabled:
+            self.root.mkdir(parents=True, exist_ok=True)
+            logger.info(f"FilesystemTool sandboxed to: {self.root}")
+        else:
+            logger.info("FilesystemTool sandbox disabled — paths resolved against the machine")
 
     def _resolve(self, path: str) -> Path:
+        if not self.sandbox_enabled:
+            # Sandbox disabled: resolve the path as given. Absolute paths are
+            # used as-is; relative paths resolve against the current working
+            # directory.
+            return Path(path).resolve()
         candidate = (self.root / path).resolve()
         if self.root not in candidate.parents and candidate != self.root:
             raise ValueError(f"Path '{path}' escapes the sandbox root")

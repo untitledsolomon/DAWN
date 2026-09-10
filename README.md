@@ -30,6 +30,9 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000 --loop asyncio
 ```
 
+> Run from inside `dawn-api/` (that's where `main.py` lives). A root-level
+> `main.py` shim also lets you run `uvicorn main:app` from the repository root.
+
 ### VPS (new 8GB box, via Docker)
 ```bash
 # On the new VPS
