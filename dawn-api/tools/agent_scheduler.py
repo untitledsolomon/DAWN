@@ -144,10 +144,14 @@ async def _run_schedule(schedule: dict) -> None:
         logger.error(f"[AgentScheduler] Failed to update task row: {e}")
 
     # Log to agent_logs so it surfaces on the Dashboard activity feed.
+    # NOTE: agent_logs uses a different status vocabulary ('success'/'error')
+    # than agent_tasks ('completed'/'failed') — matching the DB check
+    # constraint agent_logs_status_check and the frontend's AgentLogEntry type.
+    log_status = "success" if not error else "error"
     try:
         supabase = db.get_db()
         await db._async_execute(lambda: supabase.table("agent_logs").insert({
-            "status": status,
+            "status": log_status,
             "task": goal,
             "tools_used": tools_used,
             "tokens_used": 0,
@@ -184,7 +188,13 @@ async def run_due_schedules() -> None:
 
 
 async def scheduler_loop() -> None:
-    """Background loop: poll for due schedules every POLL_INTERVAL_SECONDS."""
+    """Background loop: poll for due schedules every POLL_INTERVAL_SECONDS.
+
+    Runs as an asyncio task on the app's main event loop (not a separate
+    APScheduler thread). This avoids the cross-thread event-loop conflicts that
+    froze the app, and a single long-running task can't overlap itself the way
+    an interval job does ("maximum number of running instances reached").
+    """
     logger.info(f"[AgentScheduler] Autonomous scheduler started (poll every {POLL_INTERVAL_SECONDS}s)")
     while True:
         try:
@@ -201,26 +211,41 @@ async def scheduler_loop() -> None:
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
 
+# The running scheduler task, so it can be cancelled on shutdown.
+_scheduler_task: Optional[asyncio.Task] = None
+
+
 def start_agent_scheduler() -> Optional[object]:
-    """Start the autonomous scheduler as an APScheduler background job.
-    Returns the scheduler object (or None if APScheduler isn't installed)."""
+    """Start the autonomous scheduler as an asyncio task on the current event
+    loop. Returns a handle with start()/stop() semantics for shutdown.
+
+    Runs `scheduler_loop` on the app's main event loop via asyncio.create_task,
+    matching the ingestion-queue worker pattern. This keeps all DB/LLM calls
+    on the loop they were created for, avoiding the freeze caused by running
+    `asyncio.run()` in a separate APScheduler thread.
+    """
+    global _scheduler_task
+    if _scheduler_task is not None and not _scheduler_task.done():
+        logger.info("[AgentScheduler] Scheduler already running")
+        return _scheduler_task
     try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-        scheduler = BackgroundScheduler()
-        scheduler.add_job(
-            lambda: asyncio.run(run_due_schedules()),
-            "interval",
-            seconds=POLL_INTERVAL_SECONDS,
-            id="agent_schedules",
-            name="Autonomous Agent Scheduler",
-            replace_existing=True,
-        )
-        scheduler.start()
-        logger.info("[AgentScheduler] APScheduler started")
-        return scheduler
-    except ImportError:
-        logger.warning("[AgentScheduler] APScheduler not installed — autonomous scheduler disabled")
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        logger.error("[AgentScheduler] No running event loop — scheduler not started")
         return None
-    except Exception as e:
-        logger.error(f"[AgentScheduler] Failed to start APScheduler: {e}")
-        return None
+    _scheduler_task = loop.create_task(scheduler_loop())
+    logger.info("[AgentScheduler] Autonomous scheduler task started")
+    return _scheduler_task
+
+
+async def stop_agent_scheduler() -> None:
+    """Cancel the running scheduler task (called on shutdown)."""
+    global _scheduler_task
+    if _scheduler_task is not None:
+        _scheduler_task.cancel()
+        try:
+            await _scheduler_task
+        except asyncio.CancelledError:
+            pass
+        _scheduler_task = None
+        logger.info("[AgentScheduler] Autonomous scheduler stopped")
