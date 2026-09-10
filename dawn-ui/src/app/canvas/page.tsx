@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { Loader2, LayoutGrid, MessageSquare } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
 import ArtifactCard from "@/components/canvas/ArtifactCard";
@@ -90,7 +90,13 @@ export default function CanvasPage() {
 
         <div className="flex-1 min-h-0">
           {view === "chat" ? (
-            <VisualizeWindow />
+            <Suspense fallback={
+              <div className="flex items-center justify-center h-full">
+                <div className="text-text-muted text-sm">Loading conversation...</div>
+              </div>
+            }>
+              <VisualizeWindow />
+            </Suspense>
           ) : (
             <div className="h-full overflow-y-auto">
               <div className="max-w-[1180px] mx-auto px-6 sm:px-7 py-6 pb-10">

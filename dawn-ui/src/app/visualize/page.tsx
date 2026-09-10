@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 
 /**
@@ -8,7 +8,7 @@ import { useSearchParams } from "next/navigation";
  * streaming chat that VisualizeWindow used to provide). Redirect to /canvas,
  * preserving any session id so existing bookmarked/shared links still resolve.
  */
-export default function VisualizePage() {
+function VisualizeRedirect() {
   const searchParams = useSearchParams();
   const id = searchParams.get("id");
 
@@ -18,4 +18,12 @@ export default function VisualizePage() {
   }, [id]);
 
   return null;
+}
+
+export default function VisualizePage() {
+  return (
+    <Suspense fallback={null}>
+      <VisualizeRedirect />
+    </Suspense>
+  );
 }
