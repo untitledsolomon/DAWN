@@ -1,23 +1,29 @@
 "use client";
 
-import { Suspense } from "react";
-import AppShell from "@/components/layout/AppShell";
-import VisualizeWindow from "@/components/visualize/VisualizeWindow";
+import { Suspense, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 
-function VisualizeContent() {
-  return <VisualizeWindow />;
+/**
+ * /visualize has been unified into /canvas (Canvas now includes the live
+ * streaming chat that VisualizeWindow used to provide). Redirect to /canvas,
+ * preserving any session id so existing bookmarked/shared links still resolve.
+ */
+function VisualizeRedirect() {
+  const searchParams = useSearchParams();
+  const id = searchParams.get("id");
+
+  useEffect(() => {
+    const target = id ? `/canvas?id=${encodeURIComponent(id)}` : "/canvas";
+    window.location.replace(target);
+  }, [id]);
+
+  return null;
 }
 
 export default function VisualizePage() {
   return (
-    <AppShell>
-      <Suspense fallback={
-        <div className="flex items-center justify-center h-full">
-          <div className="text-text-muted text-sm">Loading visualize...</div>
-        </div>
-      }>
-        <VisualizeContent />
-      </Suspense>
-    </AppShell>
+    <Suspense fallback={null}>
+      <VisualizeRedirect />
+    </Suspense>
   );
 }

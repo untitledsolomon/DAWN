@@ -59,7 +59,7 @@ class DelegateToSubAgentTool(BaseTool):
     """Delegate a task to a specialist sub-agent.
 
     The supervisor calls this when a task falls clearly into one of the
-    sub-agent domains (CRM, ops, research, code, comms, data, axis, forge, security).
+    sub-agent domains (CRM, ops, research, code, comms, data, security).
     The sub-agent runs in its own isolated context with restricted tools.
     """
 
@@ -67,19 +67,19 @@ class DelegateToSubAgentTool(BaseTool):
     description = (
         "Delegate a task to a specialist sub-agent. Use this when a task clearly "
         "falls into a specific domain (CRM, operations, research, code, communications, "
-        "data analysis, Axis ERP, Forge CMS, or security). The sub-agent has its own "
+        "data analysis, or security). The sub-agent has its own "
         "tools and context. Available sub-agents: crm_agent, ops_agent, research_agent, "
-        "code_agent, comms_agent, data_agent, axis_agent, forge_agent, security_agent."
+        "code_agent, comms_agent, data_agent, security_agent."
     )
     input_schema = {
         "type": "object",
         "properties": {
             "agent_name": {
                 "type": "string",
-                "description": "Name of the sub-agent to delegate to. One of: crm_agent, ops_agent, research_agent, code_agent, comms_agent, data_agent, axis_agent, forge_agent, security_agent.",
+                "description": "Name of the sub-agent to delegate to. One of: crm_agent, ops_agent, research_agent, code_agent, comms_agent, data_agent, security_agent.",
                 "enum": [
                     "crm_agent", "ops_agent", "research_agent", "code_agent",
-                    "comms_agent", "data_agent", "axis_agent", "forge_agent", "security_agent"
+                    "comms_agent", "data_agent", "security_agent"
                 ],
             },
             "task": {
@@ -149,7 +149,7 @@ class DelegateParallelTool(BaseTool):
         "a complex task can be split into independent parts that different specialists "
         "can work on simultaneously. Each delegation specifies an agent_name and task. "
         "Available sub-agents: crm_agent, ops_agent, research_agent, code_agent, "
-        "comms_agent, data_agent, axis_agent, forge_agent, security_agent."
+        "comms_agent, data_agent, security_agent."
     )
     input_schema = {
         "type": "object",
@@ -165,7 +165,7 @@ class DelegateParallelTool(BaseTool):
                             "description": "Name of the sub-agent.",
                             "enum": [
                                 "crm_agent", "ops_agent", "research_agent", "code_agent",
-                                "comms_agent", "data_agent", "axis_agent", "forge_agent", "security_agent"
+                                "comms_agent", "data_agent", "security_agent"
                             ],
                         },
                         "task": {

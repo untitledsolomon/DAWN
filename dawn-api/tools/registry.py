@@ -200,24 +200,6 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register DelegateToSubAgentTool: {e}")
 
-    # v37.0 — Axis ERP tools
-    try:
-        from tools.axis import AxisPayrollTool, AxisTaxTool, AxisEmployeeTool
-        registry.register(AxisPayrollTool())
-        registry.register(AxisTaxTool())
-        registry.register(AxisEmployeeTool())
-    except Exception as e:
-        logger.error(f"Failed to register Axis tools: {e}")
-
-    # v37.0 — Forge CMS tools
-    try:
-        from tools.forge import ForgePagesTool, ForgeBlogTool, ForgeAnalyticsTool
-        registry.register(ForgePagesTool())
-        registry.register(ForgeBlogTool())
-        registry.register(ForgeAnalyticsTool())
-    except Exception as e:
-        logger.error(f"Failed to register Forge tools: {e}")
-
     # v37.0 — Email tools
     try:
         from tools.email_tool import EmailSendTool, EmailStatusTool
@@ -225,14 +207,6 @@ def _register_default_tools(registry: ToolRegistry) -> None:
         registry.register(EmailStatusTool())
     except Exception as e:
         logger.error(f"Failed to register Email tools: {e}")
-
-    # v38.0 — CRM tools (Regent Growth Engine)
-    try:
-        from tools.crm import CRMAnalyticsTool, CRMLeadTool
-        registry.register(CRMAnalyticsTool())
-        registry.register(CRMLeadTool())
-    except Exception as e:
-        logger.error(f"Failed to register CRM tools: {e}")
 
     # v40.0 — Memory tools (persistent memory store/recall/list)
     try:
@@ -242,3 +216,10 @@ def _register_default_tools(registry: ToolRegistry) -> None:
         registry.register(MemoryListTool())
     except Exception as e:
         logger.error(f"Failed to register Memory tools: {e}")
+
+    # v45.0 — GitHub integration tool (push/PRs/issues/reviews via GitHub App)
+    try:
+        from tools.github import GitHubTool
+        registry.register(GitHubTool())
+    except Exception as e:
+        logger.error(f"Failed to register GitHub tool: {e}")

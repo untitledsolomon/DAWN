@@ -7,9 +7,11 @@ table) and the `artifact` SSE event are handled by routers/agent.py, which has
 the session_id this tool doesn't know about.
 
 Supports:
-  - table: a structured table rendered from `spec` (data rows).
-  - note:  a free-form text/note card (renders from `code` as plain text).
-  - file:  a reference to an external file/URL (`url`).
+  - table:    a structured table rendered from `spec` (data rows).
+  - markdown: a formatted document rendered from `content` as markdown
+              (headers, lists, tables, bold/italic) — richer than a plain
+              text note, and the default for free-form content.
+  - file:     a reference to an external file/URL (`url`).
 """
 from typing import Any, Optional
 import logging
@@ -18,14 +20,14 @@ from tools.base import BaseTool, ToolResult
 logger = logging.getLogger(__name__)
 
 MAX_ROWS = 1000
-VALID_TYPES = {"table", "note", "file"}
+VALID_TYPES = {"table", "markdown", "file"}
 
 
 class CreateArtifactTool(BaseTool):
     name = "create_artifact"
     description = (
         "Push a non-chart item onto DAWN's Canvas workspace. Use this when the "
-        "user asks you to save, add, or pin a table, a written note/summary, or a "
+        "user asks you to save, add, or pin a table, a written report/summary, or a "
         "reference to a file — something that isn't best shown as a chart (for "
         "charts use create_chart, for animated explainers use create_explainer). "
         "The item appears on the Canvas page for the user to review."
@@ -41,8 +43,9 @@ class CreateArtifactTool(BaseTool):
                 "type": "string",
                 "enum": sorted(VALID_TYPES),
                 "description": (
-                    "table: structured data shown as a table. note: a written "
-                    "summary/note shown as text. file: a reference to a file/URL."
+                    "table: structured data shown as a table. markdown: a written "
+                    "report/summary rendered as formatted markdown. file: a reference "
+                    "to a file/URL."
                 ),
             },
             "description": {
@@ -59,7 +62,7 @@ class CreateArtifactTool(BaseTool):
             },
             "content": {
                 "type": "string",
-                "description": "For 'note': the text of the note/summary.",
+                "description": "For 'markdown': the markdown text of the report/summary.",
             },
             "url": {
                 "type": "string",
@@ -103,9 +106,9 @@ class CreateArtifactTool(BaseTool):
                 metadata={"artifact_type": "table"},
             )
 
-        if artifact_type == "note":
+        if artifact_type == "markdown":
             if not content or not str(content).strip():
-                return ToolResult(success=False, error="'content' is required for a note artifact.")
+                return ToolResult(success=False, error="'content' is required for a markdown artifact.")
             return ToolResult(
                 success=True,
                 output={
@@ -113,7 +116,7 @@ class CreateArtifactTool(BaseTool):
                     "description": description,
                     "code": str(content),
                 },
-                metadata={"artifact_type": "note"},
+                metadata={"artifact_type": "markdown"},
             )
 
         # file

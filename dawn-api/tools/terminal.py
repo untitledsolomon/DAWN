@@ -185,6 +185,12 @@ ALLOWED_BINARIES = WINDOWS_ALLOWED_BINARIES if _IS_WINDOWS else UNIX_ALLOWED_BIN
 # allowlist's intent (e.g. `python -c "import os; os.system(...)"`).
 DANGEROUS_ARG_SUBSTRINGS = ("os.system", "subprocess", "eval(", "exec(")
 
+# Shell metacharacters that would let a single command chain into others. The
+# allowlist model assumes one command with no shell interpretation; when the
+# shell fallback runs with shell=True, these would be honored by the real
+# shell regardless of what the allowlist/substring checks approved.
+SHELL_METACHARACTERS = (";", "|", "&", "$(", "`", ">", "<")
+
 
 class TerminalTool(BaseTool):
     name = "terminal"
@@ -266,6 +272,20 @@ class TerminalTool(BaseTool):
                     error=f"Command rejected — contains disallowed pattern '{bad}'",
                 )
 
+        # The allowlist model assumes a single command with no shell
+        # interpretation. Reject shell metacharacters outright so neither the
+        # primary path nor the shell fallback can chain commands.
+        for meta in SHELL_METACHARACTERS:
+            if meta in command:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"Command rejected — contains shell metacharacter '{meta}'. "
+                        "Pipes, redirects, and command chaining are not supported; "
+                        "run one command per call instead."
+                    ),
+                )
+
         try:
             work_dir = self._resolve_cwd(cwd)
         except ValueError as e:
@@ -280,7 +300,9 @@ class TerminalTool(BaseTool):
 
         # Strategy 2: Fallback to subprocess.run with shell=True
         # This handles sandbox environments where fork/exec is restricted
-        # but the shell can still spawn processes.
+        # but the shell can still spawn processes. The command has already been
+        # validated above (allowlist + dangerous substrings + no shell
+        # metacharacters), so the shell cannot interpret chaining operators.
         logger.info(f"asyncio subprocess failed, falling back to shell=True for: {command}")
         return await self._run_shell(command, work_dir, timeout)
 

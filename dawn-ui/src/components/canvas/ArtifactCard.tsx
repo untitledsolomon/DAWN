@@ -127,6 +127,40 @@ function FileBody({ artifact }: { artifact: Artifact }) {
   );
 }
 
+// ── Minimal markdown renderer ──────────────────────────────────────────────
+// Mirrors the renderer in components/chat/Message.tsx (no react-markdown dep).
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function renderMarkdown(text: string): string {
+  return text
+    .replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre><code class="language-${lang}">${escapeHtml(code.trim())}</code></pre>`)
+    .replace(/`([^`]+)`/g, (_, code) => `<code>${escapeHtml(code)}</code>`)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    .replace(/^### (.+)$/gm, "<h3>$1</h3>")
+    .replace(/^## (.+)$/gm, "<h2>$1</h2>")
+    .replace(/^# (.+)$/gm, "<h1>$1</h1>")
+    .replace(/^- (.+)$/gm, "<li>$1</li>")
+    .replace(/(<li>.*<\/li>)/gs, "<ul>$1</ul>")
+    .replace(/\n\n/g, "</p><p>")
+    .replace(/^([^<].*)$/gm, (line) => (line.trim() && !line.startsWith("<") ? `<p>${line}</p>` : line));
+}
+
+function MarkdownBody({ artifact }: { artifact: Artifact }) {
+  return (
+    <div
+      className="mt-3.5 prose prose-sm prose-invert max-w-none text-text-secondary text-xs leading-relaxed"
+      dangerouslySetInnerHTML={{ __html: renderMarkdown(artifact.code ?? "") }}
+    />
+  );
+}
+
 function ExplainerBody({ artifact }: { artifact: Artifact }) {
   return (
     <div className="mt-3.5">
@@ -167,6 +201,13 @@ export default function ArtifactCard({ artifact }: { artifact: Artifact }) {
       return (
         <CardShell artifact={artifact}>
           {artifact.url && <FileBody artifact={artifact} />}
+        </CardShell>
+      );
+    case "markdown":
+    case "note":
+      return (
+        <CardShell artifact={artifact}>
+          {artifact.code && <MarkdownBody artifact={artifact} />}
         </CardShell>
       );
     case "explainer":

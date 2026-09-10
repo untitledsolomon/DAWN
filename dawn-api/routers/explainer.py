@@ -20,6 +20,7 @@ from tools.explainer import (
     validate_explainer_fragment,
     EXPLAINER_SYSTEM_PROMPT,
     VALID_DIAGRAM_TYPES,
+    _call_llm_for_explainer,
 )
 import db.client as db
 
@@ -61,60 +62,6 @@ class ExplainerResponse(BaseModel):
     prompt: str
     metadata: dict
     created_at: str
-
-
-# ── LLM call helper ────────────────────────────────────────────────────────
-
-async def _call_llm_for_explainer(
-    topic: str,
-    diagram_type: str,
-    existing_code: Optional[str] = None,
-    follow_up: Optional[str] = None,
-) -> tuple[str, str]:
-    """Call the LLM to generate an explainer HTML fragment.
-    Returns (html_fragment, full_prompt) on success.
-    Raises HTTPException on failure."""
-    engine = get_engine()
-
-    # Build the user prompt
-    diagram_guide = {
-        "flowchart": "Create a flowchart-style animation showing sequential steps and decision branches.",
-        "structural": "Create a structural diagram showing containment, architecture, and relationships.",
-        "illustrative": "Create an illustrative visual metaphor that builds intuition about the concept.",
-    }
-
-    user_prompt_parts = [f"Topic: {topic}"]
-    user_prompt_parts.append(f"Diagram type: {diagram_type}")
-    user_prompt_parts.append(f"Style guide: {diagram_guide.get(diagram_type, diagram_guide['illustrative'])}")
-
-    if existing_code and follow_up:
-        user_prompt_parts.append(f"\n\n--- EXISTING EXPLAINER CODE ---\n{existing_code}\n--- END EXISTING CODE ---")
-        user_prompt_parts.append(f"\nFollow-up instruction: {follow_up}")
-        user_prompt_parts.append("\nModify the existing code according to the follow-up instruction. Return the COMPLETE updated HTML fragment, not just the changes.")
-    else:
-        user_prompt_parts.append("\nGenerate a complete, self-contained HTML fragment following all constraints below.")
-
-    user_prompt = "\n".join(user_prompt_parts)
-
-    messages = [
-        {"role": "system", "content": EXPLAINER_SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt},
-    ]
-
-    try:
-        response = await engine.complete(messages)
-    except Exception as e:
-        logger.error(f"[explainer] LLM call failed: {e}")
-        raise HTTPException(status_code=502, detail=f"LLM generation failed: {e}")
-
-    # Strip any markdown fences the LLM might add
-    html = response.strip()
-    # Remove ```html ... ``` fences
-    html = re.sub(r'^```(?:html)?\s*\n', '', html)
-    html = re.sub(r'\n```\s*$', '', html)
-    html = html.strip()
-
-    return html, user_prompt
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────

@@ -25,13 +25,79 @@ browser to open the authorization URL in a popup and hit a separate callback.
 """
 import logging
 import secrets
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import urlencode
 
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+# ── Token encryption at rest ─────────────────────────────────────────────────
+# OAuth tokens (access_token, refresh_token, client_secret) are sensitive
+# credentials. Encrypt them with Fernet before writing to the DB so a leaked
+# row isn't directly usable. The key comes from DAWN_TOKEN_ENCRYPTION_KEY.
+_TOKEN_FIELDS = ("access_token", "refresh_token", "client_secret")
+
+_fernet = None
+_fernet_warned = False
+
+
+def _get_fernet():
+    """Return a lazily-initialized Fernet cipher, or None if no key is set."""
+    global _fernet, _fernet_warned
+    if _fernet is not None:
+        return _fernet
+    key = getattr(settings, "dawn_token_encryption_key", None)
+    if not key:
+        if not _fernet_warned:
+            logger.warning(
+                "DAWN_TOKEN_ENCRYPTION_KEY is not set — MCP OAuth tokens will be "
+                "stored in plaintext. Set it to encrypt tokens at rest."
+            )
+            _fernet_warned = True
+        return None
+    try:
+        from cryptography.fernet import Fernet
+        _fernet = Fernet(key.encode())
+    except Exception as e:
+        if not _fernet_warned:
+            logger.warning(f"Failed to initialize token encryption (storing plaintext): {e}")
+            _fernet_warned = True
+        return None
+    return _fernet
+
+
+def _encrypt_row(row: dict) -> dict:
+    """Encrypt the sensitive fields of a token row in place."""
+    fernet = _get_fernet()
+    if not fernet:
+        return row
+    out = dict(row)
+    for f in _TOKEN_FIELDS:
+        val = out.get(f)
+        if val:
+            out[f] = fernet.encrypt(str(val).encode()).decode()
+    return out
+
+
+def _decrypt_row(row: dict) -> dict:
+    """Decrypt the sensitive fields of a token row, if encrypted."""
+    fernet = _get_fernet()
+    if not fernet:
+        return row
+    out = dict(row)
+    for f in _TOKEN_FIELDS:
+        val = out.get(f)
+        if val:
+            try:
+                out[f] = fernet.decrypt(val.encode()).decode()
+            except Exception:
+                # Not encrypted (e.g. written before encryption was enabled) —
+                # leave as-is.
+                pass
+    return out
 
 try:
     import httpx2 as httpx  # SDK auth helpers use the vendored httpx2 fork
@@ -84,9 +150,25 @@ class PendingFlow:
     resource: Optional[str] = None  # RFC 8707 resource indicator
     issuer: Optional[str] = None    # RFC 8414 issuer, for RFC 9207 validation
     server_id: Optional[str] = None  # DAWN server id, resolved from state at callback
+    created_at: float = field(default_factory=time.monotonic)
 
 
 _pending_flows: dict[str, PendingFlow] = {}
+
+# Abandoned flows (user closes the popup, navigates away, AS never redirects
+# back) otherwise leak a PendingFlow — including the code_verifier — in memory
+# indefinitely. Sweep entries older than this.
+PENDING_FLOW_TTL_SECONDS = 600  # 10 min is generous for a browser popup flow
+
+
+def _sweep_expired_flows() -> None:
+    now = time.monotonic()
+    expired = [s for s, f in _pending_flows.items()
+               if now - f.created_at > PENDING_FLOW_TTL_SECONDS]
+    for s in expired:
+        _pending_flows.pop(s, None)
+    if expired:
+        logger.info(f"Swept {len(expired)} expired OAuth pending flow(s)")
 
 
 def _redirect_uri() -> str:
@@ -104,14 +186,16 @@ async def _load_token_row(server_id: str) -> Optional[dict]:
         "*"
     ).eq("server_id", server_id).maybe_single().execute())
     # maybe_single() returns None when no row matches (0 rows), so guard against it.
-    return res.data if res and res.data else None
+    if not res or not res.data:
+        return None
+    return _decrypt_row(res.data)
 
 
 async def _save_token_row(server_id: str, row: dict) -> None:
     import db.client as db
     supabase = db.get_db()
     await db._async_execute(lambda: supabase.table("mcp_oauth_tokens").upsert(
-        {**row, "server_id": server_id}, on_conflict="server_id"
+        {**_encrypt_row(row), "server_id": server_id}, on_conflict="server_id"
     ).execute())
 
 
@@ -120,6 +204,14 @@ async def delete_tokens(server_id: str) -> None:
     import db.client as db
     supabase = db.get_db()
     await db._async_execute(lambda: supabase.table("mcp_oauth_tokens").delete().eq("server_id", server_id).execute())
+
+
+async def has_oauth_tokens(server_id: str) -> bool:
+    """True if this server has an OAuth token row at all (regardless of whether
+    the current token is valid) — i.e. whether it's OAuth-authenticated as
+    opposed to using a static key."""
+    row = await _load_token_row(server_id)
+    return bool(row)
 
 
 async def get_access_token(server_id: str) -> Optional[str]:
@@ -409,6 +501,10 @@ async def start_oauth_flow(server_url: str, server_id: Optional[str] = None) -> 
     """
     if not HAS_OAUTH:
         raise ValueError("MCP OAuth support not available (mcp SDK missing)")
+
+    # Sweep abandoned flows on the one place new ones get created — cheap, and
+    # no separate background task needed for something this low-volume.
+    _sweep_expired_flows()
 
     discovery = await probe_oauth(server_url)
     if not discovery:

@@ -288,6 +288,58 @@ async def mcp_oauth_status(server_id: str, _: None = Depends(verify_key)):
         return {"requires_oauth": False}
 
 
+# ── Write-gating: pending actions (approval queue) ─────────────────────────
+
+@router.get("/mcp/pending-actions", tags=["mcp"])
+async def list_pending_actions(status: Optional[str] = "pending", _: None = Depends(verify_key)):
+    """List pending (or other-status) mutating actions awaiting approval."""
+    try:
+        supabase = db.get_db()
+        q = supabase.table("pending_actions").select("*")
+        if status:
+            q = q.eq("status", status)
+        res = await db._async_execute(lambda: q.order("created_at", desc=True).execute())
+        return res.data or []
+    except Exception as e:
+        logger.error(f"Failed to list pending actions: {e}")
+        return []
+
+
+@router.post("/mcp/pending-actions/{action_id}/approve", tags=["mcp"])
+async def approve_pending_action(action_id: str, _: None = Depends(verify_key)):
+    """Approve a pending action, then execute it and record the outcome."""
+    try:
+        import db.client as db
+        supabase = db.get_db()
+        await db._async_execute(lambda: supabase.table("pending_actions").update({
+            "status": "approved",
+            "resolved_at": "now()",
+        }).eq("id", action_id).execute())
+
+        from tools.pending_actions import execute_pending_action
+        outcome = await execute_pending_action(action_id)
+        return {"action_id": action_id, **outcome}
+    except Exception as e:
+        logger.error(f"Failed to approve pending action {action_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/mcp/pending-actions/{action_id}/reject", tags=["mcp"])
+async def reject_pending_action(action_id: str, _: None = Depends(verify_key)):
+    """Reject a pending action — it never executes."""
+    try:
+        import db.client as db
+        supabase = db.get_db()
+        await db._async_execute(lambda: supabase.table("pending_actions").update({
+            "status": "rejected",
+            "resolved_at": "now()",
+        }).eq("id", action_id).execute())
+        return {"action_id": action_id, "status": "rejected"}
+    except Exception as e:
+        logger.error(f"Failed to reject pending action {action_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.put("/mcp/tools/{tool_id}/pin", tags=["mcp"])
 async def pin_mcp_tool(tool_id: str, req: dict, _: None = Depends(verify_key)):
     """Pin or unpin a discovered MCP tool.

@@ -91,6 +91,36 @@ export async function getPendingNodes(): Promise<DawnNode[]> {
   return res.json();
 }
 
+// ── Pending actions (write-gating approval queue) ─────────────────────────────────────────────────────────────────
+
+export interface PendingAction {
+  id: string;
+  server_id: string | null;
+  tool_name: string;
+  tool_args: Record<string, unknown>;
+  requested_by?: string | null;
+  status: string;
+  result?: unknown;
+  error?: string | null;
+  created_at: string;
+  resolved_at?: string | null;
+}
+
+export async function listPendingActions(status = "pending"): Promise<PendingAction[]> {
+  const res = await fetch(`${BASE}/mcp/pending-actions?status=${status}`, { headers: headers() });
+  return res.json();
+}
+
+export async function approvePendingAction(id: string) {
+  const res = await fetch(`${BASE}/mcp/pending-actions/${id}/approve`, { method: "POST", headers: headers() });
+  return res.json();
+}
+
+export async function rejectPendingAction(id: string) {
+  const res = await fetch(`${BASE}/mcp/pending-actions/${id}/reject`, { method: "POST", headers: headers() });
+  return res.json();
+}
+
 // ── Tags ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function listTags(): Promise<Tag[]> {

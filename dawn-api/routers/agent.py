@@ -219,7 +219,7 @@ async def agent(
                     and isinstance(event.get("output"), dict)
                 ):
                     output = event["output"]
-                    atype = output.get("artifact_type") or "note"
+                    atype = output.get("artifact_type") or "markdown"
                     try:
                         data = {
                             "session_id": session_id,
@@ -230,7 +230,7 @@ async def agent(
                             data["description"] = output["description"]
                         if atype == "table" and output.get("spec"):
                             data["spec"] = output["spec"]
-                        elif atype == "note" and output.get("code"):
+                        elif atype == "markdown" and output.get("code"):
                             data["code"] = output["code"]
                         elif atype == "file" and output.get("url"):
                             data["url"] = output["url"]

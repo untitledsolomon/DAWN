@@ -9,7 +9,11 @@ import {
   rejectNode,
   listDecisionLog,
   approveDecision,
+  listPendingActions,
+  approvePendingAction,
+  rejectPendingAction,
   type DecisionLogEntry,
+  type PendingAction,
 } from "@/lib/api";
 import type { DawnNode } from "@/lib/types";
 
@@ -26,11 +30,12 @@ export default function ApprovalsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [nodes, decisions] = await Promise.all([
+      const [nodes, decisions, actions] = await Promise.all([
         getPendingNodes().catch(() => [] as DawnNode[]),
         listDecisionLog({ limit: 100 })
           .then((d) => d.filter((x) => !x.human_decision))
           .catch(() => [] as DecisionLogEntry[]),
+        listPendingActions("pending").catch(() => [] as PendingAction[]),
       ]);
 
       const nodeItems: ApprovalItem[] = nodes.map((n) => ({
@@ -53,7 +58,17 @@ export default function ApprovalsPage() {
         created_at: d.created_at,
       }));
 
-      setPending([...nodeItems, ...decisionItems]);
+      const actionItems: ApprovalItem[] = actions.map((a) => ({
+        id: a.id,
+        kind: "mcp_action",
+        category: a.server_id ? "MCP ACTION" : "ACTION",
+        title: a.tool_name,
+        description: `Mutating action queued for approval. Args: ${JSON.stringify(a.tool_args)}`,
+        impact: "production",
+        created_at: a.created_at,
+      }));
+
+      setPending([...nodeItems, ...decisionItems, ...actionItems]);
     } catch (err: any) {
       console.error("[Approvals] Failed to load:", err);
       setError(err?.message || "Failed to load approvals");
@@ -75,6 +90,8 @@ export default function ApprovalsPage() {
     try {
       if (item.kind === "node") {
         await approveNode(item.id);
+      } else if (item.kind === "mcp_action") {
+        await approvePendingAction(item.id);
       } else {
         await approveDecision(item.id, { decision: "approved", by: DECISION_BY });
       }
@@ -89,6 +106,8 @@ export default function ApprovalsPage() {
     try {
       if (item.kind === "node") {
         await rejectNode(item.id);
+      } else if (item.kind === "mcp_action") {
+        await rejectPendingAction(item.id);
       } else {
         await approveDecision(item.id, { decision: "rejected", by: DECISION_BY });
       }
@@ -106,6 +125,8 @@ export default function ApprovalsPage() {
       try {
         if (item.kind === "node") {
           await approveNode(item.id);
+        } else if (item.kind === "mcp_action") {
+          await approvePendingAction(item.id);
         } else {
           await approveDecision(item.id, { decision: "approved", by: DECISION_BY });
         }
