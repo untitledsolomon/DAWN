@@ -81,6 +81,15 @@ export default function ApprovalsPage() {
     load();
   }, [load]);
 
+  // Poll so new pending actions (e.g. a queued mutating tool call) appear
+  // without a manual refresh.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!document.hidden) load();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [load]);
+
   const resolve = (item: ApprovalItem) => {
     setPending((prev) => prev.filter((p) => p.id !== item.id));
     setResolved((prev) => [item, ...prev]);

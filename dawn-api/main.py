@@ -263,6 +263,13 @@ async def start_background_services():
 @app.on_event("shutdown")
 async def stop_background_services():
     """Stop background services."""
+    # Autonomous agent-task scheduler
+    try:
+        from tools.agent_scheduler import stop_agent_scheduler
+        await stop_agent_scheduler()
+    except Exception as e:
+        logger.error(f"Failed to stop autonomous agent scheduler: {e}")
+
     # Ingestion queue
     try:
         from routers.ingest import ingestion_queue
