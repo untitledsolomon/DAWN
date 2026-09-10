@@ -29,7 +29,7 @@ from tools.base import ToolResult
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_ITERATIONS = 25
+DEFAULT_MAX_ITERATIONS = 100
 
 # No-progress early exit: stop if the same tool call repeats with identical
 # arguments this many times in a row — a much stronger safety net than a raw
