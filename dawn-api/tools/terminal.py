@@ -195,12 +195,11 @@ SHELL_METACHARACTERS = (";", "|", "&", "$(", "`", ">", "<")
 class TerminalTool(BaseTool):
     name = "terminal"
     description = (
-        "Run a shell command inside the DAWN sandbox directory. Use for "
-        "inspecting files, running tests, checking build/lint output, or "
-        "installing packages needed for a task. Commands run with a "
-        "restricted binary set and no shell interpretation — pipes, "
-        "redirects, and command chaining (| ; && $()) are not supported; "
-        "run one command per call instead."
+        "Run a shell command. Use for inspecting files, running tests, "
+        "checking build/lint output, or installing packages needed for a task. "
+        "Commands run with a restricted binary set and no shell interpretation "
+        "— pipes, redirects, and command chaining (| ; && $()) are not "
+        "supported; run one command per call instead."
     )
     input_schema = {
         "type": "object",
@@ -225,14 +224,25 @@ class TerminalTool(BaseTool):
     }
 
     def __init__(self):
+        self.sandbox_enabled = getattr(settings, "filesystem_sandbox_enabled", True)
         root = getattr(settings, "filesystem_sandbox_root", None) or "."
         self.root = Path(root).resolve()
-        self.root.mkdir(parents=True, exist_ok=True)
-        logger.info(f"TerminalTool sandboxed to: {self.root} (OS: {'Windows' if _IS_WINDOWS else 'Unix/Linux'})")
+        if self.sandbox_enabled:
+            self.root.mkdir(parents=True, exist_ok=True)
+            logger.info(f"TerminalTool sandboxed to: {self.root} (OS: {'Windows' if _IS_WINDOWS else 'Unix/Linux'})")
+        else:
+            logger.info(f"TerminalTool sandbox disabled — commands run against the machine (OS: {'Windows' if _IS_WINDOWS else 'Unix/Linux'})")
 
     def _resolve_cwd(self, cwd: str | None) -> Path:
         if not cwd:
             return self.root
+        if not self.sandbox_enabled:
+            # Sandbox disabled: resolve the cwd as given (absolute or relative
+            # to the current working directory).
+            candidate = Path(cwd).resolve()
+            if not candidate.is_dir():
+                raise ValueError(f"cwd '{cwd}' does not exist or is not a directory")
+            return candidate
         candidate = (self.root / cwd).resolve()
         if self.root not in candidate.parents and candidate != self.root:
             raise ValueError(f"cwd '{cwd}' escapes the sandbox root")

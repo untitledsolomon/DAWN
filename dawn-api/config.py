@@ -29,6 +29,11 @@ class Settings(BaseSettings):
 
     # Tools
     filesystem_sandbox_root: str = "./sandbox"
+    # When True, the filesystem/terminal tools are jailed to
+    # filesystem_sandbox_root. When False, paths are resolved against the
+    # machine (absolute paths used as-is, relative paths against the CWD) —
+    # i.e. the sandbox jail is disabled.
+    filesystem_sandbox_enabled: bool = True
     skills_install_root: str = "./installed_skills"
     tools_enabled: str = "filesystem,git,websearch,install_skill,terminal,web_fetch,ssh,nmap,osint,mcp"
 
