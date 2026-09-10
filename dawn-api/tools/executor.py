@@ -4,9 +4,16 @@ validates it against the registry, runs it, and guarantees a ToolResult
 comes back no matter what — the agent loop should never have to handle
 a raw exception from a tool.
 
-Write-gating: native tools marked `is_mutating` (or whose name matches the
-mutating prefix convention) are queued for human approval via the
-pending_actions queue instead of executing immediately.
+Write-gating: native tools marked `is_mutating` are queued for human approval
+via the pending_actions queue instead of executing immediately.
+
+Native DAWN tools are gated ONLY on the explicit `is_mutating` class
+attribute, never on the name-prefix heuristic. That heuristic (create_/
+delete_/send_/publish_/update_) is appropriate for MCP remote tools — where a
+remote `create_customer` mutates real external data — but DAWN's own
+`create_artifact`/`create_chart`/`create_explainer` write to the internal
+sandboxed Canvas and must NOT require approval. Only genuinely mutating native
+tools (e.g. send_email) set `is_mutating = True`.
 """
 import logging
 from tools.base import ToolResult
@@ -38,10 +45,12 @@ async def execute_tool_call(registry: ToolRegistry, name: str, args: dict) -> To
         )
 
     # Write-gating for native mutating tools: queue for approval instead of
-    # executing. MCP tools are gated inside tools/mcp_server.py; this covers
-    # every native tool (current and future) automatically.
-    from tools.pending_actions import is_mutating_tool, queue_pending_action
-    if getattr(tool, "is_mutating", False) or is_mutating_tool(name):
+    # executing. MCP tools are gated inside tools/mcp_server.py (by prefix);
+    # native tools are gated ONLY on the explicit is_mutating attribute, so
+    # DAWN's own create_artifact/create_chart/create_explainer (which write to
+    # the internal Canvas) are not blocked.
+    from tools.pending_actions import queue_pending_action
+    if getattr(tool, "is_mutating", False):
         return await queue_pending_action(None, name, args)
 
     try:

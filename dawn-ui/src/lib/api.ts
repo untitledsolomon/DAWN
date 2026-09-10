@@ -640,6 +640,13 @@ export async function cancelAgentTask(taskId: string) {
   await fetch(`${BASE}/agent-tasks/${taskId}/cancel`, { method: "POST", headers: headers() });
 }
 
+export async function followUpAgentTask(taskId: string, followUp: string) {
+  const res = await fetch(`${BASE}/agent-tasks/${taskId}/follow-up`, {
+    method: "POST", headers: headers(), body: JSON.stringify({ follow_up: followUp }),
+  });
+  return res.json();
+}
+
 // ── v20.0: Artifacts ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function listArtifacts(params?: {

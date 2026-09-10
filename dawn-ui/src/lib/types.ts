@@ -248,6 +248,9 @@ export interface AgentTask {
   progress: number;
   iterations: number;
   tools_used: string[];
+  result?: string | null;
+  error?: string | null;
+  follow_up?: string | null;
   created_at: string;
 }
 

@@ -6,6 +6,7 @@ import {
   listAgentTasks,
   createAgentTask,
   cancelAgentTask,
+  followUpAgentTask,
 } from "@/lib/api";
 import type { AgentTask } from "@/lib/types";
 import {
@@ -54,6 +55,11 @@ function AgentTasksContent() {
   const [maxIterations, setMaxIterations] = useState(100);
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // Expanded task detail + follow-up state
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [followUpText, setFollowUpText] = useState("");
+  const [followingUpId, setFollowingUpId] = useState<string | null>(null);
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -107,6 +113,20 @@ function AgentTasksContent() {
       await fetchTasks();
     } catch (err) {
       console.error("[AgentTasks] Failed to cancel:", err);
+    }
+  };
+
+  const handleFollowUp = async (id: string) => {
+    if (!followUpText.trim()) return;
+    setFollowingUpId(id);
+    try {
+      await followUpAgentTask(id, followUpText.trim());
+      setFollowUpText("");
+      await fetchTasks();
+    } catch (err) {
+      console.error("[AgentTasks] Failed to follow up:", err);
+    } finally {
+      setFollowingUpId(null);
     }
   };
 
@@ -296,6 +316,14 @@ function AgentTasksContent() {
                             />
                           </div>
                         )}
+                        {(task.status === "completed" || task.status === "failed") && (
+                          <button
+                            onClick={() => setExpandedId(expandedId === task.id ? null : task.id)}
+                            className="mt-2 text-2xs text-dawn hover:text-dawn/80 transition-all"
+                          >
+                            {expandedId === task.id ? "Hide result" : "View result"}
+                          </button>
+                        )}
                       </div>
                       {(task.status === "running" || task.status === "pending" || task.status === "paused") && (
                         <button
@@ -307,6 +335,43 @@ function AgentTasksContent() {
                         </button>
                       )}
                     </div>
+
+                    {/* Expanded result + follow-up */}
+                    {expandedId === task.id && (task.status === "completed" || task.status === "failed") && (
+                      <div className="mt-3 pt-3 border-t border-rim space-y-3">
+                        {task.error && (
+                          <div className="px-3 py-2 rounded-lg bg-ember/5 border border-ember/15 text-ember text-2xs font-mono break-words">
+                            {task.error}
+                          </div>
+                        )}
+                        {task.result ? (
+                          <div className="px-3 py-2.5 rounded-lg bg-elevated/40 border border-rim text-text-secondary text-xs whitespace-pre-wrap break-words max-h-64 overflow-y-auto">
+                            {task.result}
+                          </div>
+                        ) : (
+                          !task.error && (
+                            <p className="text-text-muted text-2xs">No report was produced for this task.</p>
+                          )
+                        )}
+                        <div className="flex items-end gap-2">
+                          <textarea
+                            value={followUpText}
+                            onChange={(e) => setFollowUpText(e.target.value)}
+                            placeholder="Follow up on this task…"
+                            rows={2}
+                            className="flex-1 bg-elevated/60 border border-rim rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder:text-text-muted outline-none focus:border-dawn/40 transition-all resize-none"
+                          />
+                          <button
+                            onClick={() => handleFollowUp(task.id)}
+                            disabled={followingUpId === task.id || !followUpText.trim()}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-dawn text-white text-xs font-medium hover:bg-dawn/90 transition-all disabled:opacity-40 flex-shrink-0"
+                          >
+                            {followingUpId === task.id ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
+                            Follow up
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}

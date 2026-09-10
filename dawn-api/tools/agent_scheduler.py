@@ -139,6 +139,8 @@ async def _run_schedule(schedule: dict) -> None:
             "progress": 100 if status == "completed" else 0,
             "iterations": iterations,
             "tools_used": tools_used,
+            "result": final_content or None,
+            "error": error,
         }).eq("id", task_id).execute() if task_id else None)
     except Exception as e:
         logger.error(f"[AgentScheduler] Failed to update task row: {e}")

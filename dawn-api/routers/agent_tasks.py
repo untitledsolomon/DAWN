@@ -105,6 +105,90 @@ async def resume_agent_task(task_id: str, _: None = Depends(verify_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class AgentTaskFollowUp(BaseModel):
+    follow_up: str
+
+
+@router.post("/agent-tasks/{task_id}/follow-up", tags=["agent-tasks"])
+async def follow_up_agent_task(task_id: str, req: AgentTaskFollowUp, _: None = Depends(verify_key)):
+    """Run a follow-up on a completed agent task.
+
+    Re-runs the agent loop with the task's original goal plus its prior result
+    as context, then updates the task's result with the follow-up answer. This
+    gives a way to continue a task after it's marked complete.
+    """
+    import asyncio
+    from llm.identity import resolve_identity
+    from llm.agent import run_agent_loop
+
+    try:
+        supabase = db.get_db()
+        res = supabase.table("agent_tasks").select("*").eq("id", task_id).execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Task not found")
+        task = res.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    goal = task.get("goal") or ""
+    prior_result = task.get("result") or ""
+    max_iterations = task.get("max_iterations") or 50
+
+    # Build a follow-up prompt grounded in the original goal and prior result.
+    prompt = (
+        f"Follow-up on an earlier agent task.\n\n"
+        f"Original goal: {goal}\n\n"
+        f"Previous result:\n{prior_result or '(none)'}\n\n"
+        f"Follow-up request: {req.follow_up}\n\n"
+        f"Continue the work and provide a complete, updated answer."
+    )
+
+    key = getattr(settings, "dawn_api_key", None) or "dev-key"
+    identity = resolve_identity(key)
+
+    final_content = ""
+    error = None
+    try:
+        async for event in run_agent_loop(
+            user_message=prompt,
+            identity=identity,
+            history=[],
+            max_iterations=max_iterations,
+        ):
+            etype = event.get("type")
+            if etype == "token":
+                final_content = event.get("content", "")
+            elif etype == "done":
+                final_content = event.get("content", "")
+            elif etype == "error":
+                error = event.get("content", "Agent loop error")
+            elif etype == "iteration_limit":
+                error = event.get("content", "Iteration limit reached")
+    except Exception as e:
+        logger.exception(f"Agent task follow-up failed for {task_id}")
+        error = str(e)
+
+    status = "completed" if not error else "failed"
+    try:
+        supabase.table("agent_tasks").update({
+            "status": status,
+            "result": final_content or None,
+            "error": error,
+            "follow_up": req.follow_up,
+        }).eq("id", task_id).execute()
+    except Exception as e:
+        logger.error(f"Failed to update task after follow-up: {e}")
+
+    return {
+        "id": task_id,
+        "status": status,
+        "result": final_content,
+        "error": error,
+    }
+
+
 @router.get("/agent-schedules", tags=["agent-tasks"])
 async def list_agent_schedules(_: None = Depends(verify_key)):
     """List agent schedules."""
