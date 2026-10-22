@@ -97,16 +97,29 @@ class DeepSeekEngine:
             api_key=settings.deepseek_api_key,
             base_url=settings.deepseek_base_url,
         )
-        self.model = settings.deepseek_model
+        self.model = self._setting("llm.model", settings.deepseek_model)
         logger.info(f"DeepSeek engine initialised — model: {self.model}")
+
+    @staticmethod
+    def _setting(key: str, default):
+        """Read a runtime setting, falling back to the given default. Never
+        raises — the store keeps last-known-good values under normal use."""
+        try:
+            from runtime_settings import get_runtime
+            value = get_runtime().get(key)
+            if value is None:
+                return default
+            return value
+        except Exception:
+            return default
 
     async def stream(self, messages: list[dict]) -> AsyncGenerator[str, None]:
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=messages,
             stream=True,
-            max_tokens=2048,
-            temperature=0.7,
+            max_tokens=int(self._setting("llm.chat_max_tokens", 2048)),
+            temperature=float(self._setting("llm.chat_temperature", 0.7)),
         )
         async for chunk in response:
             delta = chunk.choices[0].delta
@@ -119,7 +132,7 @@ class DeepSeekEngine:
             messages=messages,
             stream=False,
             max_tokens=1024,
-            temperature=0.3,
+            temperature=float(self._setting("llm.chat_temperature", 0.3)),
         )
         return response.choices[0].message.content or ""
 
@@ -127,13 +140,15 @@ class DeepSeekEngine:
         self,
         messages: list[dict],
         tools: list[dict],
-        max_tokens: int = 8192,
+        max_tokens: Optional[int] = None,
     ) -> CompletionResult:
         """
         Like complete(), but offers the model a set of callable tools
         (OpenAI/DeepSeek function-calling spec, e.g. registry.specs()).
         Returns either final text content, or a list of tool calls to run.
         """
+        if max_tokens is None:
+            max_tokens = int(self._setting("llm.tool_max_tokens", 8192))
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=messages,
@@ -141,7 +156,8 @@ class DeepSeekEngine:
             tool_choice="auto",
             stream=False,
             max_tokens=max_tokens,
-            temperature=0.1,  # low on purpose — determinism matters more than
+            temperature=float(self._setting("llm.tool_temperature", 0.1)),  # low on
+                              # purpose — determinism matters more than
                               # creativity when deciding whether to call a tool
         )
         choice = response.choices[0]
@@ -175,13 +191,15 @@ class DeepSeekEngine:
         self,
         messages: list[dict],
         tools: list[dict],
-        max_tokens: int = 8192,
+        max_tokens: Optional[int] = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """
         Streaming variant of complete_with_tools(). The final "done" event
         carries the same CompletionResult, including __parse_error__ handling
         for a truncated tool-call JSON payload (finish_reason == "length").
         """
+        if max_tokens is None:
+            max_tokens = int(self._setting("llm.tool_max_tokens", 8192))
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=messages,
@@ -189,7 +207,7 @@ class DeepSeekEngine:
             tool_choice="auto",
             stream=True,
             max_tokens=max_tokens,
-            temperature=0.1,
+            temperature=float(self._setting("llm.tool_temperature", 0.1)),
         )
         text_parts: list[str] = []
         tool_calls: dict[int, dict] = {}
@@ -338,11 +356,27 @@ class LocalEngine:
 
 _engine: Optional[DeepSeekEngine | LocalEngine] = None
 
+#: The engine is rebuilt when llm.* runtime settings change (see main.py wiring).
+llm_reset_version: int = 0
+
+
+def reset_engine() -> None:
+    """Drop the cached engine so the next get_engine() rebuilds it."""
+    global _engine, llm_reset_version
+    _engine = None
+    llm_reset_version += 1
+
 
 def get_engine() -> DeepSeekEngine | LocalEngine:
     global _engine
     if _engine is None:
-        if settings.llm_mode == "local":
+        mode = settings.llm_mode
+        try:
+            from runtime_settings import get_runtime
+            mode = get_runtime().get("llm.mode") or settings.llm_mode
+        except Exception:
+            pass
+        if mode == "local":
             if not settings.local_model_path:
                 raise RuntimeError(
                     "LLM_MODE=local but LOCAL_MODEL_PATH is not set. "

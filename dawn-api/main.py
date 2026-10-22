@@ -30,6 +30,7 @@ from routers import (
     files,     # v42.0 — File upload/download
     skills,    # v42.0 — Skills list/install
     github_webhooks,  # v45.0 — GitHub integration webhook receiver
+    runtime_settings,  # runtime settings + tools inventory
 )
 
 app = FastAPI(
@@ -54,6 +55,7 @@ app.include_router(search.router, prefix="/search", tags=["search"])
 app.include_router(ingest.router, prefix="/ingest", tags=["ingest"])
 app.include_router(agent.router, prefix="/agent", tags=["agent"])
 app.include_router(settings_router.router, prefix="", tags=["settings"])
+app.include_router(runtime_settings.router, prefix="", tags=["settings"])
 
 # ─── v3.0 — SSH ──────────────────────────────────────────────────────────────
 app.include_router(ssh_hosts.router, prefix="", tags=["ssh"])
@@ -176,6 +178,19 @@ async def start_background_services():
         logger.info("Database migrations checked")
     except Exception as e:
         logger.error(f"Failed to run database migrations: {e}")
+
+    # Runtime settings — load DB overrides, register the engine-reset hook for
+    # llm.* changes, and start the periodic refresh task.
+    try:
+        from runtime_settings import get_runtime
+        from llm.engine import reset_engine
+        get_runtime().on_change("llm.", lambda _key: reset_engine())
+        runtime = get_runtime()
+        await runtime.refresh()
+        runtime.start()
+        logger.info("Runtime settings loaded")
+    except Exception as e:
+        logger.error(f"Failed to load runtime settings: {e}")
 
     # Ingestion queue
     try:

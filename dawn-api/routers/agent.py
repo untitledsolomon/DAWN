@@ -251,14 +251,28 @@ async def agent(
                 artifact_ids=artifact_ids_this_turn if artifact_ids_this_turn else None,
             )
 
-        # ★ v40.0: Background: extract memory facts from agent conversations too
+        # ★ v40.0: Background: extract memory facts from agent conversations too.
+        # memory.extract_mode (runtime setting): always / conditional / off.
+        # 'conditional' skips the extraction call when the exchange has no new
+        # durable facts (short text and no tool calls this turn, a cheap heuristic).
         if req.message and assistant_content:
-            background_tasks.add_task(
-                extract_and_store_memory,
-                f"User: {req.message}\nDAWN: {assistant_content}",
-                engine.complete,
-                session_id,
-            )
+            try:
+                from runtime_settings import get_runtime
+                extract_mode = get_runtime().get("memory.extract_mode") or "always"
+            except Exception:
+                extract_mode = "always"
+            if extract_mode != "off":
+                short_exchange = (
+                    len(req.message) + len(assistant_content) < 400
+                    and not tool_calls_list
+                )
+                if extract_mode == "always" or not short_exchange:
+                    background_tasks.add_task(
+                        extract_and_store_memory,
+                        f"User: {req.message}\nDAWN: {assistant_content}",
+                        engine.complete,
+                        session_id,
+                    )
 
     return StreamingResponse(
         generate(),

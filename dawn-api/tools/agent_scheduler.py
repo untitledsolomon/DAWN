@@ -13,6 +13,7 @@ waiting for — previously there was no background process executing schedules.
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -225,7 +226,19 @@ def start_agent_scheduler() -> Optional[object]:
     matching the ingestion-queue worker pattern. This keeps all DB/LLM calls
     on the loop they were created for, avoiding the freeze caused by running
     `asyncio.run()` in a separate APScheduler thread.
+
+    Autopilot spec Phase 0: this legacy scheduler is OFF by default. It never
+    evaluates the cron expression on agent_schedules (it re-fires every
+    POLL_INTERVAL_SECONDS), so an active schedule burns tokens all day. Gate it
+    behind AUTOPILOT_LEGACY_SCHEDULER=true until the autopilot scheduler
+    replaces it.
     """
+    if os.environ.get("AUTOPILOT_LEGACY_SCHEDULER", "").lower() != "true":
+        logger.info(
+            "[AgentScheduler] Legacy scheduler disabled by default — "
+            "set AUTOPILOT_LEGACY_SCHEDULER=true to enable it."
+        )
+        return None
     global _scheduler_task
     if _scheduler_task is not None and not _scheduler_task.done():
         logger.info("[AgentScheduler] Scheduler already running")

@@ -7,11 +7,19 @@ import logging
 import httpx
 from tools.base import BaseTool, ToolResult
 from config import settings
+from runtime_settings import get_runtime
 
 logger = logging.getLogger(__name__)
 
 BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 REQUEST_TIMEOUT_SECONDS = 10
+
+
+def _web_timeout() -> int:
+    try:
+        return int(get_runtime().get("tools.web_timeout") or REQUEST_TIMEOUT_SECONDS)
+    except Exception:
+        return REQUEST_TIMEOUT_SECONDS
 
 
 class WebSearchTool(BaseTool):
@@ -80,7 +88,7 @@ class WebSearchTool(BaseTool):
             q = f"{q} " + " ".join(f"-site:{d}" for d in blocked_domains)
 
         try:
-            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+            async with httpx.AsyncClient(timeout=_web_timeout()) as client:
                 response = await client.get(
                     BRAVE_ENDPOINT,
                     params={"q": q, "count": count},
@@ -90,7 +98,7 @@ class WebSearchTool(BaseTool):
                     },
                 )
         except httpx.TimeoutException:
-            return ToolResult(success=False, error=f"Search timed out after {REQUEST_TIMEOUT_SECONDS}s")
+            return ToolResult(success=False, error=f"Search timed out after {_web_timeout()}s")
         except httpx.HTTPError as e:
             return ToolResult(success=False, error=f"Search request failed: {e}")
 

@@ -16,11 +16,19 @@ benefit — the model doesn't need anything fancier than "chart these rows this 
 from typing import Any, Optional
 import logging
 from tools.base import BaseTool, ToolResult
+from runtime_settings import get_runtime
 
 logger = logging.getLogger(__name__)
 
 MAX_ROWS = 500
 VALID_CHART_TYPES = {"bar", "line", "area", "point", "arc"}  # arc == pie/donut in Vega-Lite
+
+
+def _chart_rows() -> int:
+    try:
+        return int(get_runtime().get("tools.chart_max_rows") or MAX_ROWS)
+    except Exception:
+        return MAX_ROWS
 
 
 def build_vega_spec(
@@ -151,9 +159,10 @@ class ChartTool(BaseTool):
         if not all(isinstance(row, dict) for row in data):
             return ToolResult(success=False, error="Every item in 'data' must be an object/row, not a scalar.")
 
-        if len(data) > MAX_ROWS:
-            logger.info(f"[ChartTool] Truncating {len(data)} rows to {MAX_ROWS}")
-            data = data[:MAX_ROWS]
+        max_rows = _chart_rows()
+        if len(data) > max_rows:
+            logger.info(f"[ChartTool] Truncating {len(data)} rows to {max_rows}")
+            data = data[:max_rows]
 
         missing_x = [i for i, row in enumerate(data) if x_field not in row]
         missing_y = [i for i, row in enumerate(data) if y_field not in row]

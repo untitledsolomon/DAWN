@@ -9,21 +9,23 @@ Operations:
   - email_status: Check if SMTP is configured
 """
 
-import os
 import logging
 from typing import Optional
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from tools.base import BaseTool, ToolResult
+from config import settings
 
 logger = logging.getLogger(__name__)
 
-SMTP_HOST = os.environ.get("SMTP_HOST", "")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER = os.environ.get("SMTP_USER", "")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
-SMTP_FROM_EMAIL = os.environ.get("SMTP_FROM_EMAIL", "dawn@regent.ug")
+# SMTP is read from config.Settings (env-backed) so the Settings page's "env"
+# badge is truthful — not a second copy of os.environ read at import.
+SMTP_HOST = getattr(settings, "smtp_host", None) or ""
+SMTP_PORT = int(getattr(settings, "smtp_port", None) or 587)
+SMTP_USER = getattr(settings, "smtp_user", None) or ""
+SMTP_PASSWORD = getattr(settings, "smtp_password", None) or ""
+SMTP_FROM_EMAIL = getattr(settings, "smtp_from_email", None) or "dawn@regent.ug"
 
 
 def _smtp_configured() -> bool:

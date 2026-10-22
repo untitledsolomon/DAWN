@@ -289,6 +289,76 @@ export async function updateNotificationPrefs(prefs: Partial<NotificationPrefs>)
   if (!res.ok) throw new Error(`Failed to update notification prefs: ${res.status}`);
 }
 
+// ── Runtime settings (registry-driven) ──────────────────────────────────────
+
+export interface RuntimeSettingMeta {
+  key: string;
+  label: string;
+  description: string;
+  group: string;
+  type: string;
+  min: number | null;
+  max: number | null;
+  step: number | null;
+  choices: string[];
+  unit: string | null;
+  default: unknown;
+  env_value: unknown;
+  value: unknown;
+  source: "default" | "env" | "db";
+  hot: boolean;
+  advanced: boolean;
+  updated_by?: string | null;
+  updated_at?: string | null;
+}
+
+export async function getRuntimeSettings(): Promise<RuntimeSettingMeta[]> {
+  const res = await fetch(`${BASE}/runtime-settings`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to get runtime settings: ${res.status}`);
+  return res.json();
+}
+
+export async function setRuntimeSetting(key: string, value: unknown, reason?: string): Promise<RuntimeSettingMeta> {
+  const res = await fetch(`${BASE}/runtime-settings/${key}`, {
+    method: "PUT",
+    headers: headers(),
+    body: JSON.stringify({ value, ...(reason ? { reason } : {}) }),
+  });
+  if (!res.ok) throw new Error(`Failed to set setting ${key}: ${res.status}`);
+  return res.json();
+}
+
+export async function resetRuntimeSetting(key: string): Promise<{ key: string; status: string }> {
+  const res = await fetch(`${BASE}/runtime-settings/${key}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  if (!res.ok) throw new Error(`Failed to reset setting ${key}: ${res.status}`);
+  return res.json();
+}
+
+export async function runtimeSettingHistory(key: string, limit = 50): Promise<{
+  old_value: unknown; new_value: unknown; changed_by?: string; reason?: string; changed_at: string;
+}[]> {
+  const res = await fetch(`${BASE}/runtime-settings/${key}/history?limit=${limit}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to get history for ${key}: ${res.status}`);
+  return res.json();
+}
+
+export interface ConfiguredTool {
+  name: string;
+  description: string;
+  is_mutating: boolean;
+  risk: string;
+  enabled: boolean;
+}
+
+export async function listConfiguredTools(): Promise<ConfiguredTool[]> {
+  const res = await fetch(`${BASE}/tools`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to list tools: ${res.status}`);
+  return res.json();
+}
+
 // ── Agent Logs ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function getAgentLogs(limit = 50, statusFilter?: string): Promise<AgentLogEntry[]> {

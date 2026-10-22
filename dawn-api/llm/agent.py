@@ -28,6 +28,7 @@ from tools.executor import execute_tool_call
 from tools.base import ToolResult
 from ui.stream import BlockStreamer
 from ui.schema import normalize_block
+from runtime_settings import get_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +135,9 @@ def build_agent_messages(
 
     system += "\n" + AGENT_SAFETY_PROMPT
 
+    history_turns = int(get_runtime().get("agent.history_turns") or 10)
     messages = [{"role": "system", "content": system}]
-    for turn in history[-10:]:
+    for turn in history[-history_turns:]:
         messages.append({"role": turn["role"], "content": turn["content"]})
     messages.append({"role": "user", "content": user_message})
     return messages
@@ -213,7 +215,7 @@ async def run_agent_loop(
     user_message: str,
     identity: Identity,
     history: Optional[list[dict]] = None,
-    max_iterations: int = DEFAULT_MAX_ITERATIONS,
+    max_iterations: Optional[int] = None,
     memory_context: str = "",
 ) -> AsyncGenerator[dict, None]:
     """
@@ -232,6 +234,9 @@ async def run_agent_loop(
 
     v40.0: Accepts memory_context parameter and passes it to build_agent_messages.
     """
+    if max_iterations is None:
+        max_iterations = int(get_runtime().get("agent.max_iterations") or DEFAULT_MAX_ITERATIONS)
+    repeat_threshold = int(get_runtime().get("agent.repeat_threshold") or REPEAT_THRESHOLD)
     engine = get_engine()
     registry = get_registry()
 
@@ -254,7 +259,9 @@ async def run_agent_loop(
         all_tools = registry.list_tools()
         if not all_tools:
             return set(), []
-        names = set(identity.allowed_tools([t.name for t in all_tools]))
+        # tools.disabled (runtime setting) hides tools from the model entirely.
+        disabled = set(get_runtime().get("tools.disabled") or [])
+        names = set(identity.allowed_tools([t.name for t in all_tools])) - disabled
         specs = [t.spec() for t in all_tools if t.name in names]
         return names, specs
 
@@ -325,11 +332,11 @@ async def run_agent_loop(
             # Record the call signatures before executing, for repeat detection.
             for call in result.tool_calls:
                 recent_calls.append((call.name, json.dumps(call.args, sort_keys=True)))
-            recent_calls = recent_calls[-REPEAT_THRESHOLD:]
-            if len(recent_calls) == REPEAT_THRESHOLD and len(set(recent_calls)) == 1:
+            recent_calls = recent_calls[-repeat_threshold:]
+            if len(recent_calls) == repeat_threshold and len(set(recent_calls)) == 1:
                 yield {"type": "warning", "content": (
                     f"Stopped: the same tool call ('{recent_calls[0][0]}') repeated "
-                    f"{REPEAT_THRESHOLD} times with identical arguments and no "
+                    f"{repeat_threshold} times with identical arguments and no "
                     f"progress. This usually means the tool is failing the same way "
                     f"each time — check the tool's error output above."
                 )}
