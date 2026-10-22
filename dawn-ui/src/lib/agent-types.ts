@@ -37,9 +37,9 @@ export interface AgentChatMessage {
 
 export interface ArtifactRef {
   id: string;
-  type: "chart" | "table" | "image" | "file" | "explainer";
+  type: "chart" | "table" | "image" | "file" | "explainer" | "ui";
   title: string;
-  spec?: Record<string, unknown>;  // Vega-Lite spec for charts
+  spec?: Record<string, unknown>;  // Vega-Lite spec for charts, UI document for 'ui'
   code?: string;                    // Self-contained HTML for explainers
   url?: string;                     // URL for images/files
   created_at: string;

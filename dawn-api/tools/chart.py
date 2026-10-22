@@ -23,6 +23,58 @@ MAX_ROWS = 500
 VALID_CHART_TYPES = {"bar", "line", "area", "point", "arc"}  # arc == pie/donut in Vega-Lite
 
 
+def build_vega_spec(
+    chart_type: str,
+    data: list[dict[str, Any]],
+    x_field: str,
+    y_field: str,
+    color_field: Optional[str] = None,
+    title: str = "",
+) -> dict:
+    """
+    Build a Vega-Lite spec from plain row dicts. Shared by the create_chart
+    tool and the Intelligent UI `chart` block — raw Vega-Lite is never accepted
+    from the model (arbitrary "transform"/"data.url" entries are a bigger
+    validation surface than the handful of mark types DAWN needs).
+    """
+    def infer_type(field: str) -> str:
+        for row in data:
+            val = row.get(field)
+            if val is None:
+                continue
+            if isinstance(val, bool):
+                return "nominal"
+            if isinstance(val, (int, float)):
+                return "quantitative"
+            return "nominal"
+        return "nominal"
+
+    if chart_type == "arc":
+        encoding = {
+            "theta": {"field": y_field, "type": "quantitative"},
+            "color": {"field": x_field, "type": "nominal"},
+        }
+        mark = {"type": "arc", "innerRadius": 50}
+    else:
+        encoding = {
+            "x": {"field": x_field, "type": infer_type(x_field)},
+            "y": {"field": y_field, "type": infer_type(y_field)},
+        }
+        if color_field:
+            encoding["color"] = {"field": color_field, "type": infer_type(color_field)}
+        mark = {"type": chart_type, "tooltip": True}
+
+    return {
+        "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+        "title": title,
+        "data": {"values": data},
+        "mark": mark,
+        "encoding": encoding,
+        "width": "container",
+        "height": 300,
+    }
+
+
 class ChartTool(BaseTool):
     name = "create_chart"
     description = (
@@ -110,42 +162,14 @@ class ChartTool(BaseTool):
         if missing_y:
             return ToolResult(success=False, error=f"y_field '{y_field}' missing from {len(missing_y)} row(s).")
 
-        def infer_type(field: str) -> str:
-            for row in data:
-                val = row.get(field)
-                if val is None:
-                    continue
-                if isinstance(val, bool):
-                    return "nominal"
-                if isinstance(val, (int, float)):
-                    return "quantitative"
-                return "nominal"
-            return "nominal"
-
-        if chart_type == "arc":
-            encoding = {
-                "theta": {"field": y_field, "type": "quantitative"},
-                "color": {"field": x_field, "type": "nominal"},
-            }
-            mark = {"type": "arc", "innerRadius": 50}
-        else:
-            encoding = {
-                "x": {"field": x_field, "type": infer_type(x_field)},
-                "y": {"field": y_field, "type": infer_type(y_field)},
-            }
-            if color_field:
-                encoding["color"] = {"field": color_field, "type": infer_type(color_field)}
-            mark = {"type": chart_type, "tooltip": True}
-
-        spec = {
-            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-            "title": title,
-            "data": {"values": data},
-            "mark": mark,
-            "encoding": encoding,
-            "width": "container",
-            "height": 300,
-        }
+        spec = build_vega_spec(
+            chart_type=chart_type,
+            data=data,
+            x_field=x_field,
+            y_field=y_field,
+            color_field=color_field,
+            title=title or "",
+        )
 
         return ToolResult(
             success=True,

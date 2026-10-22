@@ -21,6 +21,7 @@ import { streamAgent } from "@/lib/agent-api";
 import type { ChatMessage, ToolCall, SessionMessage, Artifact } from "@/lib/types";
 import type { AgentChatMessage, ArtifactRef } from "@/lib/agent-types";
 import Message from "@/components/chat/Message";
+import { ActionContextProvider } from "@/components/ui-blocks/ActionContext";
 import clsx from "clsx";
 
 // Lazy load ChartRenderer — vega-embed is heavy and only needed at runtime
@@ -155,9 +156,10 @@ export default function VisualizeWindow() {
     notifySidebarRefresh();
   }, []);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
-    if (!text || isStreaming) return;
+  const sendText = useCallback(
+    async (raw: string) => {
+      const text = (raw ?? "").trim();
+      if (!text || isStreaming) return;
 
     if (!sessionId.current) {
       try {
@@ -267,7 +269,21 @@ export default function VisualizeWindow() {
     setStreamingContent("");
     setStreamingToolCalls([]);
     setThinkingState(false);
-  }, [input, isStreaming, buildHistory, adoptSessionId, webSearchEnabled]);
+  }, [isStreaming, buildHistory, adoptSessionId, webSearchEnabled]);
+
+  // `send` reads the composer; ui-block `prompt` buttons dispatch a window event.
+  const send = useCallback(async () => {
+    await sendText(input);
+  }, [input, sendText]);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const d = (e as CustomEvent<{ text?: string }>).detail;
+      if (d?.text) void sendText(d.text);
+    };
+    window.addEventListener("dawn:ui-prompt", handler);
+    return () => window.removeEventListener("dawn:ui-prompt", handler);
+  }, [sendText]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -293,6 +309,7 @@ export default function VisualizeWindow() {
   };
 
   return (
+    <ActionContextProvider>
     <div className="flex h-full">
       {/* Main chat area */}
       <div className="flex-1 flex flex-col min-w-0">
@@ -484,6 +501,7 @@ export default function VisualizeWindow() {
         </div>
       )}
     </div>
+    </ActionContextProvider>
   );
 }
 

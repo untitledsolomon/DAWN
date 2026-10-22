@@ -149,6 +149,13 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register CreateArtifactTool: {e}")
 
+    # Intelligent UI — model emits a block document; the frontend owns the components
+    try:
+        from tools.render_component import RenderComponentTool
+        registry.register(RenderComponentTool())
+    except Exception as e:
+        logger.error(f"Failed to register RenderComponentTool: {e}")
+
     # OSINT recon tool
     try:
         from tools.osint_tool import OSINTTool

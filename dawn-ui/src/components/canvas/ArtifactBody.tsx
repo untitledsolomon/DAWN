@@ -3,6 +3,9 @@
 import { lazy, Suspense } from "react";
 import { FileText, Loader2 } from "lucide-react";
 import { renderMarkdown } from "@/lib/ui/markdown";
+import UIRenderer from "@/components/ui-blocks/UIRenderer";
+import { ActionContextProvider } from "@/components/ui-blocks/ActionContext";
+import type { UIDoc } from "@/lib/ui/schema";
 
 // Lazy load the heavy renderers — only needed at runtime.
 const ChartRenderer = lazy(() => import("@/components/visualize/ChartRenderer"));
@@ -128,6 +131,18 @@ function ExplainerBody({ artifact }: ArtifactBodyProps) {
   );
 }
 
+function UiBody({ artifact }: ArtifactBodyProps) {
+  const doc = artifact.spec as unknown as UIDoc;
+  if (!doc || typeof doc !== "object" || !Array.isArray(doc.blocks)) return null;
+  return (
+    <div className="mt-3.5">
+      <ActionContextProvider>
+        <UIRenderer doc={doc} />
+      </ActionContextProvider>
+    </div>
+  );
+}
+
 /**
  * Renders the body of an artifact by type. Used inline in chat messages and
  * inside ArtifactCard's shell in the canvas feed, so every type renders in
@@ -148,6 +163,8 @@ export default function ArtifactBody({ artifact }: ArtifactBodyProps) {
       return artifact.code ? <MarkdownBody artifact={artifact} /> : null;
     case "explainer":
       return artifact.code ? <ExplainerBody artifact={artifact} /> : null;
+    case "ui":
+      return artifact.spec ? <UiBody artifact={artifact} /> : null;
     default:
       return null;
   }

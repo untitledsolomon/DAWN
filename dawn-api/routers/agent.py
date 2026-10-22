@@ -94,6 +94,11 @@ async def _persist_artifact(
             kwargs["code"] = output["code"]
         elif atype == "file" and output.get("url"):
             kwargs["url"] = output["url"]
+        elif atype == "ui" and output.get("doc"):
+            kwargs["spec"] = output["doc"]          # the normalized UI document
+            kwargs["metadata"] = output.get("metadata") or None
+            if output.get("description"):
+                kwargs["description"] = output["description"]
         return await db.create_artifact(**kwargs)
     except Exception:
         logger.exception(f"Failed to persist {atype} artifact")
@@ -200,6 +205,8 @@ async def agent(
                         atype = "chart"
                     elif name == "create_explainer":
                         atype = "explainer"
+                    elif name == "render_component":
+                        atype = "ui"
                     elif name == "create_artifact":
                         atype = output.get("artifact_type") or "markdown"
                     else:

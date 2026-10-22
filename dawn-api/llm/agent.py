@@ -52,6 +52,23 @@ ACTION_CLAIM_PHRASES = [
     "i modified", "i've modified", "i updated the file", "i saved",
 ]
 
+# UI guidelines injected whenever the agent is active (intelligent-ui spec §7).
+UI_GUIDELINES = """
+BUILDING INTERFACES:
+Decide whether prose is enough or the answer should be an interface. Use render_component when the answer has at least one of:
+  1. 2+ items compared across 2+ attributes (use a table),
+  2. numbers over time or across categories (use a chart or stats),
+  3. a what-if the user will tweak (use calc with sliders/inputs),
+  4. a choice that needs input (use form),
+  5. an action needing approval (use a button with a tool or prompt action),
+  6. 4+ status items (use timeline).
+Otherwise answer in prose — do not pad with an interface.
+Composition rules: lead with the most important block. Use a columns row of 'stat' blocks for headline numbers. One chart or one table per idea. At most 2 sentences of prose after the UI, and never restate what the UI already shows.
+Data first: gather data with knowledge_graph/web_search before rendering. Never invent numbers to fill a block.
+Buttons: prefer 'prompt' actions (send a follow-up question). Use 'tool' actions only for things the user asked to be able to do.
+For a single chart the create_chart tool is still fine; prefer render_component for anything with more than one block.
+"""
+
 
 def _claims_unverified_action(text: str) -> bool:
     lowered = text.lower()
@@ -82,9 +99,10 @@ def build_agent_messages(
           "Use them when the task requires reading, writing, or inspecting real "
           "files or repositories — don't guess at contents you haven't actually read."
         + "\n\nWhen asked to visualize, chart, graph, or plot something, gather the "
-          "underlying data first (e.g. via the knowledge_graph tool), then call "
-          "create_chart with that data rather than describing a chart in words or "
-          "claiming you can't produce visuals — you can, via that tool."
+          "underlying data first (e.g. via the knowledge_graph tool), then build the "
+          "visual through render_component or create_chart with that data rather than "
+          "describing a chart in words or claiming you can't produce visuals — you can."
+        + UI_GUIDELINES
         + "\n\nBefore answering questions about Solomon, his projects, past decisions, "
           "or anything that might already be recorded, call the knowledge_graph tool "
           "first (search for topics/entities, recall for personal facts and "
