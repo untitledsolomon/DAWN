@@ -163,6 +163,15 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register AutopilotReportTool: {e}")
 
+    # Learning mode — tools available to OWNER only (not added to the SERVICE list)
+    try:
+        from tools.learn_tools import MathEvalTool, LearnTopicTool, LearnProgressTool
+        registry.register(MathEvalTool())
+        registry.register(LearnTopicTool())
+        registry.register(LearnProgressTool())
+    except Exception as e:
+        logger.error(f"Failed to register learning tools: {e}")
+
     # OSINT recon tool
     try:
         from tools.osint_tool import OSINTTool

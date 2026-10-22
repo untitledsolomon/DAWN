@@ -16,7 +16,7 @@ import {
   Loader2,
 } from "lucide-react";
 import Link from "next/link";
-import { getSessionMessages, createSession, listArtifacts } from "@/lib/api";
+import { getSessionMessages, createSession, listArtifacts, listLearnTopics, createLearnItems } from "@/lib/api";
 import { streamAgent } from "@/lib/agent-api";
 import type { ChatMessage, ToolCall, SessionMessage, Artifact } from "@/lib/types";
 import type { AgentChatMessage, ArtifactRef } from "@/lib/agent-types";

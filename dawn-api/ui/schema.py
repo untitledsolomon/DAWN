@@ -177,10 +177,111 @@ class EmbedBlock(BaseBlock):
     title: Optional[str] = None
 
 
+# ── Learning blocks (learning spec §5) ──────────────────────────────────────
+class MathBlock(BaseBlock):
+    type: Literal["math"]
+    tex: str = ""
+    display: bool = True
+    caption: Optional[str] = None
+
+
+class PlotSeries(BaseModel):
+    expr: str
+    label: Optional[str] = None
+
+
+class PlotBlock(BaseBlock):
+    type: Literal["plot"]
+    title: Optional[str] = None
+    var: str = "x"
+    x: Optional[dict] = None
+    y: Optional[dict] = None
+    params: List[dict] = Field(default_factory=list)   # sliders
+    series: List[PlotSeries] = Field(default_factory=list)
+    points: List[dict] = Field(default_factory=list)
+
+
+class StepsItem(BaseModel):
+    title: str
+    text: Optional[str] = None
+    hint: Optional[str] = None
+    math: Optional[str] = None
+
+
+class StepsBlock(BaseBlock):
+    type: Literal["steps"]
+    title: Optional[str] = None
+    reveal: Literal["click", "all"] = "click"
+    steps: List[StepsItem] = Field(default_factory=list)
+
+
+class QuizQuestion(BaseModel):
+    id: str
+    kind: Literal["mcq", "short"] = "mcq"
+    prompt: str
+    options: List[str] = Field(default_factory=list)
+    answer: Optional[Any] = None
+    explanation: Optional[str] = None
+    hint: Optional[str] = None
+
+
+class QuizBlock(BaseBlock):
+    type: Literal["quiz"]
+    topic_id: Optional[str] = None
+    questions: List[QuizQuestion] = Field(default_factory=list)
+
+
+class CardItem(BaseModel):
+    front: str
+    back: str
+
+
+class CardsBlock(BaseBlock):
+    type: Literal["cards"]
+    topic_id: Optional[str] = None
+    items: List[CardItem] = Field(default_factory=list)
+
+
+class SourcesBlock(BaseBlock):
+    type: Literal["sources"]
+    items: List[dict] = Field(default_factory=list)  # {n,title,url,publisher,kind,node_id}
+
+
+class ArgumentObjection(BaseModel):
+    text: str
+    replies: List[str] = Field(default_factory=list)
+
+
+class ArgumentBlock(BaseBlock):
+    type: Literal["argument"]
+    title: Optional[str] = None
+    premises: List[dict] = Field(default_factory=list)
+    conclusion: Optional[dict] = None
+    inference: str = "deductive"
+    assessment: Optional[dict] = None
+    objections: List[ArgumentObjection] = Field(default_factory=list)
+
+
+class GraphBlock(BaseBlock):
+    type: Literal["graph"]
+    direction: str = "LR"
+    nodes: List[dict] = Field(default_factory=list)
+    edges: List[dict] = Field(default_factory=list)
+
+
+class DiagramBlock(BaseBlock):
+    type: Literal["diagram"]
+    kind: str
+    controls: List[dict] = Field(default_factory=list)
+    params: dict = Field(default_factory=dict)
+
+
 LeafBlock = Union[
     TextBlock, CalloutBlock, StatBlock, TableBlock, ChartBlock,
     KeyValueBlock, CodeBlock, TimelineBlock, ButtonBlock,
     CalcBlock, FormBlock, ApprovalBlock, EmbedBlock,
+    MathBlock, PlotBlock, StepsBlock, QuizBlock, CardsBlock,
+    SourcesBlock, ArgumentBlock, GraphBlock, DiagramBlock,
 ]
 
 
@@ -365,6 +466,8 @@ def normalize_block(raw: dict, depth: int = 0, id_prefix: str = "b") -> tuple[di
 _KNOWN_TYPES = {
     "text", "callout", "stat", "table", "chart", "key_value", "code",
     "timeline", "button", "calc", "form", "approval", "embed",
+    "math", "plot", "steps", "quiz", "cards", "sources", "argument",
+    "graph", "diagram",
     "columns", "tabs",
 }
 _CONTAINER_TYPES = {"columns", "tabs"}

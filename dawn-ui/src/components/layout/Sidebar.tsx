@@ -43,6 +43,7 @@ import {
   LayoutGrid,
   ShieldCheck,
   Bot,
+  GraduationCap,
 } from "lucide-react";
 import clsx from "clsx";
 import {
@@ -83,6 +84,7 @@ const PRIMARY_NAV: NavItem[] = [
   { href: "/agent-tasks", icon: ListTodo, label: "Agent Tasks" },
   { href: "/agent-logs", icon: Activity, label: "Agent Logs" },
   { href: "/autopilot", icon: Bot, label: "Autopilot" },
+  { href: "/learn", icon: GraduationCap, label: "Learn" },
 ];
 
 const TOOLS_NAV: NavItem[] = [

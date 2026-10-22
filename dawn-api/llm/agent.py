@@ -73,6 +73,36 @@ Buttons: prefer 'prompt' actions (send a follow-up question). Use 'tool' actions
 For a single chart the create_chart tool is still fine; prefer render_component for anything with more than one block.
 """
 
+# Learn mode system prompt (learning spec §7.2). {style} and {learner_state} are
+# filled per request; other numbers come from the settings at build time.
+LEARN_PROMPT = """
+You are teaching one learner, one idea at a time. Be accurate before being clever.
+
+Lesson shape (one lesson = one concept, at most {max_blocks} blocks):
+ 1) Why it matters, 1-2 sentences.  2) The core idea, with the right visual.
+ 3) A worked example as a `steps` block.  4) A `quiz` of 2-3 questions.
+ 5) A `cards` block proposing 3-8 ATOMIC cards (one fact or idea per card; front is a question or cue, back is short).
+ End with a `sources` block when you made factual claims. Do not restate in prose what a block already shows.
+
+Pick the visual by concept: functions -> plot; forces/motion -> diagram then steps; derivations -> steps+math;
+arguments -> argument; how ideas relate -> graph; history -> timeline; comparisons -> table.
+
+Numbers: never compute in your head. Use math_eval for any arithmetic or physics result, and use
+calc/plot/diagram parameters so the picture and the numbers agree. If you cannot verify a number, say so.
+
+Sources: for factual, historical or contested claims, use web_search / web_fetch (or knowledge_graph if the learner
+has ingested material) BEFORE writing, and cite with [n] markers and a `sources` block. Only cite pages you
+actually retrieved this turn. If you rely on your own knowledge, say so (kind "model").
+
+Style = {style}.
+ explain: teach directly, then end with the quiz.
+ coach:   do NOT give the final answer to a problem on the first ask. Pose the problem, show the setup, and ask for the
+          first step. Hint ladder: nudge -> partial step -> worked step -> full solution, escalating only after an
+          honest attempt or when the learner says "show me". Praise specifics, not effort in general.
+
+Learner state (use it; do not repeat what is mastered): {learner_state}
+"""
+
 
 def _claims_unverified_action(text: str) -> bool:
     lowered = text.lower()
@@ -83,6 +113,7 @@ def build_agent_messages(
     user_message: str,
     history: list[dict],
     memory_context: str = "",
+    learn_prompt: str = "",
 ) -> list[dict]:
     """
     Agent-mode message builder. Unlike llm.engine.build_messages(), this does
@@ -135,6 +166,9 @@ def build_agent_messages(
         logger.warning(f"Could not load sub-agent descriptions — delegation will be unavailable this run: {e}")
 
     system += "\n" + AGENT_SAFETY_PROMPT
+
+    if learn_prompt:
+        system += "\n" + learn_prompt
 
     history_turns = int(get_runtime().get("agent.history_turns") or 10)
     messages = [{"role": "system", "content": system}]
@@ -223,6 +257,7 @@ async def run_agent_loop(
     policy: Optional[RunPolicy] = None,
     stop_on_tools: Optional[set[str]] = None,
     on_usage: Optional[Callable[[dict], None]] = None,
+    learn_prompt: str = "",
 ) -> AsyncGenerator[dict, None]:
     """
     Runs the agent loop, yielding event dicts as it goes:

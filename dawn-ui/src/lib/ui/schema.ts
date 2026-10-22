@@ -66,10 +66,53 @@ export interface FormBlock extends BaseBlock { type: "form"; fields: FormField[]
 export interface ApprovalBlock extends BaseBlock { type: "approval"; pending_action_id?: string }
 export interface EmbedBlock extends BaseBlock { type: "embed"; code: string; title?: string }
 
+// ── Learning blocks (learning spec §5) ─────────────────────────────────────
+export interface MathBlock extends BaseBlock { type: "math"; tex: string; display?: boolean; caption?: string }
+export interface PlotSeries { expr: string; label?: string }
+export interface PlotBlock extends BaseBlock {
+  type: "plot"; title?: string; var?: string;
+  x?: { min?: number; max?: number; label?: string };
+  y?: { label?: string };
+  params?: { id: string; label: string; min?: number; max?: number; default?: number; step?: number; unit?: string }[];
+  series: PlotSeries[];
+  points?: { x: number; y: string; label?: string }[];
+}
+export interface StepsItem { title: string; text?: string; hint?: string; math?: string }
+export interface StepsBlock extends BaseBlock { type: "steps"; title?: string; reveal?: "click" | "all"; steps: StepsItem[] }
+export interface QuizQuestion {
+  id: string; kind?: "mcq" | "short"; prompt: string;
+  options?: string[]; answer?: number | string; explanation?: string; hint?: string;
+}
+export interface QuizBlock extends BaseBlock { type: "quiz"; topic_id?: string; questions: QuizQuestion[] }
+export interface CardItem { front: string; back: string }
+export interface CardsBlock extends BaseBlock { type: "cards"; topic_id?: string; items: CardItem[] }
+export interface SourcesBlock extends BaseBlock {
+  type: "sources";
+  items: { n?: number; title: string; url?: string; publisher?: string; kind?: string; node_id?: string }[];
+}
+export interface ArgumentBlock extends BaseBlock {
+  type: "argument"; title?: string;
+  premises: { id: string; text: string; hidden?: boolean }[];
+  conclusion?: { text: string };
+  inference?: string;
+  assessment?: { valid?: boolean; weakest?: string; note?: string };
+  objections?: { text: string; replies: string[] }[];
+}
+export interface GraphBlock extends BaseBlock {
+  type: "graph"; direction?: string; nodes: { id: string; label: string }[]; edges: { from: string; to: string; label?: string }[];
+}
+export interface DiagramBlock extends BaseBlock {
+  type: "diagram"; kind: string;
+  controls?: { id: string; label: string; min?: number; max?: number; default?: number; step?: number; unit?: string }[];
+  params: Record<string, number | string>;
+}
+
 export type LeafBlock =
   | TextBlock | CalloutBlock | StatBlock | TableBlock | ChartBlock
   | KeyValueBlock | CodeBlock | TimelineBlock | ButtonBlock
-  | CalcBlock | FormBlock | ApprovalBlock | EmbedBlock;
+  | CalcBlock | FormBlock | ApprovalBlock | EmbedBlock
+  | MathBlock | PlotBlock | StepsBlock | QuizBlock | CardsBlock
+  | SourcesBlock | ArgumentBlock | GraphBlock | DiagramBlock;
 
 export interface ColumnsBlock extends BaseBlock { type: "columns"; children: LeafBlock[] }
 export interface TabsBlock extends BaseBlock { type: "tabs"; tabs: { label: string; children: LeafBlock[] }[] }

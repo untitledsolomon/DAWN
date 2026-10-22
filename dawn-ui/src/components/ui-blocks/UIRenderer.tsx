@@ -16,6 +16,7 @@ import CalcBlock from "./blocks/CalcBlock";
 import FormBlock from "./blocks/FormBlock";
 import ApprovalBlock from "./blocks/ApprovalBlock";
 import EmbedBlock from "./blocks/EmbedBlock";
+import { MathBlock, PlotBlock, StepsBlock, QuizBlock, CardsBlock, SourcesBlock, ArgumentBlock, GraphBlock, DiagramBlock } from "./blocks/learning";
 
 // One bad block renders a small inline note, never a blank message.
 class BlockBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
@@ -62,6 +63,24 @@ function LeafRenderer({ block }: { block: LeafBlock }) {
       return <ApprovalBlock block={block} />;
     case "embed":
       return <EmbedBlock block={block} />;
+    case "math":
+      return <MathBlock block={block} />;
+    case "plot":
+      return <PlotBlock block={block} />;
+    case "steps":
+      return <StepsBlock block={block} />;
+    case "quiz":
+      return <QuizBlock block={block} />;
+    case "cards":
+      return <CardsBlock block={block} />;
+    case "sources":
+      return <SourcesBlock block={block} />;
+    case "argument":
+      return <ArgumentBlock block={block} />;
+    case "graph":
+      return <GraphBlock block={block} />;
+    case "diagram":
+      return <DiagramBlock block={block} />;
     default:
       return null;
   }

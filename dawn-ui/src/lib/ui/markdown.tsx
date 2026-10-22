@@ -12,21 +12,31 @@
 // always open with rel="noreferrer noopener".
 
 import { Fragment, type ReactNode } from "react";
+import MathTex from "./Math";
 
 const HTTPS_ONLY = /^https:\/\//i;
 
-/** Split `source` into React nodes: inline code, bold, italic, links, text. */
+/** Split `source` into React nodes: inline code, math, bold, italic, links, text. */
 function renderInline(source: string): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const re = /(`[^`]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(\[[^\]\n]+\]\([^)\s]+\))/g;
+  const re =
+    /(`[^`]+`)|(\$\$[^$]+?\$\$)|(\$(?=[^$\s])(?:[^$\n]*\S|\S)\$(?!\d))|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(\[[^\]\n]+\]\([^)\s]+\))/g;
   let last = 0;
   let key = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(source)) !== null) {
     if (m.index > last) nodes.push(<Fragment key={key++}>{source.slice(last, m.index)}</Fragment>);
-    const [full, code, bold, italic, link] = m;
+    const [full, code, ddmath, inlinemath, bold, italic, link] = m;
     if (code) {
       nodes.push(<code key={key++}>{code.slice(1, -1)}</code>);
+    } else if (ddmath) {
+      nodes.push(
+        <div key={key++} className="my-2 overflow-x-auto">
+          <MathTex tex={ddmath.slice(2, -2)} display />
+        </div>,
+      );
+    } else if (inlinemath) {
+      nodes.push(<MathTex key={key++} tex={inlinemath.slice(1, -1)} display={false} />);
     } else if (bold) {
       nodes.push(<strong key={key++}>{bold.slice(2, -2)}</strong>);
     } else if (italic) {

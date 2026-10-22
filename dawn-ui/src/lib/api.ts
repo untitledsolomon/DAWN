@@ -517,6 +517,95 @@ export async function feedbackAutopilotRun(runId: string, feedback: "useful" | "
   return res.json();
 }
 
+// ── Learning mode ───────────────────────────────────────────────────────────
+
+export interface LearnTopic {
+  id: string;
+  parent_id: string | null;
+  title: string;
+  summary: string | null;
+  goal: string | null;
+  level: string;
+  status: string;
+  last_studied_at: string | null;
+}
+
+export interface LearnItem {
+  id: string;
+  front: string;
+  back: string;
+  status: string;
+  due: string;
+  reps: number;
+  stability: number | null;
+  again_count: number;
+  _preview?: Record<string, number>;
+}
+
+export async function listLearnTopics(): Promise<LearnTopic[]> {
+  const res = await fetch(`${BASE}/learn/topics`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to list topics: ${res.status}`);
+  return res.json();
+}
+
+export async function createLearnTopic(data: { title: string; goal?: string; level?: string }): Promise<LearnTopic> {
+  const res = await fetch(`${BASE}/learn/topics`, { method: "POST", headers: headers(), body: JSON.stringify(data) });
+  if (!res.ok) throw new Error(`Failed to create topic: ${res.status}`);
+  return res.json();
+}
+
+export async function getLearnTopic(id: string): Promise<LearnTopic> {
+  const res = await fetch(`${BASE}/learn/topics/${id}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to load topic: ${res.status}`);
+  return res.json();
+}
+
+export async function learnQueue(topicId?: string, limit = 20): Promise<{ items: LearnItem[]; due: number; new_remaining: number; reviewed_today: number }> {
+  const qs = new URLSearchParams();
+  if (topicId) qs.set("topic_id", topicId);
+  qs.set("limit", String(limit));
+  const res = await fetch(`${BASE}/learn/queue?${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to load queue: ${res.status}`);
+  return res.json();
+}
+
+const RATINGS: Record<number, string> = { 1: "Again", 2: "Hard", 3: "Good", 4: "Easy" };
+
+export async function submitReview(itemId: string, rating: number, clientReviewId?: string): Promise<unknown> {
+  const res = await fetch(`${BASE}/learn/review`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ item_id: itemId, rating, client_review_id: clientReviewId }),
+  });
+  if (!res.ok) throw new Error(`Failed to submit review: ${res.status}`);
+  return res.json();
+}
+
+export async function createLearnItems(topicId: string, items: { front: string; back: string }[]): Promise<{ created: unknown[]; duplicates: unknown[] }> {
+  const res = await fetch(`${BASE}/learn/items`, { method: "POST", headers: headers(), body: JSON.stringify({ topic_id: topicId, items }) });
+  if (!res.ok) throw new Error(`Failed to add cards: ${res.status}`);
+  return res.json();
+}
+
+export async function recordLearnAttempts(attempts: unknown[]): Promise<unknown> {
+  const res = await fetch(`${BASE}/learn/attempts`, { method: "POST", headers: headers(), body: JSON.stringify(attempts) });
+  if (!res.ok) throw new Error(`Failed to record attempts: ${res.status}`);
+  return res.json();
+}
+
+export async function learnStats(topicId?: string): Promise<unknown> {
+  const qs = topicId ? `?topic_id=${topicId}` : "";
+  const res = await fetch(`${BASE}/learn/stats${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to load stats: ${res.status}`);
+  return res.json();
+}
+
+export async function topicLessons(topicId: string): Promise<{ id: string; artifact_id: string; title: string; created_at: string }[]> {
+  const res = await fetch(`${BASE}/learn/topics/${topicId}/lessons`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to load lessons: ${res.status}`);
+  return res.json();
+}
+
 // ── Agent Logs ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function getAgentLogs(limit = 50, statusFilter?: string): Promise<AgentLogEntry[]> {

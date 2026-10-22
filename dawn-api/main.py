@@ -32,6 +32,7 @@ from routers import (
     github_webhooks,  # v45.0 — GitHub integration webhook receiver
     runtime_settings,  # runtime settings + tools inventory
     autopilot,      # autopilot jobs/runs/master switch
+    learn,          # learning mode (topics, cards, reviews)
 )
 
 app = FastAPI(
@@ -154,6 +155,7 @@ app.include_router(files.router, prefix="", tags=["files"])
 app.include_router(skills.router, prefix="", tags=["skills"])
 app.include_router(github_webhooks.router, prefix="", tags=["github"])
 app.include_router(autopilot.router, prefix="", tags=["autopilot"])
+app.include_router(learn.router, prefix="", tags=["learn"])
 
 
 @app.get("/health")
