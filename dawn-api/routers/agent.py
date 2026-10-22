@@ -57,6 +57,49 @@ def sse(event_type: str, payload: dict) -> str:
     return f"data: {json.dumps({'type': event_type, **payload})}\n\n"
 
 
+async def _persist_artifact(
+    session_id: str,
+    atype: str,
+    output: dict,
+    model_name: str,
+) -> Optional[dict]:
+    """Persist a tool-produced artifact (create_chart / create_explainer /
+    create_artifact) into the `artifacts` table and return the stored row.
+
+    Returns None when persistence fails. Callers build the `artifact` SSE event
+    from the returned row so the frontend can attach it to the message. This is
+    the single persistence path for every artifact type — it replaces the three
+    per-branch inserts, one of which referenced a `supabase` local that was only
+    assigned inside another branch (an UnboundLocalError swallowed by a bare
+    except, so some artifact types silently never persisted).
+    """
+    try:
+        title = output.get("title") or ("Chart" if atype == "chart" else "Artifact")
+        kwargs: dict = {"session_id": session_id, "type": atype, "title": title}
+        if output.get("description"):
+            kwargs["description"] = output["description"]
+        if atype == "chart":
+            kwargs["spec"] = output.get("spec")
+        elif atype == "explainer":
+            kwargs["code"] = output.get("code")
+            kwargs["prompt"] = output.get("prompt", "")
+            kwargs["metadata"] = {
+                "diagram_type": output.get("diagram_type", "illustrative"),
+                "topic": output.get("topic", ""),
+                "model_used": model_name,
+            }
+        elif atype == "table" and output.get("spec"):
+            kwargs["spec"] = output["spec"]
+        elif atype == "markdown" and output.get("code"):
+            kwargs["code"] = output["code"]
+        elif atype == "file" and output.get("url"):
+            kwargs["url"] = output["url"]
+        return await db.create_artifact(**kwargs)
+    except Exception:
+        logger.exception(f"Failed to persist {atype} artifact")
+        return None
+
+
 # ── Main agent endpoint ──────────────────────────────────────────────────────
 
 @router.post("/")
@@ -146,97 +189,27 @@ async def agent(
                     tc_dict["output"] = event.get("output")
                     tc_dict["error"] = event.get("error")
 
-                # ── create_chart: persist Vega-Lite spec ──────────────────────────
-                if (
-                    event.get("name") == "create_chart"
-                    and event.get("success")
-                    and isinstance(event.get("output"), dict)
-                ):
+                # ── Artifact tools (create_chart / create_explainer /
+                # create_artifact): persist via the shared helper so every type
+                # lands in `artifacts` the same way and the frontend gets one
+                # `artifact` event shape.
+                if event.get("success") and isinstance(event.get("output"), dict):
                     output = event["output"]
-                    try:
-                        artifact = await db.create_artifact(
-                            session_id=session_id,
-                            type="chart",
-                            title=output.get("title") or "Chart",
-                            description=output.get("description"),
-                            spec=output.get("spec"),
+                    name = event.get("name")
+                    if name == "create_chart":
+                        atype = "chart"
+                    elif name == "create_explainer":
+                        atype = "explainer"
+                    elif name == "create_artifact":
+                        atype = output.get("artifact_type") or "markdown"
+                    else:
+                        atype = None
+
+                    if atype:
+                        artifact = await _persist_artifact(
+                            session_id, atype, output, settings.deepseek_model
                         )
                         if artifact and artifact.get("id"):
-                            artifact_ids_this_turn.append(artifact["id"])
-                            yield sse("artifact", {
-                                "artifact_id": artifact.get("id"),
-                                "artifact_type": artifact.get("type", "chart"),
-                                "title": artifact.get("title"),
-                                "spec": artifact.get("spec"),
-                                "url": artifact.get("url"),
-                            })
-                    except Exception:
-                        logger.exception("Failed to persist chart artifact")
-
-                # ── create_explainer: persist HTML code ───────────────────────────
-                if (
-                    event.get("name") == "create_explainer"
-                    and event.get("success")
-                    and isinstance(event.get("output"), dict)
-                ):
-                    output = event["output"]
-                    code = output.get("code")
-                    if code:
-                        try:
-                            supabase = db.get_db()
-                            data = {
-                                "session_id": session_id,
-                                "type": "explainer",
-                                "title": output.get("title") or "Explainer",
-                                "code": code,
-                                "prompt": output.get("prompt", ""),
-                                "metadata": {
-                                    "diagram_type": output.get("diagram_type", "illustrative"),
-                                    "topic": output.get("topic", ""),
-                                    "model_used": settings.deepseek_model,
-                                },
-                            }
-                            if output.get("description"):
-                                data["description"] = output["description"]
-                            res = supabase.table("artifacts").insert(data).execute()
-                            if res.data and res.data[0].get("id"):
-                                artifact = res.data[0]
-                                artifact_ids_this_turn.append(artifact["id"])
-                                yield sse("artifact", {
-                                    "artifact_id": artifact["id"],
-                                    "artifact_type": "explainer",
-                                    "title": artifact["title"],
-                                    "code": artifact["code"],
-                                    "url": None,
-                                })
-                        except Exception:
-                            logger.exception("Failed to persist explainer artifact")
-
-                # ── create_artifact: persist general canvas items ─────────────────
-                if (
-                    event.get("name") == "create_artifact"
-                    and event.get("success")
-                    and isinstance(event.get("output"), dict)
-                ):
-                    output = event["output"]
-                    atype = output.get("artifact_type") or "markdown"
-                    try:
-                        data = {
-                            "session_id": session_id,
-                            "type": atype,
-                            "title": output.get("title") or "Artifact",
-                        }
-                        if output.get("description"):
-                            data["description"] = output["description"]
-                        if atype == "table" and output.get("spec"):
-                            data["spec"] = output["spec"]
-                        elif atype == "markdown" and output.get("code"):
-                            data["code"] = output["code"]
-                        elif atype == "file" and output.get("url"):
-                            data["url"] = output["url"]
-                        res = supabase.table("artifacts").insert(data).execute()
-                        if res.data and res.data[0].get("id"):
-                            artifact = res.data[0]
                             artifact_ids_this_turn.append(artifact["id"])
                             yield sse("artifact", {
                                 "artifact_id": artifact["id"],
@@ -246,8 +219,6 @@ async def agent(
                                 "code": artifact.get("code"),
                                 "url": artifact.get("url"),
                             })
-                    except Exception:
-                        logger.exception("Failed to persist artifact")
 
             elif event_type == "token":
                 full_response.append(event.get("content", ""))

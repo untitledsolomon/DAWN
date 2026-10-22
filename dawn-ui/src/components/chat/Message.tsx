@@ -3,7 +3,8 @@ import clsx from "clsx";
 import type { ChatMessage } from "@/lib/types";
 import type { AgentChatMessage } from "@/lib/agent-types";
 import ToolCallView from "./ToolCallView";
-import ChartRenderer from "../visualize/ChartRenderer";
+import ArtifactBody from "@/components/canvas/ArtifactBody";
+import { renderMarkdown } from "@/lib/ui/markdown";
 
 interface Props {
   message: ChatMessage | AgentChatMessage;
@@ -61,38 +62,27 @@ export default function Message({
           }
         />
 
-        {/* Response content */}
+        {/* Response content — safe markdown → React (no dangerouslySetInnerHTML) */}
         <div
           className={clsx(
             "text-sm leading-relaxed dawn-prose",
             isStreaming && "border-l-2 border-dawn/30 pl-3",
           )}
-          dangerouslySetInnerHTML={{
-            __html: renderMarkdown(message.content),
-          }}
-        />
+        >
+          {renderMarkdown(message.content)}
+        </div>
 
         {/* Streaming cursor */}
         {isStreaming && (
           <span className="inline-block w-1.5 h-4 bg-dawn/70 ml-0.5 animate-pulse rounded-sm align-middle" />
         )}
 
-        {/* Artifacts (charts, tables, images) */}
+        {/* Artifacts (charts, tables, images, files, explainers) inline */}
         {artifacts && artifacts.length > 0 && (
           <div className="mt-4 space-y-4">
-            {artifacts.map((artifact) => {
-              if (artifact.type === "chart" && artifact.spec) {
-                return (
-                  <ChartRenderer
-                    key={artifact.id}
-                    spec={artifact.spec}
-                    title={artifact.title}
-                  />
-                );
-              }
-              // Future: handle table, image, file types here
-              return null;
-            })}
+            {artifacts.map((artifact) => (
+              <ArtifactBody key={artifact.id} artifact={artifact} />
+            ))}
           </div>
         )}
 
@@ -127,42 +117,5 @@ export default function Message({
   );
 }
 
-// ── Minimal markdown renderer ──────────────────────────────────────────────
-function renderMarkdown(text: string): string {
-  return text
-    // Code blocks
-    .replace(
-      /```(\w*)\n([\s\S]*?)```/g,
-      (_, lang, code) =>
-        `<pre><code class="language-${lang}">${escapeHtml(code.trim())}</code></pre>`,
-    )
-    // Inline code
-    .replace(
-      /`([^`]+)`/g,
-      (_, code) => `<code>${escapeHtml(code)}</code>`,
-    )
-    // Bold
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    // Italic
-    .replace(/\*(.+?)\*/g, "<em>$1</em>")
-    // Headers
-    .replace(/^### (.+)$/gm, "<h3>$1</h3>")
-    .replace(/^## (.+)$/gm, "<h2>$1</h2>")
-    .replace(/^# (.+)$/gm, "<h1>$1</h1>")
-    // Unordered lists
-    .replace(/^- (.+)$/gm, "<li>$1</li>")
-    .replace(/(<li>.*<\/li>)/gs, "<ul>$1</ul>")
-    // Line breaks
-    .replace(/\n\n/g, "</p><p>")
-    .replace(/^([^<].*)$/gm, (line) =>
-      line.trim() && !line.startsWith("<") ? `<p>${line}</p>` : line,
-    );
-}
-
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
+// Markdown rendering lives in lib/ui/markdown.tsx (shared, escaped, no
+// dangerouslySetInnerHTML).

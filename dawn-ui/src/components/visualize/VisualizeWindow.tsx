@@ -16,7 +16,7 @@ import {
   Loader2,
 } from "lucide-react";
 import Link from "next/link";
-import { getSessionMessages, createSession } from "@/lib/api";
+import { getSessionMessages, createSession, listArtifacts } from "@/lib/api";
 import { streamAgent } from "@/lib/agent-api";
 import type { ChatMessage, ToolCall, SessionMessage, Artifact } from "@/lib/types";
 import type { AgentChatMessage, ArtifactRef } from "@/lib/agent-types";
@@ -37,6 +37,7 @@ function sessionMessageToChatMessage(sm: SessionMessage): AgentChatMessage {
     tool_calls: sm.tool_calls ?? undefined,
     node_ids: sm.node_ids ?? undefined,
     node_titles: sm.node_titles ?? undefined,
+    artifact_ids: sm.artifact_ids ?? undefined,
     timestamp: new Date(sm.created_at),
   };
 }
@@ -83,8 +84,41 @@ export default function VisualizeWindow() {
     sessionId.current = sid;
 
     getSessionMessages(sid)
-      .then((msgs) => {
-        setMessages(msgs.map(sessionMessageToChatMessage));
+      .then(async (msgs) => {
+        const mapped = msgs.map(sessionMessageToChatMessage);
+
+        // Reattach stored artifacts to their messages. Without this, the
+        // artifact_ids saved on each message (routers/agent.py) were dropped on
+        // reload, so inline charts/tables/explainers vanished after refresh.
+        try {
+          const artRes = await listArtifacts({ session_id: sid, limit: 500 });
+          const byId = new Map(artRes.map((a) => [a.id, a]));
+          const hydrated: AgentChatMessage[] = [];
+          for (const m of mapped) {
+            const ids = (m as AgentChatMessage & { artifact_ids?: string[] }).artifact_ids;
+            if (!ids || ids.length === 0) {
+              hydrated.push(m);
+              continue;
+            }
+            const arts: ArtifactRef[] = ids
+              .map((id) => byId.get(id))
+              .filter((a): a is (typeof artRes)[number] => Boolean(a))
+              .map((a) => ({
+                id: a.id,
+                type: a.type as ArtifactRef["type"],
+                title: a.title,
+                spec: a.spec ?? undefined,
+                code: a.code ?? undefined,
+                url: a.url ?? undefined,
+                created_at: a.created_at,
+              }));
+            hydrated.push({ ...m, artifacts: arts });
+          }
+          setMessages(hydrated);
+        } catch (err) {
+          console.error("[VisualizeWindow] Failed to rehydrate artifacts:", err);
+          setMessages(mapped);
+        }
       })
       .catch((err) => {
         console.error("[VisualizeWindow] Failed to load messages:", err);
