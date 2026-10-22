@@ -16,6 +16,7 @@ Supports:
 from typing import Any, Optional
 import logging
 from tools.base import BaseTool, ToolResult
+from runtime_settings import get_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,16 @@ MAX_ROWS = 1000
 VALID_TYPES = {"table", "markdown", "file"}
 
 
+def _artifact_rows() -> int:
+    try:
+        return int(get_runtime().get("tools.artifact_max_rows") or MAX_ROWS)
+    except Exception:
+        return MAX_ROWS
+
+
 class CreateArtifactTool(BaseTool):
     name = "create_artifact"
+    risk = "internal_write"
     description = (
         "Push a non-chart item onto DAWN's Canvas workspace. Use this when the "
         "user asks you to save, add, or pin a table, a written report/summary, or a "
@@ -92,9 +101,9 @@ class CreateArtifactTool(BaseTool):
                 return ToolResult(success=False, error="'data' must be a non-empty list of row objects for a table.")
             if not all(isinstance(row, dict) for row in data):
                 return ToolResult(success=False, error="Every item in 'data' must be an object/row, not a scalar.")
-            if len(data) > MAX_ROWS:
-                logger.info(f"[CreateArtifactTool] Truncating {len(data)} rows to {MAX_ROWS}")
-                data = data[:MAX_ROWS]
+            if len(data) > (max_rows := _artifact_rows()):
+                logger.info(f"[CreateArtifactTool] Truncating {len(data)} rows to {max_rows}")
+                data = data[:max_rows]
             return ToolResult(
                 success=True,
                 output={

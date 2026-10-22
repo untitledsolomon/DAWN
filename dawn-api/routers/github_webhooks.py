@@ -60,29 +60,25 @@ def _trusted(payload: dict) -> bool:
     return issue.get("author_association") in TRUSTED_ASSOCIATIONS
 
 
-async def _trigger_agent_task(goal: str, max_iterations: int = 50) -> None:
-    """Create an agent_tasks row and run it through the agent loop, so
-    webhook-triggered work is visible in the same Dashboard/activity feed as
-    scheduled and manual runs."""
-    import db.client as db
-    supabase = db.get_db()
-    res = await db._async_execute(lambda: supabase.table("agent_tasks").insert({
-        "goal": goal,
-        "max_iterations": max_iterations,
-        "status": "running",
-        "progress": 0,
-        "iterations": 0,
-        "tools_used": [],
-    }).execute())
-    if not res.data:
-        logger.error("[GitHubWebhook] Failed to create agent task row")
-        return
-    task_id = res.data[0]["id"]
-    logger.info(f"[GitHubWebhook] Triggered agent task {task_id}: {goal[:80]}")
+async def _publish_github_event(etype: str, payload: dict) -> None:
+    """Publish a typed autopilot event. Nothing runs unless an enabled job
+    subscribes to it — this replaces the direct agent-loop start that used to
+    happen here (the second uncontrolled autonomous path)."""
+    try:
+        from autopilot.db import publish_event
+        await publish_event(etype, payload)
+        logger.info(f"[GitHubWebhook] published event {etype}")
+    except Exception as e:
+        logger.warning(f"[GitHubWebhook] could not publish {etype}: {e}")
 
-    # Run in the background so the webhook returns promptly.
-    import asyncio
-    asyncio.get_event_loop().create_task(_run_task(task_id, goal, max_iterations))
+
+async def _trigger_agent_task(goal: str, max_iterations: int = 50) -> None:
+    """Publish a github.agent_task event instead of starting the agent loop.
+
+    Autopilot spec: GitHub handlers stop starting agent tasks directly; they
+    publish an event. If no enabled job subscribes, nothing runs.
+    """
+    await _publish_github_event("github.agent_task", {"goal": goal, "max_iterations": max_iterations})
 
 
 async def _run_task(task_id: str, goal: str, max_iterations: int) -> None:
@@ -143,7 +139,9 @@ async def _handle_issue_assigned(payload: dict) -> None:
         f"Issue body:\n{body}\n\n"
         f"Work the issue, and open a PR against a dawn/* branch when done."
     )
-    await _trigger_agent_task(goal)
+    await _publish_github_event("github.issue_assigned", {
+        "repo": repo, "number": number, "title": title, "body": body, "goal": goal,
+    })
 
 
 async def _handle_issue_comment(payload: dict) -> None:
@@ -159,7 +157,9 @@ async def _handle_issue_comment(payload: dict) -> None:
         f"GitHub comment in {repo} on issue #{issue.get('number')} mentions you:\n\n"
         f"{body}\n\nRespond appropriately."
     )
-    await _trigger_agent_task(goal)
+    await _publish_github_event("github.issue_comment", {
+        "repo": repo, "issue_number": issue.get("number"), "body": body, "goal": goal,
+    })
 
 
 async def _handle_review(payload: dict) -> None:
@@ -173,7 +173,9 @@ async def _handle_review(payload: dict) -> None:
             f"Changes were requested on PR #{pr.get('number')} in {repo}.\n\n"
             f"Review feedback:\n{body}\n\nAddress the feedback and update the PR."
         )
-        await _trigger_agent_task(goal)
+        await _publish_github_event("github.review", {
+            "repo": repo, "pr_number": pr.get("number"), "state": state, "body": body, "goal": goal,
+        })
 
 
 async def _handle_review_comment(payload: dict) -> None:
@@ -187,7 +189,9 @@ async def _handle_review_comment(payload: dict) -> None:
         f"Inline review comment on PR #{pr.get('number')} in {repo} mentions you:\n\n"
         f"{body}\n\nRespond appropriately."
     )
-    await _trigger_agent_task(goal)
+    await _publish_github_event("github.review", {
+        "repo": repo, "pr_number": pr.get("number"), "state": "review_comment", "body": body, "goal": goal,
+    })
 
 
 async def _handle_check_failure(payload: dict) -> None:

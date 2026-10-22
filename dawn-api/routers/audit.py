@@ -12,6 +12,27 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+async def write_audit(
+    action: str,
+    actor_type: str,
+    actor_ref: Optional[str] = None,
+    details: Optional[dict] = None,
+) -> None:
+    """Append an audit entry. audit_log has no DDL in the repo; migration 026
+    creates it with id/action/actor_type/actor_ref/details/created_at. Failures
+    are logged, never raised (auditing is best-effort)."""
+    try:
+        row: dict = {"action": action, "actor_type": actor_type}
+        if actor_ref:
+            row["actor_ref"] = actor_ref
+        if details is not None:
+            row["details"] = details
+        supabase = db.get_db()
+        await db._async_execute(lambda: supabase.table("audit_log").insert(row).execute())
+    except Exception as e:
+        logger.warning(f"[audit] write failed for {action}: {e}")
+
+
 def verify_key(x_api_key: Optional[str] = Header(None)):
     if x_api_key != settings.dawn_api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")

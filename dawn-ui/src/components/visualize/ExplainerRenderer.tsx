@@ -85,9 +85,13 @@ ${code}
     const iframe = iframeRef.current;
     iframe.src = url;
 
-    // Listen for resize messages from the iframe
+    // Listen for resize messages from the iframe. Only accept messages that
+    // come from this iframe's own content window; without allow-same-origin the
+    // frame is a separate origin, so model-written explainer JS cannot reach
+    // window.parent at all.
     const handleMessage = (event: MessageEvent) => {
       if (
+        event.source === iframeRef.current?.contentWindow &&
         event.data &&
         event.data.type === "explainer-resize" &&
         typeof event.data.height === "number"
@@ -185,7 +189,7 @@ ${code}
 
         <iframe
           ref={iframeRef}
-          sandbox="allow-scripts allow-same-origin"
+          sandbox="allow-scripts"
           className={`w-full border-0 ${loading || error ? "hidden" : ""}`}
           style={{
             height: expanded ? "100%" : `${iframeHeight}px`,

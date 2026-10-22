@@ -32,6 +32,15 @@ class Settings(BaseSettings):
     skills_install_root: str = "./installed_skills"
     tools_enabled: str = "filesystem,git,websearch,install_skill,terminal,web_fetch,ssh,nmap,osint,mcp"
 
+    # Intelligent UI: tools a render_component `tool` action may invoke
+    # server-side (see routers/agent.py /agent/ui-action). terminal, filesystem,
+    # git, ssh, pentest and nmap are never allowed here.
+    ui_action_tools: str = "send_email,knowledge_graph,web_search,web_fetch"
+
+    @property
+    def ui_action_tools_list(self) -> list[str]:
+        return [t.strip() for t in self.ui_action_tools.split(",") if t.strip()]
+
     # Memory vault — file-based long-form memory (profile, daily notes,
     # project knowledge). See vault/vault.py.
     vault_root: str = "./vault"

@@ -198,6 +198,7 @@ Return ONLY the HTML fragment. No markdown fences, no explanation, no code block
 
 class ExplainerTool(BaseTool):
     name = "create_explainer"
+    risk = "internal_write"
     description = (
         "Generate an animated, whiteboard-style explainer visualization for a math or "
         "conceptual topic. Use this when the user asks to 'explain' a concept, algorithm, "

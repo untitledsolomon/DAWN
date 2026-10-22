@@ -12,11 +12,19 @@ from urllib.parse import urlparse
 
 import httpx
 from tools.base import BaseTool, ToolResult
+from runtime_settings import get_runtime
 
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_SECONDS = 10
 MAX_CONTENT_CHARS = 8000  # keep tool_result payloads sane for the model's context
+
+
+def _web_timeout() -> int:
+    try:
+        return int(get_runtime().get("tools.web_timeout") or REQUEST_TIMEOUT_SECONDS)
+    except Exception:
+        return REQUEST_TIMEOUT_SECONDS
 
 
 def _resolve_safe_host(url: str) -> tuple[bool, str, str | None, str | None]:
@@ -58,6 +66,7 @@ def _resolve_safe_host(url: str) -> tuple[bool, str, str | None, str | None]:
 
 class WebFetchTool(BaseTool):
     name = "web_fetch"
+    risk = "read"
     description = (
         "Fetch the text content of a specific URL. Use this when you already "
         "have a URL (from web_search results, a knowledge graph node, or the "
@@ -91,13 +100,13 @@ class WebFetchTool(BaseTool):
 
         try:
             async with httpx.AsyncClient(
-                timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=True
+                timeout=_web_timeout(), follow_redirects=True
             ) as client:
                 response = await client.get(
                     pinned_url, headers=headers
                 )
         except httpx.TimeoutException:
-            return ToolResult(success=False, error=f"Fetch timed out after {REQUEST_TIMEOUT_SECONDS}s")
+            return ToolResult(success=False, error=f"Fetch timed out after {_web_timeout()}s")
         except httpx.HTTPError as e:
             return ToolResult(success=False, error=f"Fetch failed: {e}")
 

@@ -37,9 +37,9 @@ export interface AgentChatMessage {
 
 export interface ArtifactRef {
   id: string;
-  type: "chart" | "table" | "image" | "file" | "explainer";
+  type: "chart" | "table" | "image" | "file" | "explainer" | "ui";
   title: string;
-  spec?: Record<string, unknown>;  // Vega-Lite spec for charts
+  spec?: Record<string, unknown>;  // Vega-Lite spec for charts, UI document for 'ui'
   code?: string;                    // Self-contained HTML for explainers
   url?: string;                     // URL for images/files
   created_at: string;
@@ -57,6 +57,11 @@ export type AgentSSEEvent =
   | { type: "iteration_limit"; content: string }
   | { type: "error"; content: string }
   // visualize-mode events
-  | { type: "artifact"; artifact_id: string; artifact_type: string; title: string; spec?: Record<string, unknown>; code?: string; url?: string };
+  | { type: "artifact"; artifact_id: string; artifact_type: string; title: string; spec?: Record<string, unknown>; code?: string; url?: string; ui_id?: string }
+  // intelligent-ui streaming events (a render_component call is being generated)
+  | { type: "ui_start"; ui_id: string }
+  | { type: "ui_block"; ui_id: string; index: number; block: unknown }
+  | { type: "ui_block_error"; ui_id: string; index: number; error: string }
+  | { type: "ui_end"; ui_id: string; index?: number };  // eslint-disable-line @typescript-eslint/no-explicit-any
 
 export type ChatMode = "chat" | "agent" | "visualize";

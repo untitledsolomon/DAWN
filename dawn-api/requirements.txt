@@ -87,3 +87,11 @@ apscheduler>=3.10.0,<4.0
 
 # v45.0 — GitHub Integration
 PyGithub>=2.3.0
+
+# Autopilot — cron parsing for job schedules
+croniter>=2.0.0
+
+# Learning mode — optional: py-fsrs is the single scheduler when installed.
+# learn/scheduler.py ships with a deterministic built-in fallback, so this is a
+# swap-in improvement, not a hard dependency.
+# fsrs>=6.3.2

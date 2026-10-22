@@ -2,7 +2,7 @@
 LLM Engine — abstracts local llama.cpp and DeepSeek API behind one interface.
 Switch via LLM_MODE env var: "deepseek" | "local"
 """
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Literal, Optional
 from dataclasses import dataclass, field
 
 from config import settings
@@ -21,14 +21,67 @@ class ToolCallRequest:
 
 
 @dataclass
+class StreamEvent:
+    """One streaming chunk from stream_with_tools()."""
+    kind: Literal["text_delta", "tool_start", "tool_args_delta", "done"]
+    index: Optional[int] = None          # tool-call index
+    id: Optional[str] = None
+    name: Optional[str] = None
+    delta: Optional[str] = None
+    result: Optional["CompletionResult"] = None   # set only on "done"
+
+
+@dataclass
 class CompletionResult:
     """Result of complete_with_tools() — either a final text answer, or tool_calls to execute."""
     content: str = ""
     tool_calls: list[ToolCallRequest] = field(default_factory=list)
+    #: {prompt_tokens, completion_tokens, total_tokens} when the provider reports it.
+    usage: Optional[dict] = None
 
     @property
     def wants_tool_call(self) -> bool:
         return len(self.tool_calls) > 0
+
+
+def extract_usage(response) -> Optional[dict]:
+    """Pull a minimal token-usage dict off an OpenAI-compatible response."""
+    try:
+        u = getattr(response, "usage", None)
+        if u is None:
+            return None
+        keys = ("prompt_tokens", "completion_tokens", "total_tokens",
+                "prompt_tokens_details", "completion_tokens_details")
+        out: dict = {}
+        for k in keys:
+            if hasattr(u, k):
+                val = getattr(u, k)
+                if isinstance(val, dict):
+                    out[k] = {kk: vv for kk, vv in val.items() if isinstance(vv, (int, float))}
+                else:
+                    out[k] = val
+        return out or None
+    except Exception:
+        return None
+
+
+def usage_cost(usage: Optional[dict]) -> Optional[float]:
+    """Estimated USD cost of a completion from the llm.price_* runtime settings.
+    Returns None when prices are unset (UI shows tokens only)."""
+    if not usage:
+        return None
+    try:
+        from runtime_settings import get_runtime
+        rt = get_runtime()
+        p_in = rt.get("llm.price_input_per_mtok")
+        p_out = rt.get("llm.price_output_per_mtok")
+        if p_in is None or p_out is None:
+            return None
+        prompt = usage.get("prompt_tokens") or 0
+        completion = usage.get("completion_tokens") or 0
+        return round((prompt * p_in + completion * p_out) / 1_000_000, 6)
+    except Exception:
+        return None
 
 DAWN_SYSTEM_PROMPT = """You are DAWN — the internal knowledge layer and AI assistant for Regent, \
 a digital systems and strategy firm based in Kampala, Uganda.
@@ -86,16 +139,29 @@ class DeepSeekEngine:
             api_key=settings.deepseek_api_key,
             base_url=settings.deepseek_base_url,
         )
-        self.model = settings.deepseek_model
+        self.model = self._setting("llm.model", settings.deepseek_model)
         logger.info(f"DeepSeek engine initialised — model: {self.model}")
+
+    @staticmethod
+    def _setting(key: str, default):
+        """Read a runtime setting, falling back to the given default. Never
+        raises — the store keeps last-known-good values under normal use."""
+        try:
+            from runtime_settings import get_runtime
+            value = get_runtime().get(key)
+            if value is None:
+                return default
+            return value
+        except Exception:
+            return default
 
     async def stream(self, messages: list[dict]) -> AsyncGenerator[str, None]:
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=messages,
             stream=True,
-            max_tokens=2048,
-            temperature=0.7,
+            max_tokens=int(self._setting("llm.chat_max_tokens", 2048)),
+            temperature=float(self._setting("llm.chat_temperature", 0.7)),
         )
         async for chunk in response:
             delta = chunk.choices[0].delta
@@ -108,7 +174,7 @@ class DeepSeekEngine:
             messages=messages,
             stream=False,
             max_tokens=1024,
-            temperature=0.3,
+            temperature=float(self._setting("llm.chat_temperature", 0.3)),
         )
         return response.choices[0].message.content or ""
 
@@ -116,13 +182,15 @@ class DeepSeekEngine:
         self,
         messages: list[dict],
         tools: list[dict],
-        max_tokens: int = 8192,
+        max_tokens: Optional[int] = None,
     ) -> CompletionResult:
         """
         Like complete(), but offers the model a set of callable tools
         (OpenAI/DeepSeek function-calling spec, e.g. registry.specs()).
         Returns either final text content, or a list of tool calls to run.
         """
+        if max_tokens is None:
+            max_tokens = int(self._setting("llm.tool_max_tokens", 8192))
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=messages,
@@ -130,7 +198,8 @@ class DeepSeekEngine:
             tool_choice="auto",
             stream=False,
             max_tokens=max_tokens,
-            temperature=0.1,  # low on purpose — determinism matters more than
+            temperature=float(self._setting("llm.tool_temperature", 0.1)),  # low on
+                              # purpose — determinism matters more than
                               # creativity when deciding whether to call a tool
         )
         choice = response.choices[0]
@@ -156,9 +225,98 @@ class DeepSeekEngine:
                         logger.warning(f"{err} Raw (truncated): {tc.function.arguments[:200]}...")
                         args = {"__parse_error__": err}
                 calls.append(ToolCallRequest(id=tc.id, name=tc.function.name, args=args))
-            return CompletionResult(content=message.content or "", tool_calls=calls)
+            return CompletionResult(content=message.content or "", tool_calls=calls, usage=extract_usage(response))
 
-        return CompletionResult(content=message.content or "")
+        return CompletionResult(content=message.content or "", usage=extract_usage(response))
+
+    async def stream_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        max_tokens: Optional[int] = None,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """
+        Streaming variant of complete_with_tools(). The final "done" event
+        carries the same CompletionResult, including __parse_error__ handling
+        for a truncated tool-call JSON payload (finish_reason == "length").
+        """
+        if max_tokens is None:
+            max_tokens = int(self._setting("llm.tool_max_tokens", 8192))
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            stream=True,
+            stream_options={"include_usage": True},
+            max_tokens=max_tokens,
+            temperature=float(self._setting("llm.tool_temperature", 0.1)),
+        )
+        text_parts: list[str] = []
+        tool_calls: dict[int, dict] = {}
+        finish_reason: Optional[str] = None
+        usage: Optional[dict] = None
+
+        async for chunk in response:
+            if not chunk.choices:
+                if getattr(chunk, "usage", None) is not None:
+                    usage = extract_usage(chunk)
+                continue
+            choice = chunk.choices[0]
+            if choice.finish_reason:
+                finish_reason = choice.finish_reason
+            if getattr(chunk, "usage", None) is not None:
+                usage = extract_usage(chunk)
+            delta = choice.delta
+            if delta.content:
+                text_parts.append(delta.content)
+                yield StreamEvent(kind="text_delta", delta=delta.content)
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    if tc.index is None:
+                        continue
+                    idx = tc.index
+                    entry = tool_calls.setdefault(idx, {"id": None, "name": None, "args": []})
+                    if tc.id:
+                        entry["id"] = tc.id
+                    if tc.function and tc.function.name:
+                        entry["name"] = tc.function.name
+                        yield StreamEvent(kind="tool_start", index=idx, id=entry["id"], name=entry["name"])
+                    if tc.function and tc.function.arguments:
+                        entry["args"].append(tc.function.arguments)
+                        yield StreamEvent(
+                            kind="tool_args_delta",
+                            index=idx,
+                            id=entry["id"],
+                            name=entry["name"],
+                            delta=tc.function.arguments,
+                        )
+
+        # Reassemble tool calls exactly like complete_with_tools().
+        calls = []
+        for idx in sorted(tool_calls):
+            entry = tool_calls[idx]
+            raw = "".join(entry["args"] or [])
+            args: dict = {}
+            if raw:
+                try:
+                    args = json.loads(raw)
+                except json.JSONDecodeError as e:
+                    if finish_reason == "length":
+                        err = (
+                            "Tool call arguments were truncated because the response "
+                            "hit the max_tokens limit before finishing. Break large "
+                            "file writes into smaller chunks, or write the file in "
+                            "multiple sequential 'write'/'append' calls."
+                        )
+                    else:
+                        err = f"Tool call arguments were not valid JSON: {e}"
+                    logger.warning(f"{err} Raw (truncated): {raw[:200]}...")
+                    args = {"__parse_error__": err}
+            calls.append(ToolCallRequest(id=entry["id"] or f"call_{idx}", name=entry["name"] or "", args=args))
+
+        result = CompletionResult(content="".join(text_parts), tool_calls=calls, usage=usage)
+        yield StreamEvent(kind="done", result=result)
 
     def tool_result_message(self, tool_call_id: str, tool_name: str, result_json: str) -> dict:
         """Build the 'tool' role message DeepSeek expects after a tool call."""
@@ -246,11 +404,27 @@ class LocalEngine:
 
 _engine: Optional[DeepSeekEngine | LocalEngine] = None
 
+#: The engine is rebuilt when llm.* runtime settings change (see main.py wiring).
+llm_reset_version: int = 0
+
+
+def reset_engine() -> None:
+    """Drop the cached engine so the next get_engine() rebuilds it."""
+    global _engine, llm_reset_version
+    _engine = None
+    llm_reset_version += 1
+
 
 def get_engine() -> DeepSeekEngine | LocalEngine:
     global _engine
     if _engine is None:
-        if settings.llm_mode == "local":
+        mode = settings.llm_mode
+        try:
+            from runtime_settings import get_runtime
+            mode = get_runtime().get("llm.mode") or settings.llm_mode
+        except Exception:
+            pass
+        if mode == "local":
             if not settings.local_model_path:
                 raise RuntimeError(
                     "LLM_MODE=local but LOCAL_MODEL_PATH is not set. "

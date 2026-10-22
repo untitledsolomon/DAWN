@@ -16,7 +16,7 @@ v40.0: Now accepts memory_context parameter and injects it into the
 system prompt, so the agent has access to persistent memories just
 like chat mode does.
 """
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Callable, Optional
 import asyncio
 import json
 import logging
@@ -26,6 +26,10 @@ from llm.identity import Identity, TrustTier
 from tools.registry import get_registry, ToolRegistry
 from tools.executor import execute_tool_call
 from tools.base import ToolResult
+from ui.stream import BlockStreamer
+from ui.schema import normalize_block
+from runtime_settings import get_runtime
+from autopilot.policy import RunBudget, BudgetExceeded, RunPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +56,53 @@ ACTION_CLAIM_PHRASES = [
     "i modified", "i've modified", "i updated the file", "i saved",
 ]
 
+# UI guidelines injected whenever the agent is active (intelligent-ui spec §7).
+UI_GUIDELINES = """
+BUILDING INTERFACES:
+Decide whether prose is enough or the answer should be an interface. Use render_component when the answer has at least one of:
+  1. 2+ items compared across 2+ attributes (use a table),
+  2. numbers over time or across categories (use a chart or stats),
+  3. a what-if the user will tweak (use calc with sliders/inputs),
+  4. a choice that needs input (use form),
+  5. an action needing approval (use a button with a tool or prompt action),
+  6. 4+ status items (use timeline).
+Otherwise answer in prose — do not pad with an interface.
+Composition rules: lead with the most important block. Use a columns row of 'stat' blocks for headline numbers. One chart or one table per idea. At most 2 sentences of prose after the UI, and never restate what the UI already shows.
+Data first: gather data with knowledge_graph/web_search before rendering. Never invent numbers to fill a block.
+Buttons: prefer 'prompt' actions (send a follow-up question). Use 'tool' actions only for things the user asked to be able to do.
+For a single chart the create_chart tool is still fine; prefer render_component for anything with more than one block.
+"""
+
+# Learn mode system prompt (learning spec §7.2). {style} and {learner_state} are
+# filled per request; other numbers come from the settings at build time.
+LEARN_PROMPT = """
+You are teaching one learner, one idea at a time. Be accurate before being clever.
+
+Lesson shape (one lesson = one concept, at most {max_blocks} blocks):
+ 1) Why it matters, 1-2 sentences.  2) The core idea, with the right visual.
+ 3) A worked example as a `steps` block.  4) A `quiz` of 2-3 questions.
+ 5) A `cards` block proposing 3-8 ATOMIC cards (one fact or idea per card; front is a question or cue, back is short).
+ End with a `sources` block when you made factual claims. Do not restate in prose what a block already shows.
+
+Pick the visual by concept: functions -> plot; forces/motion -> diagram then steps; derivations -> steps+math;
+arguments -> argument; how ideas relate -> graph; history -> timeline; comparisons -> table.
+
+Numbers: never compute in your head. Use math_eval for any arithmetic or physics result, and use
+calc/plot/diagram parameters so the picture and the numbers agree. If you cannot verify a number, say so.
+
+Sources: for factual, historical or contested claims, use web_search / web_fetch (or knowledge_graph if the learner
+has ingested material) BEFORE writing, and cite with [n] markers and a `sources` block. Only cite pages you
+actually retrieved this turn. If you rely on your own knowledge, say so (kind "model").
+
+Style = {style}.
+ explain: teach directly, then end with the quiz.
+ coach:   do NOT give the final answer to a problem on the first ask. Pose the problem, show the setup, and ask for the
+          first step. Hint ladder: nudge -> partial step -> worked step -> full solution, escalating only after an
+          honest attempt or when the learner says "show me". Praise specifics, not effort in general.
+
+Learner state (use it; do not repeat what is mastered): {learner_state}
+"""
+
 
 def _claims_unverified_action(text: str) -> bool:
     lowered = text.lower()
@@ -62,6 +113,7 @@ def build_agent_messages(
     user_message: str,
     history: list[dict],
     memory_context: str = "",
+    learn_prompt: str = "",
 ) -> list[dict]:
     """
     Agent-mode message builder. Unlike llm.engine.build_messages(), this does
@@ -82,9 +134,10 @@ def build_agent_messages(
           "Use them when the task requires reading, writing, or inspecting real "
           "files or repositories — don't guess at contents you haven't actually read."
         + "\n\nWhen asked to visualize, chart, graph, or plot something, gather the "
-          "underlying data first (e.g. via the knowledge_graph tool), then call "
-          "create_chart with that data rather than describing a chart in words or "
-          "claiming you can't produce visuals — you can, via that tool."
+          "underlying data first (e.g. via the knowledge_graph tool), then build the "
+          "visual through render_component or create_chart with that data rather than "
+          "describing a chart in words or claiming you can't produce visuals — you can."
+        + UI_GUIDELINES
         + "\n\nBefore answering questions about Solomon, his projects, past decisions, "
           "or anything that might already be recorded, call the knowledge_graph tool "
           "first (search for topics/entities, recall for personal facts and "
@@ -114,8 +167,12 @@ def build_agent_messages(
 
     system += "\n" + AGENT_SAFETY_PROMPT
 
+    if learn_prompt:
+        system += "\n" + learn_prompt
+
+    history_turns = int(get_runtime().get("agent.history_turns") or 10)
     messages = [{"role": "system", "content": system}]
-    for turn in history[-10:]:
+    for turn in history[-history_turns:]:
         messages.append({"role": turn["role"], "content": turn["content"]})
     messages.append({"role": "user", "content": user_message})
     return messages
@@ -128,6 +185,7 @@ async def _execute_tool_calls(
     allowed_names: set[str],
     engine: DeepSeekEngine,
     identity: Identity,
+    policy: Optional[RunPolicy] = None,
 ) -> AsyncGenerator[dict, None]:
     """
     Runs every tool call in `result`, yielding tool_call/tool_result events
@@ -163,7 +221,7 @@ async def _execute_tool_calls(
                 success=False, output=None, error=f"Not authorized to use tool '{call.name}'."
             )
 
-        tool_result = await execute_tool_call(registry, call.name, call.args)
+        tool_result = await execute_tool_call(registry, call.name, call.args, policy=policy)
         return call, tool_result
 
     # Run all tool executions concurrently, then stream results in order.
@@ -193,8 +251,13 @@ async def run_agent_loop(
     user_message: str,
     identity: Identity,
     history: Optional[list[dict]] = None,
-    max_iterations: int = DEFAULT_MAX_ITERATIONS,
+    max_iterations: Optional[int] = None,
     memory_context: str = "",
+    budget: Optional[RunBudget] = None,
+    policy: Optional[RunPolicy] = None,
+    stop_on_tools: Optional[set[str]] = None,
+    on_usage: Optional[Callable[[dict], None]] = None,
+    learn_prompt: str = "",
 ) -> AsyncGenerator[dict, None]:
     """
     Runs the agent loop, yielding event dicts as it goes:
@@ -204,14 +267,21 @@ async def run_agent_loop(
       {"type": "warning", "content": "..."}         # suspected fabricated action claim
       {"type": "token", "content": "..."}          # only on the final answer
       {"type": "done", "content": "...", "iterations": N}
+      {"type": "needs_attention", ...}             # loop guard fired (not 'completed')
+      {"type": "budget_stopped", "kind": ...}      # a RunBudget cap was hit
       {"type": "error", "content": "..."}
 
     `identity` determines which tools are even offered to the model — see
     llm/identity.py. This does not replace the consequence/harm reasoning
     in AGENT_SAFETY_PROMPT, which applies regardless of identity tier.
 
-    v40.0: Accepts memory_context parameter and passes it to build_agent_messages.
+    Autopilot: `budget` caps steps/tokens/clock and honours cancellation;
+    `policy` implements Observe/Propose tool gating; `stop_on_tools` ends the
+    run right after one of those tools executes (used by autopilot_report).
     """
+    if max_iterations is None:
+        max_iterations = int(get_runtime().get("agent.max_iterations") or DEFAULT_MAX_ITERATIONS)
+    repeat_threshold = int(get_runtime().get("agent.repeat_threshold") or REPEAT_THRESHOLD)
     engine = get_engine()
     registry = get_registry()
 
@@ -234,7 +304,22 @@ async def run_agent_loop(
         all_tools = registry.list_tools()
         if not all_tools:
             return set(), []
-        names = set(identity.allowed_tools([t.name for t in all_tools]))
+        # tools.disabled (runtime setting) hides tools from the model entirely.
+        disabled = set(get_runtime().get("tools.disabled") or [])
+        names = set(identity.allowed_tools([t.name for t in all_tools])) - disabled
+        # ui.density=off drops generated interfaces (intelligent-ui spec §7).
+        if get_runtime().get("ui.density") == "off":
+            names.discard("render_component")
+        # Autopilot policy: Observe never offers external_write/exec; Propose
+        # drops non-allowlisted exec tools. autopilot_report is run-only.
+        if policy is not None and policy.enforced:
+            for t in all_tools:
+                if t.name in names:
+                    rt = getattr(t, "risk", "exec")
+                    if policy.filters_tool(t.name, rt):
+                        names.discard(t.name)
+        else:
+            names.discard("autopilot_report")
         specs = [t.spec() for t in all_tools if t.name in names]
         return names, specs
 
@@ -253,30 +338,83 @@ async def run_agent_loop(
     # loop immediately rather than burning through completions to the ceiling.
     recent_calls: list[tuple[str, str]] = []
 
+    async def _stream_completion(messages: list[dict], tools: list[dict]):
+        """
+        Stream one completion. Yields ui_start/ui_block/ui_block_error/ui_end
+        events for render_component calls as their blocks complete, then a
+        '__complete' sentinel carrying the final CompletionResult.
+        """
+        streamers: dict[int, BlockStreamer] = {}
+        ui_ids: dict[int, str] = {}
+        async for ev in engine.stream_with_tools(messages, tools=tools):
+            if ev.kind == "tool_start" and ev.name == "render_component":
+                streamers[ev.index] = BlockStreamer()
+                ui_ids[ev.index] = ev.id or f"ui_{ev.index}"
+                yield {"type": "ui_start", "ui_id": ui_ids[ev.index], "index": ev.index}
+            elif ev.kind == "tool_args_delta" and ev.index in streamers:
+                ui_id = ui_ids[ev.index]
+                for raw_block in streamers[ev.index].feed(ev.delta or ""):
+                    nb, errs = normalize_block(raw_block)
+                    if nb is None:
+                        yield {
+                            "type": "ui_block_error",
+                            "ui_id": ui_id,
+                            "index": ev.index,
+                            "error": errs[0] if errs else "invalid block",
+                        }
+                    else:
+                        yield {"type": "ui_block", "ui_id": ui_id, "index": ev.index, "block": nb}
+            elif ev.kind == "done":
+                for idx, ui_id in ui_ids.items():
+                    yield {"type": "ui_end", "ui_id": ui_id, "index": idx}
+                yield {"type": "__complete", "result": ev.result}
+                return
+
     for iteration in range(1, max_iterations + 1):
+        result = None
         try:
-            result = await engine.complete_with_tools(messages, tools=tool_specs)
+            if budget:
+                budget.check_step()
+            async for ev in _stream_completion(messages, tool_specs):
+                if ev.get("type") == "__complete":
+                    result = ev.get("result")
+                else:
+                    yield ev
+            if budget and result is not None and result.usage:
+                budget.add_tokens(result.usage.get("total_tokens") or result.usage.get("completion_tokens") or 0)
+            if on_usage and result is not None and result.usage:
+                on_usage(result.usage)
+        except BudgetExceeded as be:
+            yield {"type": "budget_stopped", "kind": be.kind, "content": str(be), "iterations": iteration}
+            return
         except Exception as e:
-            logger.exception("engine.complete_with_tools failed")
+            logger.exception("engine.stream_with_tools failed")
             yield {"type": "error", "content": f"LLM call failed: {e}"}
+            return
+        if result is None:
+            yield {"type": "error", "content": "LLM call produced no response."}
             return
 
         if result.wants_tool_call:
             # Record the call signatures before executing, for repeat detection.
             for call in result.tool_calls:
                 recent_calls.append((call.name, json.dumps(call.args, sort_keys=True)))
-            recent_calls = recent_calls[-REPEAT_THRESHOLD:]
-            if len(recent_calls) == REPEAT_THRESHOLD and len(set(recent_calls)) == 1:
-                yield {"type": "warning", "content": (
+            recent_calls = recent_calls[-repeat_threshold:]
+            if len(recent_calls) == repeat_threshold and len(set(recent_calls)) == 1:
+                yield {"type": "needs_attention", "content": (
                     f"Stopped: the same tool call ('{recent_calls[0][0]}') repeated "
-                    f"{REPEAT_THRESHOLD} times with identical arguments and no "
+                    f"{repeat_threshold} times with identical arguments and no "
                     f"progress. This usually means the tool is failing the same way "
                     f"each time — check the tool's error output above."
-                )}
-                yield {"type": "done", "content": "Stopped due to a repeated, non-progressing tool call.", "iterations": iteration}
+                ), "iterations": iteration}
                 return
-            async for event in _execute_tool_calls(result, messages, registry, allowed_names, engine, identity):
+            async for event in _execute_tool_calls(result, messages, registry, allowed_names, engine, identity, policy=policy):
                 yield event
+            # end-of-run tools (autopilot_report): the result should already be
+            # captured by the caller from the tool_result events.
+            if stop_on_tools and any(c.name in stop_on_tools for c in result.tool_calls):
+                yield {"type": "done", "content": result.content or "", "iterations": iteration, "structured": True}
+                return
             allowed_names, tool_specs = _current_tools()
             continue  # get another completion now that tool results are in history
 
@@ -302,15 +440,32 @@ async def run_agent_loop(
             })
             yield {"type": "thinking", "content": "Double-checking that..."}
 
+            result = None
             try:
-                result = await engine.complete_with_tools(messages, tools=tool_specs)
+                if budget:
+                    budget.check_step()
+                async for ev in _stream_completion(messages, tool_specs):
+                    if ev.get("type") == "__complete":
+                        result = ev.get("result")
+                    else:
+                        yield ev
+                if budget and result is not None and result.usage:
+                    budget.add_tokens(result.usage.get("total_tokens") or result.usage.get("completion_tokens") or 0)
+                if on_usage and result is not None and result.usage:
+                    on_usage(result.usage)
+            except BudgetExceeded as be:
+                yield {"type": "budget_stopped", "kind": be.kind, "content": str(be), "iterations": iteration}
+                return
             except Exception as e:
-                logger.exception("engine.complete_with_tools failed on re-prompt")
+                logger.exception("engine.stream_with_tools failed on re-prompt")
                 yield {"type": "error", "content": f"LLM call failed: {e}"}
+                return
+            if result is None:
+                yield {"type": "error", "content": "LLM call produced no response."}
                 return
 
             if result.wants_tool_call:
-                async for event in _execute_tool_calls(result, messages, registry, allowed_names, engine, identity):
+                async for event in _execute_tool_calls(result, messages, registry, allowed_names, engine, identity, policy=policy):
                     yield event
                 allowed_names, tool_specs = _current_tools()
                 continue  # back to the top for another completion

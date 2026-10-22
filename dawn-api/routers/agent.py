@@ -57,6 +57,54 @@ def sse(event_type: str, payload: dict) -> str:
     return f"data: {json.dumps({'type': event_type, **payload})}\n\n"
 
 
+async def _persist_artifact(
+    session_id: str,
+    atype: str,
+    output: dict,
+    model_name: str,
+) -> Optional[dict]:
+    """Persist a tool-produced artifact (create_chart / create_explainer /
+    create_artifact) into the `artifacts` table and return the stored row.
+
+    Returns None when persistence fails. Callers build the `artifact` SSE event
+    from the returned row so the frontend can attach it to the message. This is
+    the single persistence path for every artifact type — it replaces the three
+    per-branch inserts, one of which referenced a `supabase` local that was only
+    assigned inside another branch (an UnboundLocalError swallowed by a bare
+    except, so some artifact types silently never persisted).
+    """
+    try:
+        title = output.get("title") or ("Chart" if atype == "chart" else "Artifact")
+        kwargs: dict = {"session_id": session_id, "type": atype, "title": title}
+        if output.get("description"):
+            kwargs["description"] = output["description"]
+        if atype == "chart":
+            kwargs["spec"] = output.get("spec")
+        elif atype == "explainer":
+            kwargs["code"] = output.get("code")
+            kwargs["prompt"] = output.get("prompt", "")
+            kwargs["metadata"] = {
+                "diagram_type": output.get("diagram_type", "illustrative"),
+                "topic": output.get("topic", ""),
+                "model_used": model_name,
+            }
+        elif atype == "table" and output.get("spec"):
+            kwargs["spec"] = output["spec"]
+        elif atype == "markdown" and output.get("code"):
+            kwargs["code"] = output["code"]
+        elif atype == "file" and output.get("url"):
+            kwargs["url"] = output["url"]
+        elif atype == "ui" and output.get("doc"):
+            kwargs["spec"] = output["doc"]          # the normalized UI document
+            kwargs["metadata"] = output.get("metadata") or None
+            if output.get("description"):
+                kwargs["description"] = output["description"]
+        return await db.create_artifact(**kwargs)
+    except Exception:
+        logger.exception(f"Failed to persist {atype} artifact")
+        return None
+
+
 # ── Main agent endpoint ──────────────────────────────────────────────────────
 
 @router.post("/")
@@ -146,97 +194,29 @@ async def agent(
                     tc_dict["output"] = event.get("output")
                     tc_dict["error"] = event.get("error")
 
-                # ── create_chart: persist Vega-Lite spec ──────────────────────────
-                if (
-                    event.get("name") == "create_chart"
-                    and event.get("success")
-                    and isinstance(event.get("output"), dict)
-                ):
+                # ── Artifact tools (create_chart / create_explainer /
+                # create_artifact): persist via the shared helper so every type
+                # lands in `artifacts` the same way and the frontend gets one
+                # `artifact` event shape.
+                if event.get("success") and isinstance(event.get("output"), dict):
                     output = event["output"]
-                    try:
-                        artifact = await db.create_artifact(
-                            session_id=session_id,
-                            type="chart",
-                            title=output.get("title") or "Chart",
-                            description=output.get("description"),
-                            spec=output.get("spec"),
+                    name = event.get("name")
+                    if name == "create_chart":
+                        atype = "chart"
+                    elif name == "create_explainer":
+                        atype = "explainer"
+                    elif name == "render_component":
+                        atype = "ui"
+                    elif name == "create_artifact":
+                        atype = output.get("artifact_type") or "markdown"
+                    else:
+                        atype = None
+
+                    if atype:
+                        artifact = await _persist_artifact(
+                            session_id, atype, output, settings.deepseek_model
                         )
                         if artifact and artifact.get("id"):
-                            artifact_ids_this_turn.append(artifact["id"])
-                            yield sse("artifact", {
-                                "artifact_id": artifact.get("id"),
-                                "artifact_type": artifact.get("type", "chart"),
-                                "title": artifact.get("title"),
-                                "spec": artifact.get("spec"),
-                                "url": artifact.get("url"),
-                            })
-                    except Exception:
-                        logger.exception("Failed to persist chart artifact")
-
-                # ── create_explainer: persist HTML code ───────────────────────────
-                if (
-                    event.get("name") == "create_explainer"
-                    and event.get("success")
-                    and isinstance(event.get("output"), dict)
-                ):
-                    output = event["output"]
-                    code = output.get("code")
-                    if code:
-                        try:
-                            supabase = db.get_db()
-                            data = {
-                                "session_id": session_id,
-                                "type": "explainer",
-                                "title": output.get("title") or "Explainer",
-                                "code": code,
-                                "prompt": output.get("prompt", ""),
-                                "metadata": {
-                                    "diagram_type": output.get("diagram_type", "illustrative"),
-                                    "topic": output.get("topic", ""),
-                                    "model_used": settings.deepseek_model,
-                                },
-                            }
-                            if output.get("description"):
-                                data["description"] = output["description"]
-                            res = supabase.table("artifacts").insert(data).execute()
-                            if res.data and res.data[0].get("id"):
-                                artifact = res.data[0]
-                                artifact_ids_this_turn.append(artifact["id"])
-                                yield sse("artifact", {
-                                    "artifact_id": artifact["id"],
-                                    "artifact_type": "explainer",
-                                    "title": artifact["title"],
-                                    "code": artifact["code"],
-                                    "url": None,
-                                })
-                        except Exception:
-                            logger.exception("Failed to persist explainer artifact")
-
-                # ── create_artifact: persist general canvas items ─────────────────
-                if (
-                    event.get("name") == "create_artifact"
-                    and event.get("success")
-                    and isinstance(event.get("output"), dict)
-                ):
-                    output = event["output"]
-                    atype = output.get("artifact_type") or "markdown"
-                    try:
-                        data = {
-                            "session_id": session_id,
-                            "type": atype,
-                            "title": output.get("title") or "Artifact",
-                        }
-                        if output.get("description"):
-                            data["description"] = output["description"]
-                        if atype == "table" and output.get("spec"):
-                            data["spec"] = output["spec"]
-                        elif atype == "markdown" and output.get("code"):
-                            data["code"] = output["code"]
-                        elif atype == "file" and output.get("url"):
-                            data["url"] = output["url"]
-                        res = supabase.table("artifacts").insert(data).execute()
-                        if res.data and res.data[0].get("id"):
-                            artifact = res.data[0]
                             artifact_ids_this_turn.append(artifact["id"])
                             yield sse("artifact", {
                                 "artifact_id": artifact["id"],
@@ -246,8 +226,6 @@ async def agent(
                                 "code": artifact.get("code"),
                                 "url": artifact.get("url"),
                             })
-                    except Exception:
-                        logger.exception("Failed to persist artifact")
 
             elif event_type == "token":
                 full_response.append(event.get("content", ""))
@@ -273,14 +251,28 @@ async def agent(
                 artifact_ids=artifact_ids_this_turn if artifact_ids_this_turn else None,
             )
 
-        # ★ v40.0: Background: extract memory facts from agent conversations too
+        # ★ v40.0: Background: extract memory facts from agent conversations too.
+        # memory.extract_mode (runtime setting): always / conditional / off.
+        # 'conditional' skips the extraction call when the exchange has no new
+        # durable facts (short text and no tool calls this turn, a cheap heuristic).
         if req.message and assistant_content:
-            background_tasks.add_task(
-                extract_and_store_memory,
-                f"User: {req.message}\nDAWN: {assistant_content}",
-                engine.complete,
-                session_id,
-            )
+            try:
+                from runtime_settings import get_runtime
+                extract_mode = get_runtime().get("memory.extract_mode") or "always"
+            except Exception:
+                extract_mode = "always"
+            if extract_mode != "off":
+                short_exchange = (
+                    len(req.message) + len(assistant_content) < 400
+                    and not tool_calls_list
+                )
+                if extract_mode == "always" or not short_exchange:
+                    background_tasks.add_task(
+                        extract_and_store_memory,
+                        f"User: {req.message}\nDAWN: {assistant_content}",
+                        engine.complete,
+                        session_id,
+                    )
 
     return StreamingResponse(
         generate(),
@@ -290,3 +282,110 @@ async def agent(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ── UI actions (intelligent-ui spec §8) ─────────────────────────────────────
+
+class UiActionRequest(BaseModel):
+    artifact_id: str
+    block_id: str
+    inputs: dict = {}
+
+
+def _find_ui_block(blocks: list[dict], block_id: str) -> Optional[dict]:
+    """Find a block (top-level or nested in columns/tabs) by id."""
+    for b in blocks or []:
+        if b.get("id") == block_id:
+            return b
+        if b.get("type") == "columns":
+            for c in b.get("children") or []:
+                if c.get("id") == block_id:
+                    return c
+        if b.get("type") == "tabs":
+            for t in b.get("tabs") or []:
+                for c in t.get("children") or []:
+                    if c.get("id") == block_id:
+                        return c
+    return None
+
+
+def _coerce_ui_inputs(block: dict, action: dict, inputs: dict) -> dict:
+    """Merge declared inputs into the stored action args, type-checked against
+    the block's field/input definitions. Anything not declared is dropped —
+    the client never supplies raw tool args."""
+    field_defs: dict[str, dict] = {}
+    for f in (block.get("fields") or []) + (block.get("inputs") or []):
+        if isinstance(f, dict) and f.get("id"):
+            field_defs[f["id"]] = f
+    args = dict(action.get("args") or {})
+    declared = set(action.get("inputs") or [])
+    for key in declared:
+        if key not in field_defs:
+            # undeclared-by-model key: accept only if it was not in field_defs
+            # but the action declared it — keep as provided (still allowlisted).
+            pass
+        if key in inputs:
+            value = inputs[key]
+            fd = field_defs.get(key)
+            if fd and fd.get("kind") in ("number", "slider"):
+                try:
+                    value = float(value)
+                except (TypeError, ValueError):
+                    pass
+            args[key] = value
+    return args
+
+
+@router.post("/ui-action", tags=["agent"])
+async def agent_ui_action(
+    req: UiActionRequest,
+    identity: Identity = Depends(get_identity),
+):
+    """Execute a render_component `tool` action server-side from the STORED
+    spec (never from client-provided args). Mutating tools queue for approval.
+    """
+    from tools.registry import get_registry
+    from tools.executor import execute_tool_call
+    from tools.pending_actions import queue_pending_action
+    from routers.audit import write_audit
+
+    supabase = db.get_db()
+    res = await db._async_execute(
+        lambda: supabase.table("artifacts").select("*").eq("id", req.artifact_id).maybe_single().execute()
+    )
+    artifact = res.data if res and res.data else None
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    if artifact.get("type") != "ui":
+        raise HTTPException(status_code=422, detail="Artifact is not a ui document")
+
+    doc = artifact.get("spec") or {}
+    block = _find_ui_block(doc.get("blocks") or [], req.block_id)
+    if not block:
+        raise HTTPException(status_code=404, detail="Block not found in artifact")
+    action = block.get("action")
+    if not isinstance(action, dict) or action.get("kind") != "tool":
+        raise HTTPException(status_code=422, detail="Block has no executable tool action")
+    tool_name = action.get("tool")
+    if not tool_name:
+        raise HTTPException(status_code=422, detail="Tool action has no tool name")
+
+    if tool_name not in settings.ui_action_tools_list:
+        raise HTTPException(status_code=403, detail=f"Tool '{tool_name}' is not allowlisted for ui actions")
+    if tool_name not in identity.allowed_tools([t.name for t in get_registry().list_tools()]):
+        raise HTTPException(status_code=403, detail=f"Identity is not allowed to call '{tool_name}'")
+
+    args = _coerce_ui_inputs(block, action, req.inputs or {})
+    requested_by = f"ui:{identity.key_id}:{req.artifact_id}"
+
+    tool = get_registry().get(tool_name)
+    if tool is not None and getattr(tool, "is_mutating", False):
+        result = await queue_pending_action(None, tool_name, args, requested_by=requested_by)
+        await write_audit("ui_action_queued", "user", actor_ref=req.artifact_id,
+                          details={"tool": tool_name, "block_id": req.block_id})
+        return {"ok": True, "status": "pending_approval", "action_id": result.metadata.get("pending_action_id")}
+
+    outcome = await execute_tool_call(get_registry(), tool_name, args)
+    await write_audit("ui_action_run", "user", actor_ref=req.artifact_id,
+                      details={"tool": tool_name, "block_id": req.block_id, "success": outcome.success})
+    return {"ok": True, "status": "done" if outcome.success else "failed", "result": outcome.to_dict()}
