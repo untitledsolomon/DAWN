@@ -2,7 +2,7 @@
 LLM Engine — abstracts local llama.cpp and DeepSeek API behind one interface.
 Switch via LLM_MODE env var: "deepseek" | "local"
 """
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Literal, Optional
 from dataclasses import dataclass, field
 
 from config import settings
@@ -18,6 +18,17 @@ class ToolCallRequest:
     id: str
     name: str
     args: dict
+
+
+@dataclass
+class StreamEvent:
+    """One streaming chunk from stream_with_tools()."""
+    kind: Literal["text_delta", "tool_start", "tool_args_delta", "done"]
+    index: Optional[int] = None          # tool-call index
+    id: Optional[str] = None
+    name: Optional[str] = None
+    delta: Optional[str] = None
+    result: Optional["CompletionResult"] = None   # set only on "done"
 
 
 @dataclass
@@ -159,6 +170,87 @@ class DeepSeekEngine:
             return CompletionResult(content=message.content or "", tool_calls=calls)
 
         return CompletionResult(content=message.content or "")
+
+    async def stream_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        max_tokens: int = 8192,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """
+        Streaming variant of complete_with_tools(). The final "done" event
+        carries the same CompletionResult, including __parse_error__ handling
+        for a truncated tool-call JSON payload (finish_reason == "length").
+        """
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            stream=True,
+            max_tokens=max_tokens,
+            temperature=0.1,
+        )
+        text_parts: list[str] = []
+        tool_calls: dict[int, dict] = {}
+        finish_reason: Optional[str] = None
+
+        async for chunk in response:
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            if choice.finish_reason:
+                finish_reason = choice.finish_reason
+            delta = choice.delta
+            if delta.content:
+                text_parts.append(delta.content)
+                yield StreamEvent(kind="text_delta", delta=delta.content)
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    if tc.index is None:
+                        continue
+                    idx = tc.index
+                    entry = tool_calls.setdefault(idx, {"id": None, "name": None, "args": []})
+                    if tc.id:
+                        entry["id"] = tc.id
+                    if tc.function and tc.function.name:
+                        entry["name"] = tc.function.name
+                        yield StreamEvent(kind="tool_start", index=idx, id=entry["id"], name=entry["name"])
+                    if tc.function and tc.function.arguments:
+                        entry["args"].append(tc.function.arguments)
+                        yield StreamEvent(
+                            kind="tool_args_delta",
+                            index=idx,
+                            id=entry["id"],
+                            name=entry["name"],
+                            delta=tc.function.arguments,
+                        )
+
+        # Reassemble tool calls exactly like complete_with_tools().
+        calls = []
+        for idx in sorted(tool_calls):
+            entry = tool_calls[idx]
+            raw = "".join(entry["args"] or [])
+            args: dict = {}
+            if raw:
+                try:
+                    args = json.loads(raw)
+                except json.JSONDecodeError as e:
+                    if finish_reason == "length":
+                        err = (
+                            "Tool call arguments were truncated because the response "
+                            "hit the max_tokens limit before finishing. Break large "
+                            "file writes into smaller chunks, or write the file in "
+                            "multiple sequential 'write'/'append' calls."
+                        )
+                    else:
+                        err = f"Tool call arguments were not valid JSON: {e}"
+                    logger.warning(f"{err} Raw (truncated): {raw[:200]}...")
+                    args = {"__parse_error__": err}
+            calls.append(ToolCallRequest(id=entry["id"] or f"call_{idx}", name=entry["name"] or "", args=args))
+
+        result = CompletionResult(content="".join(text_parts), tool_calls=calls)
+        yield StreamEvent(kind="done", result=result)
 
     def tool_result_message(self, tool_call_id: str, tool_name: str, result_json: str) -> dict:
         """Build the 'tool' role message DeepSeek expects after a tool call."""

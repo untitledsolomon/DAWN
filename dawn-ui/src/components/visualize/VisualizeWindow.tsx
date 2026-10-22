@@ -22,6 +22,14 @@ import type { ChatMessage, ToolCall, SessionMessage, Artifact } from "@/lib/type
 import type { AgentChatMessage, ArtifactRef } from "@/lib/agent-types";
 import Message from "@/components/chat/Message";
 import { ActionContextProvider } from "@/components/ui-blocks/ActionContext";
+import UIRenderer from "@/components/ui-blocks/UIRenderer";
+import {
+  applyUiEvent,
+  finalizeLive,
+  initialLiveDocs,
+  type LiveDocsState,
+  type UiLiveEvent,
+} from "@/lib/ui/stream";
 import clsx from "clsx";
 
 // Lazy load ChartRenderer — vega-embed is heavy and only needed at runtime
@@ -63,6 +71,7 @@ export default function VisualizeWindow() {
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [artifacts, setArtifacts] = useState<ArtifactRef[]>([]);
   const [showArtifactPanel, setShowArtifactPanel] = useState(false);
+  const [liveDocs, setLiveDocs] = useState<LiveDocsState>(initialLiveDocs);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sessionId = useRef<string | undefined>(undefined);
@@ -182,6 +191,7 @@ export default function VisualizeWindow() {
     setIsStreaming(true);
     setStreamingContent("");
     setStreamingToolCalls([]);
+    setLiveDocs(initialLiveDocs);
     setThinkingState(true);
 
     let fullContent = "";
@@ -217,6 +227,10 @@ export default function VisualizeWindow() {
             setThinkingState(false);
             break;
           case "artifact":
+            // A persisted ui document is authoritative — drop any live draft.
+            if (event.artifact_type === "ui") {
+              setLiveDocs(finalizeLive());
+            }
             newArtifacts.push({
               id: event.artifact_id,
               type: event.artifact_type as ArtifactRef["type"],
@@ -225,6 +239,12 @@ export default function VisualizeWindow() {
               url: event.url,
               created_at: new Date().toISOString(),
             });
+            break;
+          case "ui_start":
+          case "ui_block":
+          case "ui_block_error":
+          case "ui_end":
+            setLiveDocs((prev) => applyUiEvent(prev, event as UiLiveEvent));
             break;
           case "token":
             fullContent += event.content;
@@ -347,6 +367,8 @@ export default function VisualizeWindow() {
                     isStreaming
                     streamingToolCalls={!thinkingState ? streamingToolCalls : []}
                   />
+                  {/* Live UI blocks streamed from a render_component call */}
+                  <LiveUiDocs state={liveDocs} />
                   {/* Live chart rendering while streaming */}
                   {streamingContent && (
                     <ChartsFromContent content={streamingContent} />
@@ -502,6 +524,28 @@ export default function VisualizeWindow() {
       )}
     </div>
     </ActionContextProvider>
+  );
+}
+
+/** Live UI blocks streamed from a render_component call, before the artifact lands. */
+function LiveUiDocs({ state }: { state: LiveDocsState }) {
+  if (state.order.length === 0) return null;
+  return (
+    <div className="ml-0 sm:ml-12 mt-3 space-y-3">
+      {state.order.map((uiId) => {
+        const doc = state.docs[uiId];
+        if (!doc) return null;
+        return (
+          <div
+            key={uiId}
+            className="rounded-[10px] border border-rim bg-surface/50 p-3 animate-slide-up"
+          >
+            <UIRenderer doc={{ v: 1, title: "", blocks: doc.blocks }} />
+            <p className="text-text-muted text-2xs mt-2">building view…</p>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

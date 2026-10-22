@@ -26,6 +26,8 @@ from llm.identity import Identity, TrustTier
 from tools.registry import get_registry, ToolRegistry
 from tools.executor import execute_tool_call
 from tools.base import ToolResult
+from ui.stream import BlockStreamer
+from ui.schema import normalize_block
 
 logger = logging.getLogger(__name__)
 
@@ -271,12 +273,52 @@ async def run_agent_loop(
     # loop immediately rather than burning through completions to the ceiling.
     recent_calls: list[tuple[str, str]] = []
 
+    async def _stream_completion(messages: list[dict], tools: list[dict]):
+        """
+        Stream one completion. Yields ui_start/ui_block/ui_block_error/ui_end
+        events for render_component calls as their blocks complete, then a
+        '__complete' sentinel carrying the final CompletionResult.
+        """
+        streamers: dict[int, BlockStreamer] = {}
+        ui_ids: dict[int, str] = {}
+        async for ev in engine.stream_with_tools(messages, tools=tools):
+            if ev.kind == "tool_start" and ev.name == "render_component":
+                streamers[ev.index] = BlockStreamer()
+                ui_ids[ev.index] = ev.id or f"ui_{ev.index}"
+                yield {"type": "ui_start", "ui_id": ui_ids[ev.index], "index": ev.index}
+            elif ev.kind == "tool_args_delta" and ev.index in streamers:
+                ui_id = ui_ids[ev.index]
+                for raw_block in streamers[ev.index].feed(ev.delta or ""):
+                    nb, errs = normalize_block(raw_block)
+                    if nb is None:
+                        yield {
+                            "type": "ui_block_error",
+                            "ui_id": ui_id,
+                            "index": ev.index,
+                            "error": errs[0] if errs else "invalid block",
+                        }
+                    else:
+                        yield {"type": "ui_block", "ui_id": ui_id, "index": ev.index, "block": nb}
+            elif ev.kind == "done":
+                for idx, ui_id in ui_ids.items():
+                    yield {"type": "ui_end", "ui_id": ui_id, "index": idx}
+                yield {"type": "__complete", "result": ev.result}
+                return
+
     for iteration in range(1, max_iterations + 1):
+        result = None
         try:
-            result = await engine.complete_with_tools(messages, tools=tool_specs)
+            async for ev in _stream_completion(messages, tool_specs):
+                if ev.get("type") == "__complete":
+                    result = ev.get("result")
+                else:
+                    yield ev
         except Exception as e:
-            logger.exception("engine.complete_with_tools failed")
+            logger.exception("engine.stream_with_tools failed")
             yield {"type": "error", "content": f"LLM call failed: {e}"}
+            return
+        if result is None:
+            yield {"type": "error", "content": "LLM call produced no response."}
             return
 
         if result.wants_tool_call:
@@ -320,11 +362,19 @@ async def run_agent_loop(
             })
             yield {"type": "thinking", "content": "Double-checking that..."}
 
+            result = None
             try:
-                result = await engine.complete_with_tools(messages, tools=tool_specs)
+                async for ev in _stream_completion(messages, tool_specs):
+                    if ev.get("type") == "__complete":
+                        result = ev.get("result")
+                    else:
+                        yield ev
             except Exception as e:
-                logger.exception("engine.complete_with_tools failed on re-prompt")
+                logger.exception("engine.stream_with_tools failed on re-prompt")
                 yield {"type": "error", "content": f"LLM call failed: {e}"}
+                return
+            if result is None:
+                yield {"type": "error", "content": "LLM call produced no response."}
                 return
 
             if result.wants_tool_call:
