@@ -42,6 +42,7 @@ import {
   LayoutDashboard,
   LayoutGrid,
   ShieldCheck,
+  Bot,
 } from "lucide-react";
 import clsx from "clsx";
 import {
@@ -81,6 +82,7 @@ const PRIMARY_NAV: NavItem[] = [
   { href: "/memory", icon: Brain, label: "Memory" },
   { href: "/agent-tasks", icon: ListTodo, label: "Agent Tasks" },
   { href: "/agent-logs", icon: Activity, label: "Agent Logs" },
+  { href: "/autopilot", icon: Bot, label: "Autopilot" },
 ];
 
 const TOOLS_NAV: NavItem[] = [

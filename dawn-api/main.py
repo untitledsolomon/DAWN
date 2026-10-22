@@ -31,6 +31,7 @@ from routers import (
     skills,    # v42.0 — Skills list/install
     github_webhooks,  # v45.0 — GitHub integration webhook receiver
     runtime_settings,  # runtime settings + tools inventory
+    autopilot,      # autopilot jobs/runs/master switch
 )
 
 app = FastAPI(
@@ -152,6 +153,7 @@ app.include_router(projects.router, prefix="", tags=["projects"])
 app.include_router(files.router, prefix="", tags=["files"])
 app.include_router(skills.router, prefix="", tags=["skills"])
 app.include_router(github_webhooks.router, prefix="", tags=["github"])
+app.include_router(autopilot.router, prefix="", tags=["autopilot"])
 
 
 @app.get("/health")
@@ -191,6 +193,18 @@ async def start_background_services():
         logger.info("Runtime settings loaded")
     except Exception as e:
         logger.error(f"Failed to load runtime settings: {e}")
+
+    # Autopilot — recover stale runs, seed the disabled default jobs, start the
+    # scheduler loop. The loop gates on the autopilot.enabled runtime setting.
+    try:
+        from autopilot.engine import recover_running_runs
+        from autopilot.scheduler import start_scheduler, seed_default_jobs
+        await recover_running_runs()
+        await seed_default_jobs()
+        start_scheduler()
+        logger.info("Autopilot scheduler started (gated on autopilot.enabled)")
+    except Exception as e:
+        logger.error(f"Failed to start autopilot scheduler: {e}")
 
     # Ingestion queue
     try:
@@ -278,6 +292,13 @@ async def start_background_services():
 @app.on_event("shutdown")
 async def stop_background_services():
     """Stop background services."""
+    # Autopilot scheduler
+    try:
+        from autopilot.scheduler import stop_scheduler
+        await stop_scheduler()
+    except Exception as e:
+        logger.error(f"Failed to stop autopilot scheduler: {e}")
+
     # Autonomous agent-task scheduler
     try:
         from tools.agent_scheduler import stop_agent_scheduler

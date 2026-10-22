@@ -85,6 +85,7 @@ def build_vega_spec(
 
 class ChartTool(BaseTool):
     name = "create_chart"
+    risk = "internal_write"
     description = (
         "Turn tabular data into a chart the user can see. Use this whenever the user "
         "asks you to visualize, chart, graph, or plot something, or when showing a "

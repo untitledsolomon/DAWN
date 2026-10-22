@@ -16,7 +16,7 @@ v40.0: Now accepts memory_context parameter and injects it into the
 system prompt, so the agent has access to persistent memories just
 like chat mode does.
 """
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Callable, Optional
 import asyncio
 import json
 import logging
@@ -29,6 +29,7 @@ from tools.base import ToolResult
 from ui.stream import BlockStreamer
 from ui.schema import normalize_block
 from runtime_settings import get_runtime
+from autopilot.policy import RunBudget, BudgetExceeded, RunPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,7 @@ async def _execute_tool_calls(
     allowed_names: set[str],
     engine: DeepSeekEngine,
     identity: Identity,
+    policy: Optional[RunPolicy] = None,
 ) -> AsyncGenerator[dict, None]:
     """
     Runs every tool call in `result`, yielding tool_call/tool_result events
@@ -185,7 +187,7 @@ async def _execute_tool_calls(
                 success=False, output=None, error=f"Not authorized to use tool '{call.name}'."
             )
 
-        tool_result = await execute_tool_call(registry, call.name, call.args)
+        tool_result = await execute_tool_call(registry, call.name, call.args, policy=policy)
         return call, tool_result
 
     # Run all tool executions concurrently, then stream results in order.
@@ -217,6 +219,10 @@ async def run_agent_loop(
     history: Optional[list[dict]] = None,
     max_iterations: Optional[int] = None,
     memory_context: str = "",
+    budget: Optional[RunBudget] = None,
+    policy: Optional[RunPolicy] = None,
+    stop_on_tools: Optional[set[str]] = None,
+    on_usage: Optional[Callable[[dict], None]] = None,
 ) -> AsyncGenerator[dict, None]:
     """
     Runs the agent loop, yielding event dicts as it goes:
@@ -226,13 +232,17 @@ async def run_agent_loop(
       {"type": "warning", "content": "..."}         # suspected fabricated action claim
       {"type": "token", "content": "..."}          # only on the final answer
       {"type": "done", "content": "...", "iterations": N}
+      {"type": "needs_attention", ...}             # loop guard fired (not 'completed')
+      {"type": "budget_stopped", "kind": ...}      # a RunBudget cap was hit
       {"type": "error", "content": "..."}
 
     `identity` determines which tools are even offered to the model — see
     llm/identity.py. This does not replace the consequence/harm reasoning
     in AGENT_SAFETY_PROMPT, which applies regardless of identity tier.
 
-    v40.0: Accepts memory_context parameter and passes it to build_agent_messages.
+    Autopilot: `budget` caps steps/tokens/clock and honours cancellation;
+    `policy` implements Observe/Propose tool gating; `stop_on_tools` ends the
+    run right after one of those tools executes (used by autopilot_report).
     """
     if max_iterations is None:
         max_iterations = int(get_runtime().get("agent.max_iterations") or DEFAULT_MAX_ITERATIONS)
@@ -265,6 +275,16 @@ async def run_agent_loop(
         # ui.density=off drops generated interfaces (intelligent-ui spec §7).
         if get_runtime().get("ui.density") == "off":
             names.discard("render_component")
+        # Autopilot policy: Observe never offers external_write/exec; Propose
+        # drops non-allowlisted exec tools. autopilot_report is run-only.
+        if policy is not None and policy.enforced:
+            for t in all_tools:
+                if t.name in names:
+                    rt = getattr(t, "risk", "exec")
+                    if policy.filters_tool(t.name, rt):
+                        names.discard(t.name)
+        else:
+            names.discard("autopilot_report")
         specs = [t.spec() for t in all_tools if t.name in names]
         return names, specs
 
@@ -318,11 +338,20 @@ async def run_agent_loop(
     for iteration in range(1, max_iterations + 1):
         result = None
         try:
+            if budget:
+                budget.check_step()
             async for ev in _stream_completion(messages, tool_specs):
                 if ev.get("type") == "__complete":
                     result = ev.get("result")
                 else:
                     yield ev
+            if budget and result is not None and result.usage:
+                budget.add_tokens(result.usage.get("total_tokens") or result.usage.get("completion_tokens") or 0)
+            if on_usage and result is not None and result.usage:
+                on_usage(result.usage)
+        except BudgetExceeded as be:
+            yield {"type": "budget_stopped", "kind": be.kind, "content": str(be), "iterations": iteration}
+            return
         except Exception as e:
             logger.exception("engine.stream_with_tools failed")
             yield {"type": "error", "content": f"LLM call failed: {e}"}
@@ -337,16 +366,20 @@ async def run_agent_loop(
                 recent_calls.append((call.name, json.dumps(call.args, sort_keys=True)))
             recent_calls = recent_calls[-repeat_threshold:]
             if len(recent_calls) == repeat_threshold and len(set(recent_calls)) == 1:
-                yield {"type": "warning", "content": (
+                yield {"type": "needs_attention", "content": (
                     f"Stopped: the same tool call ('{recent_calls[0][0]}') repeated "
                     f"{repeat_threshold} times with identical arguments and no "
                     f"progress. This usually means the tool is failing the same way "
                     f"each time — check the tool's error output above."
-                )}
-                yield {"type": "done", "content": "Stopped due to a repeated, non-progressing tool call.", "iterations": iteration}
+                ), "iterations": iteration}
                 return
-            async for event in _execute_tool_calls(result, messages, registry, allowed_names, engine, identity):
+            async for event in _execute_tool_calls(result, messages, registry, allowed_names, engine, identity, policy=policy):
                 yield event
+            # end-of-run tools (autopilot_report): the result should already be
+            # captured by the caller from the tool_result events.
+            if stop_on_tools and any(c.name in stop_on_tools for c in result.tool_calls):
+                yield {"type": "done", "content": result.content or "", "iterations": iteration, "structured": True}
+                return
             allowed_names, tool_specs = _current_tools()
             continue  # get another completion now that tool results are in history
 
@@ -374,11 +407,20 @@ async def run_agent_loop(
 
             result = None
             try:
+                if budget:
+                    budget.check_step()
                 async for ev in _stream_completion(messages, tool_specs):
                     if ev.get("type") == "__complete":
                         result = ev.get("result")
                     else:
                         yield ev
+                if budget and result is not None and result.usage:
+                    budget.add_tokens(result.usage.get("total_tokens") or result.usage.get("completion_tokens") or 0)
+                if on_usage and result is not None and result.usage:
+                    on_usage(result.usage)
+            except BudgetExceeded as be:
+                yield {"type": "budget_stopped", "kind": be.kind, "content": str(be), "iterations": iteration}
+                return
             except Exception as e:
                 logger.exception("engine.stream_with_tools failed on re-prompt")
                 yield {"type": "error", "content": f"LLM call failed: {e}"}
@@ -388,7 +430,7 @@ async def run_agent_loop(
                 return
 
             if result.wants_tool_call:
-                async for event in _execute_tool_calls(result, messages, registry, allowed_names, engine, identity):
+                async for event in _execute_tool_calls(result, messages, registry, allowed_names, engine, identity, policy=policy):
                     yield event
                 allowed_names, tool_specs = _current_tools()
                 continue  # back to the top for another completion

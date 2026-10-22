@@ -373,6 +373,150 @@ export async function runUiAction(
   return res.json();
 }
 
+// ── Autopilot ───────────────────────────────────────────────────────────────
+
+export interface AutopilotStatus {
+  enabled: boolean;
+  running: number;
+  runs_today: number;
+  quiet: number;
+  tokens_today: number;
+  cost_today: number;
+}
+
+export interface AutopilotJob {
+  id: string;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  autonomy: string;
+  schedule: { cron?: string; timezone?: string } | null;
+  triggers: { event?: string; params?: Record<string, unknown> }[];
+  preflight: { check?: string; params?: Record<string, unknown> }[];
+  preflight_mode: string;
+  tool_allowlist: string[];
+  limits: Record<string, unknown>;
+  notify: Record<string, unknown>;
+  dedupe_hours: number;
+  state: Record<string, unknown>;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  consecutive_failures: number;
+  paused_reason: string | null;
+}
+
+export interface AutopilotRun {
+  id: string;
+  job_id: string;
+  triggered_by: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  steps: number;
+  tokens_in: number;
+  tokens_out: number;
+  est_cost: number | null;
+  summary: string | null;
+  findings: { title: string; detail?: string; severity?: string }[];
+  tools_used: string[];
+  error_class: string | null;
+  error: string | null;
+  feedback: string | null;
+  created_at: string;
+}
+
+export async function getAutopilotStatus(): Promise<AutopilotStatus> {
+  const res = await fetch(`${BASE}/autopilot/status`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to get autopilot status: ${res.status}`);
+  return res.json();
+}
+
+export async function killAutopilot(): Promise<{ ok: boolean; status: string }> {
+  const res = await fetch(`${BASE}/autopilot/kill`, { method: "POST", headers: headers() });
+  if (!res.ok) throw new Error(`Failed to stop autopilot: ${res.status}`);
+  return res.json();
+}
+
+export async function listAutopilotJobs(): Promise<AutopilotJob[]> {
+  const res = await fetch(`${BASE}/autopilot/jobs`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to list autopilot jobs: ${res.status}`);
+  return res.json();
+}
+
+export async function getAutopilotJob(id: string): Promise<AutopilotJob> {
+  const res = await fetch(`${BASE}/autopilot/jobs/${id}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to get job: ${res.status}`);
+  return res.json();
+}
+
+export async function createAutopilotJob(data: {
+  name: string;
+  goal: string;
+  description?: string;
+  autonomy?: string;
+  schedule?: { cron?: string; timezone?: string } | null;
+  triggers?: { event?: string; params?: Record<string, unknown> }[];
+}): Promise<unknown> {
+  const res = await fetch(`${BASE}/autopilot/jobs`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Failed to create job: ${res.status}`);
+  return res.json();
+}
+
+export async function patchAutopilotJob(id: string, data: Partial<AutopilotJob & { goal?: string }>): Promise<unknown> {
+  const res = await fetch(`${BASE}/autopilot/jobs/${id}`, {
+    method: "PATCH",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Failed to update job: ${res.status}`);
+  return res.json();
+}
+
+export async function runAutopilotJob(id: string, dryRun = false): Promise<{ run_id: string; status: string }> {
+  const res = await fetch(`${BASE}/autopilot/jobs/${id}/run`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ dry_run: dryRun }),
+  });
+  if (!res.ok) throw new Error(`Failed to run job: ${res.status}`);
+  return res.json();
+}
+
+export async function pauseAutopilotJob(id: string): Promise<unknown> {
+  const res = await fetch(`${BASE}/autopilot/jobs/${id}/pause`, { method: "POST", headers: headers() });
+  if (!res.ok) throw new Error(`Failed to pause job: ${res.status}`);
+  return res.json();
+}
+
+export async function resumeAutopilotJob(id: string): Promise<unknown> {
+  const res = await fetch(`${BASE}/autopilot/jobs/${id}/resume`, { method: "POST", headers: headers() });
+  if (!res.ok) throw new Error(`Failed to resume job: ${res.status}`);
+  return res.json();
+}
+
+export async function listAutopilotRuns(jobId?: string, limit = 20): Promise<AutopilotRun[]> {
+  const qs = new URLSearchParams();
+  if (jobId) qs.set("job_id", jobId);
+  qs.set("limit", String(limit));
+  const res = await fetch(`${BASE}/autopilot/runs?${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to list runs: ${res.status}`);
+  return res.json();
+}
+
+export async function feedbackAutopilotRun(runId: string, feedback: "useful" | "noise"): Promise<unknown> {
+  const res = await fetch(`${BASE}/autopilot/runs/${runId}/feedback`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ feedback }),
+  });
+  if (!res.ok) throw new Error(`Failed to record feedback: ${res.status}`);
+  return res.json();
+}
+
 // ── Agent Logs ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function getAgentLogs(limit = 50, statusFilter?: string): Promise<AgentLogEntry[]> {

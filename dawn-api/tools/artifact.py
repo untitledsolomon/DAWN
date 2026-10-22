@@ -33,6 +33,7 @@ def _artifact_rows() -> int:
 
 class CreateArtifactTool(BaseTool):
     name = "create_artifact"
+    risk = "internal_write"
     description = (
         "Push a non-chart item onto DAWN's Canvas workspace. Use this when the "
         "user asks you to save, add, or pin a table, a written report/summary, or a "

@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 class RenderComponentTool(BaseTool):
     name = "render_component"
+    risk = "internal_write"
     is_mutating = False
     description = (
         "Build an interface (a UI document) when the answer is better shown than "

@@ -66,6 +66,7 @@ def _resolve_safe_host(url: str) -> tuple[bool, str, str | None, str | None]:
 
 class WebFetchTool(BaseTool):
     name = "web_fetch"
+    risk = "read"
     description = (
         "Fetch the text content of a specific URL. Use this when you already "
         "have a URL (from web_search results, a knowledge graph node, or the "

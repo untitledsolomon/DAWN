@@ -24,6 +24,7 @@ def _web_timeout() -> int:
 
 class WebSearchTool(BaseTool):
     name = "web_search"
+    risk = "read"
     description = (
         "Search the web for current information. Returns a list of results with "
         "title, URL, and a short snippet. Use this for anything that might have "

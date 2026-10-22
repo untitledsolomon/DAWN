@@ -156,6 +156,13 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register RenderComponentTool: {e}")
 
+    # Autopilot — structured finish for autonomous runs
+    try:
+        from tools.autopilot_report import AutopilotReportTool
+        registry.register(AutopilotReportTool())
+    except Exception as e:
+        logger.error(f"Failed to register AutopilotReportTool: {e}")
+
     # OSINT recon tool
     try:
         from tools.osint_tool import OSINTTool

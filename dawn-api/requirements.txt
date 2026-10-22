@@ -87,3 +87,6 @@ apscheduler>=3.10.0,<4.0
 
 # v45.0 — GitHub Integration
 PyGithub>=2.3.0
+
+# Autopilot — cron parsing for job schedules
+croniter>=2.0.0

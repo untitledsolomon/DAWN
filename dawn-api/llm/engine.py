@@ -36,10 +36,52 @@ class CompletionResult:
     """Result of complete_with_tools() — either a final text answer, or tool_calls to execute."""
     content: str = ""
     tool_calls: list[ToolCallRequest] = field(default_factory=list)
+    #: {prompt_tokens, completion_tokens, total_tokens} when the provider reports it.
+    usage: Optional[dict] = None
 
     @property
     def wants_tool_call(self) -> bool:
         return len(self.tool_calls) > 0
+
+
+def extract_usage(response) -> Optional[dict]:
+    """Pull a minimal token-usage dict off an OpenAI-compatible response."""
+    try:
+        u = getattr(response, "usage", None)
+        if u is None:
+            return None
+        keys = ("prompt_tokens", "completion_tokens", "total_tokens",
+                "prompt_tokens_details", "completion_tokens_details")
+        out: dict = {}
+        for k in keys:
+            if hasattr(u, k):
+                val = getattr(u, k)
+                if isinstance(val, dict):
+                    out[k] = {kk: vv for kk, vv in val.items() if isinstance(vv, (int, float))}
+                else:
+                    out[k] = val
+        return out or None
+    except Exception:
+        return None
+
+
+def usage_cost(usage: Optional[dict]) -> Optional[float]:
+    """Estimated USD cost of a completion from the llm.price_* runtime settings.
+    Returns None when prices are unset (UI shows tokens only)."""
+    if not usage:
+        return None
+    try:
+        from runtime_settings import get_runtime
+        rt = get_runtime()
+        p_in = rt.get("llm.price_input_per_mtok")
+        p_out = rt.get("llm.price_output_per_mtok")
+        if p_in is None or p_out is None:
+            return None
+        prompt = usage.get("prompt_tokens") or 0
+        completion = usage.get("completion_tokens") or 0
+        return round((prompt * p_in + completion * p_out) / 1_000_000, 6)
+    except Exception:
+        return None
 
 DAWN_SYSTEM_PROMPT = """You are DAWN — the internal knowledge layer and AI assistant for Regent, \
 a digital systems and strategy firm based in Kampala, Uganda.
@@ -183,9 +225,9 @@ class DeepSeekEngine:
                         logger.warning(f"{err} Raw (truncated): {tc.function.arguments[:200]}...")
                         args = {"__parse_error__": err}
                 calls.append(ToolCallRequest(id=tc.id, name=tc.function.name, args=args))
-            return CompletionResult(content=message.content or "", tool_calls=calls)
+            return CompletionResult(content=message.content or "", tool_calls=calls, usage=extract_usage(response))
 
-        return CompletionResult(content=message.content or "")
+        return CompletionResult(content=message.content or "", usage=extract_usage(response))
 
     async def stream_with_tools(
         self,
@@ -206,19 +248,25 @@ class DeepSeekEngine:
             tools=tools,
             tool_choice="auto",
             stream=True,
+            stream_options={"include_usage": True},
             max_tokens=max_tokens,
             temperature=float(self._setting("llm.tool_temperature", 0.1)),
         )
         text_parts: list[str] = []
         tool_calls: dict[int, dict] = {}
         finish_reason: Optional[str] = None
+        usage: Optional[dict] = None
 
         async for chunk in response:
             if not chunk.choices:
+                if getattr(chunk, "usage", None) is not None:
+                    usage = extract_usage(chunk)
                 continue
             choice = chunk.choices[0]
             if choice.finish_reason:
                 finish_reason = choice.finish_reason
+            if getattr(chunk, "usage", None) is not None:
+                usage = extract_usage(chunk)
             delta = choice.delta
             if delta.content:
                 text_parts.append(delta.content)
@@ -267,7 +315,7 @@ class DeepSeekEngine:
                     args = {"__parse_error__": err}
             calls.append(ToolCallRequest(id=entry["id"] or f"call_{idx}", name=entry["name"] or "", args=args))
 
-        result = CompletionResult(content="".join(text_parts), tool_calls=calls)
+        result = CompletionResult(content="".join(text_parts), tool_calls=calls, usage=usage)
         yield StreamEvent(kind="done", result=result)
 
     def tool_result_message(self, tool_call_id: str, tool_name: str, result_json: str) -> dict:

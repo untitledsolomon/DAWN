@@ -37,6 +37,7 @@ class EmailSendTool(BaseTool):
     """Send emails via SMTP."""
 
     name = "send_email"
+    risk = "external_write"
     # Sending email is a mutating action on real communications — gate behind
     # human approval via the pending_actions queue.
     is_mutating = True
@@ -145,6 +146,7 @@ class EmailStatusTool(BaseTool):
     """Check if email/SMTP is configured."""
 
     name = "email_status"
+    risk = "read"
     description = "Check if email/SMTP is configured and ready to send."
     input_schema = {
         "type": "object",

@@ -36,6 +36,7 @@ OPERATIONS = [
 
 class GitHubTool(BaseTool):
     name = "github"
+    risk = "external_write"
     description = (
         "Interact with GitHub: push branches, open/read/comment on pull "
         "requests, read/comment on issues, and submit PR reviews. DAWN can "
