@@ -1088,15 +1088,40 @@ async def ingest_url_endpoint(req: UrlIngestRequest, _: None = Depends(verify_ke
     tag_list = list(req.tags)
 
     try:
+        from tools.webfetch import _resolve_safe_host
+        safe, reason, _ip, _host = _resolve_safe_host(url)
+    except Exception:
+        safe, reason = True, ""
+    if not safe:
+        raise HTTPException(status_code=422, detail=f"Refused URL: {reason}")
+
+    max_mb = 200
+    try:
+        from runtime_settings import get_runtime
+        max_mb = int(get_runtime().get("ingest.max_download_mb") or 200)
+    except Exception:
+        pass
+    cap = max_mb * 1024 * 1024
+
+    try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            content_type = resp.headers.get("content-type", "")
-            file_bytes = resp.content
+            async with client.stream("GET", url) as resp:
+                resp.raise_for_status()
+                content_type = resp.headers.get("content-type", "")
+                chunks = []
+                total = 0
+                async for chunk in resp.aiter_bytes():
+                    total += len(chunk)
+                    if total > cap:
+                        raise RuntimeError(f"Download exceeded {max_mb} MB cap")
+                    chunks.append(chunk)
+                file_bytes = b"".join(chunks)
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=400, detail=f"URL returned {e.response.status_code}")
     except httpx.RequestError as e:
         raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {str(e)}")
+    except RuntimeError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     if not file_bytes:
         raise HTTPException(status_code=422, detail="Empty response from URL")

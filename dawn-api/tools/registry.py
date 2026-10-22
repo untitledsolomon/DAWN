@@ -172,6 +172,19 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register learning tools: {e}")
 
+    # Document library — search/read/list/ingest (spec 6.2)
+    try:
+        from library.tools import (
+            LibrarySearchTool, LibraryReadTool, LibraryListTool, IngestUrlTool, IngestStatusTool,
+        )
+        registry.register(LibrarySearchTool())
+        registry.register(LibraryReadTool())
+        registry.register(LibraryListTool())
+        registry.register(IngestUrlTool())
+        registry.register(IngestStatusTool())
+    except Exception as e:
+        logger.error(f"Failed to register library tools: {e}")
+
     # OSINT recon tool
     try:
         from tools.osint_tool import OSINTTool

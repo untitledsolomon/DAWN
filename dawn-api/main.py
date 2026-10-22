@@ -33,6 +33,7 @@ from routers import (
     runtime_settings,  # runtime settings + tools inventory
     autopilot,      # autopilot jobs/runs/master switch
     learn,          # learning mode (topics, cards, reviews)
+    library,        # document library (full-text + hybrid retrieval)
 )
 
 app = FastAPI(
@@ -156,6 +157,7 @@ app.include_router(skills.router, prefix="", tags=["skills"])
 app.include_router(github_webhooks.router, prefix="", tags=["github"])
 app.include_router(autopilot.router, prefix="", tags=["autopilot"])
 app.include_router(learn.router, prefix="", tags=["learn"])
+app.include_router(library.router, prefix="", tags=["library"])
 
 
 @app.get("/health")
