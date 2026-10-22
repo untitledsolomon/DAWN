@@ -262,6 +262,9 @@ async def run_agent_loop(
         # tools.disabled (runtime setting) hides tools from the model entirely.
         disabled = set(get_runtime().get("tools.disabled") or [])
         names = set(identity.allowed_tools([t.name for t in all_tools])) - disabled
+        # ui.density=off drops generated interfaces (intelligent-ui spec §7).
+        if get_runtime().get("ui.density") == "off":
+            names.discard("render_component")
         specs = [t.spec() for t in all_tools if t.name in names]
         return names, specs
 

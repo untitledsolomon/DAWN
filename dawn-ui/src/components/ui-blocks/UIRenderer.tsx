@@ -12,6 +12,10 @@ import KeyValueBlock from "./blocks/KeyValueBlock";
 import CodeBlock from "./blocks/CodeBlock";
 import TimelineBlock from "./blocks/TimelineBlock";
 import ButtonBlock from "./blocks/ButtonBlock";
+import CalcBlock from "./blocks/CalcBlock";
+import FormBlock from "./blocks/FormBlock";
+import ApprovalBlock from "./blocks/ApprovalBlock";
+import EmbedBlock from "./blocks/EmbedBlock";
 
 // One bad block renders a small inline note, never a blank message.
 class BlockBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
@@ -50,6 +54,14 @@ function LeafRenderer({ block }: { block: LeafBlock }) {
       return <TimelineBlock block={block} />;
     case "button":
       return <ButtonBlock block={block} />;
+    case "calc":
+      return <CalcBlock block={block} />;
+    case "form":
+      return <FormBlock block={block} />;
+    case "approval":
+      return <ApprovalBlock block={block} />;
+    case "embed":
+      return <EmbedBlock block={block} />;
     default:
       return null;
   }

@@ -15,7 +15,15 @@ export default function ButtonBlock({ block }: { block: ButtonBlockT }) {
     } else if (action.kind === "navigate" && action.to) {
       navigate(action.to);
     } else if (action.kind === "tool" && action.tool) {
-      runToolAction({ tool: action.tool, args: action.args, inputs: action.inputs });
+      // Confirm is built from the stored spec (tool name + args), never from
+      // the model-supplied label.
+      const argsSummary = Object.entries(action.args ?? {})
+        .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
+        .join(", ");
+      const msg = `Run tool '${action.tool}'${argsSummary ? ` with: ${argsSummary}` : "?"}`;
+      if (window.confirm(`${msg}`)) {
+        void runToolAction(action, block.id ?? "");
+      }
     }
   };
 

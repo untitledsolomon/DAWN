@@ -282,3 +282,110 @@ async def agent(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ── UI actions (intelligent-ui spec §8) ─────────────────────────────────────
+
+class UiActionRequest(BaseModel):
+    artifact_id: str
+    block_id: str
+    inputs: dict = {}
+
+
+def _find_ui_block(blocks: list[dict], block_id: str) -> Optional[dict]:
+    """Find a block (top-level or nested in columns/tabs) by id."""
+    for b in blocks or []:
+        if b.get("id") == block_id:
+            return b
+        if b.get("type") == "columns":
+            for c in b.get("children") or []:
+                if c.get("id") == block_id:
+                    return c
+        if b.get("type") == "tabs":
+            for t in b.get("tabs") or []:
+                for c in t.get("children") or []:
+                    if c.get("id") == block_id:
+                        return c
+    return None
+
+
+def _coerce_ui_inputs(block: dict, action: dict, inputs: dict) -> dict:
+    """Merge declared inputs into the stored action args, type-checked against
+    the block's field/input definitions. Anything not declared is dropped —
+    the client never supplies raw tool args."""
+    field_defs: dict[str, dict] = {}
+    for f in (block.get("fields") or []) + (block.get("inputs") or []):
+        if isinstance(f, dict) and f.get("id"):
+            field_defs[f["id"]] = f
+    args = dict(action.get("args") or {})
+    declared = set(action.get("inputs") or [])
+    for key in declared:
+        if key not in field_defs:
+            # undeclared-by-model key: accept only if it was not in field_defs
+            # but the action declared it — keep as provided (still allowlisted).
+            pass
+        if key in inputs:
+            value = inputs[key]
+            fd = field_defs.get(key)
+            if fd and fd.get("kind") in ("number", "slider"):
+                try:
+                    value = float(value)
+                except (TypeError, ValueError):
+                    pass
+            args[key] = value
+    return args
+
+
+@router.post("/ui-action", tags=["agent"])
+async def agent_ui_action(
+    req: UiActionRequest,
+    identity: Identity = Depends(get_identity),
+):
+    """Execute a render_component `tool` action server-side from the STORED
+    spec (never from client-provided args). Mutating tools queue for approval.
+    """
+    from tools.registry import get_registry
+    from tools.executor import execute_tool_call
+    from tools.pending_actions import queue_pending_action
+    from routers.audit import write_audit
+
+    supabase = db.get_db()
+    res = await db._async_execute(
+        lambda: supabase.table("artifacts").select("*").eq("id", req.artifact_id).maybe_single().execute()
+    )
+    artifact = res.data if res and res.data else None
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    if artifact.get("type") != "ui":
+        raise HTTPException(status_code=422, detail="Artifact is not a ui document")
+
+    doc = artifact.get("spec") or {}
+    block = _find_ui_block(doc.get("blocks") or [], req.block_id)
+    if not block:
+        raise HTTPException(status_code=404, detail="Block not found in artifact")
+    action = block.get("action")
+    if not isinstance(action, dict) or action.get("kind") != "tool":
+        raise HTTPException(status_code=422, detail="Block has no executable tool action")
+    tool_name = action.get("tool")
+    if not tool_name:
+        raise HTTPException(status_code=422, detail="Tool action has no tool name")
+
+    if tool_name not in settings.ui_action_tools_list:
+        raise HTTPException(status_code=403, detail=f"Tool '{tool_name}' is not allowlisted for ui actions")
+    if tool_name not in identity.allowed_tools([t.name for t in get_registry().list_tools()]):
+        raise HTTPException(status_code=403, detail=f"Identity is not allowed to call '{tool_name}'")
+
+    args = _coerce_ui_inputs(block, action, req.inputs or {})
+    requested_by = f"ui:{identity.key_id}:{req.artifact_id}"
+
+    tool = get_registry().get(tool_name)
+    if tool is not None and getattr(tool, "is_mutating", False):
+        result = await queue_pending_action(None, tool_name, args, requested_by=requested_by)
+        await write_audit("ui_action_queued", "user", actor_ref=req.artifact_id,
+                          details={"tool": tool_name, "block_id": req.block_id})
+        return {"ok": True, "status": "pending_approval", "action_id": result.metadata.get("pending_action_id")}
+
+    outcome = await execute_tool_call(get_registry(), tool_name, args)
+    await write_audit("ui_action_run", "user", actor_ref=req.artifact_id,
+                      details={"tool": tool_name, "block_id": req.block_id, "success": outcome.success})
+    return {"ok": True, "status": "done" if outcome.success else "failed", "result": outcome.to_dict()}

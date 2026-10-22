@@ -5,7 +5,8 @@ import { FileText, Loader2 } from "lucide-react";
 import { renderMarkdown } from "@/lib/ui/markdown";
 import UIRenderer from "@/components/ui-blocks/UIRenderer";
 import { ActionContextProvider } from "@/components/ui-blocks/ActionContext";
-import type { UIDoc } from "@/lib/ui/schema";
+import type { UIDoc, Action } from "@/lib/ui/schema";
+import { runUiAction } from "@/lib/api";
 
 // Lazy load the heavy renderers — only needed at runtime.
 const ChartRenderer = lazy(() => import("@/components/visualize/ChartRenderer"));
@@ -15,6 +16,7 @@ const ExplainerRenderer = lazy(() => import("@/components/visualize/ExplainerRen
 // satisfy, so the same body works inline and in the artifact feed.
 export interface ArtifactBodyProps {
   artifact: {
+    id?: string;
     type: string;
     title?: string;
     spec?: Record<string, unknown> | null;
@@ -136,7 +138,20 @@ function UiBody({ artifact }: ArtifactBodyProps) {
   if (!doc || typeof doc !== "object" || !Array.isArray(doc.blocks)) return null;
   return (
     <div className="mt-3.5">
-      <ActionContextProvider>
+      {/* Bind tool actions to THIS stored artifact — the server reads the block's
+          action from the persisted spec, never from the client. */}
+      <ActionContextProvider
+        value={{
+          runToolAction: async (action: Action, blockId: string, inputs?: Record<string, unknown>) => {
+            if (!artifact.id || !blockId) return;
+            try {
+              return (await runUiAction(artifact.id, blockId, inputs ?? {})) as { status: string; action_id?: string };
+            } catch (e) {
+              window.alert(e instanceof Error ? e.message : "Failed to run action");
+            }
+          },
+        }}
+      >
         <UIRenderer doc={doc} />
       </ActionContextProvider>
     </div>

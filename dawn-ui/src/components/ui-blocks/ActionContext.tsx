@@ -2,15 +2,21 @@
 
 import { createContext, useContext, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import type { Action } from "@/lib/ui/schema";
 
 // Actions on ui blocks. `prompt` sends a follow-up through the normal agent
-// path; `navigate` goes to an internal page; `tool` (Phase 4) runs a
-// server-side allowlisted tool. The provider wires these to real functions;
-// the default dispatches `dawn:ui-prompt` so any listen host can send it.
+// path; `navigate` goes to an internal page; `tool` runs a server-side
+// allowlisted tool (see routers/agent.py /agent/ui-action). The default
+// dispatches `dawn:ui-prompt` for prompts; `runToolAction` is wired per
+// artifact by ArtifactBody (which knows the stored artifact id).
 export interface ActionContextValue {
   sendPrompt: (text: string) => void;
   navigate: (to: string) => void;
-  runToolAction: (action: { tool: string; args?: Record<string, unknown>; inputs?: string[] }) => void;
+  runToolAction: (
+    action: Action,
+    blockId: string,
+    inputs?: Record<string, unknown>,
+  ) => Promise<{ status: string; action_id?: string } | void>;
 }
 
 const defaultContext: ActionContextValue = {
@@ -20,7 +26,7 @@ const defaultContext: ActionContextValue = {
     }
   },
   navigate: () => {},
-  runToolAction: () => {},
+  runToolAction: async () => undefined,
 };
 
 export const ActionContext = createContext<ActionContextValue>(defaultContext);
@@ -42,7 +48,7 @@ export function ActionContextProvider({
     navigate: (to) => {
       if (to && to.startsWith("/")) router.push(to);
     },
-    runToolAction: () => {},
+    runToolAction: async () => undefined,
     ...value,
   };
   return <ActionContext.Provider value={ctx}>{children}</ActionContext.Provider>;

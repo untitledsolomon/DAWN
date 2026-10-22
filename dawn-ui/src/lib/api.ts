@@ -359,6 +359,20 @@ export async function listConfiguredTools(): Promise<ConfiguredTool[]> {
   return res.json();
 }
 
+export async function runUiAction(
+  artifactId: string,
+  blockId: string,
+  inputs: Record<string, unknown>,
+): Promise<{ ok: boolean; status: string; result?: unknown; action_id?: string }> {
+  const res = await fetch(`${BASE}/agent/ui-action`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ artifact_id: artifactId, block_id: blockId, inputs }),
+  });
+  if (!res.ok) throw new Error(`Failed to run ui action: ${res.status}`);
+  return res.json();
+}
+
 // ── Agent Logs ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function getAgentLogs(limit = 50, statusFilter?: string): Promise<AgentLogEntry[]> {
