@@ -29,11 +29,10 @@ def test_mcp_oauth_reports_enabled():
     )
 
 
-def test_no_httpx2_reference_remains():
-    """Guard against the typo being reintroduced anywhere in the module."""
+def test_uses_httpx2_for_sdk_auth():
+    """mcp>=2 auth helpers are typed against httpx2; mixing in plain httpx breaks them."""
     source = inspect.getsource(mcp_oauth)
-    assert "httpx2" not in source, "Found a stray `httpx2` reference in mcp_oauth.py"
-
+    assert "import httpx2" in source
 
 def test_probe_oauth_uses_real_httpx_client(monkeypatch):
     """probe_oauth should actually attempt a network call via httpx, not short-circuit to None."""
