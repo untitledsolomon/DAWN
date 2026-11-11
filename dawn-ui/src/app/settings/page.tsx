@@ -27,17 +27,26 @@ import {
   Monitor,
   Info,
   AlertTriangle,
+  SlidersHorizontal,
+  Wrench,
+  Bot,
 } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
+import RuntimeSettingsSection from "@/components/settings/RuntimeSettingsSection";
+import ToolsSection from "@/components/settings/ToolsSection";
+import SecretsManager from "@/components/settings/SecretsManager";
 import { getSettings, updateSetting, getNotificationPrefs, updateNotificationPrefs, listSessions, deleteSession } from "@/lib/api";
 import type { AppSettings, NotificationPrefs, ChatSession } from "@/lib/types";
 
-type TabId = "general" | "model" | "api" | "history" | "appearance" | "notifications";
+type TabId = "general" | "model" | "api" | "history" | "appearance" | "notifications" | "agent" | "tools" | "autopilot";
 
 const TABS: { id: TabId; label: string; icon: React.ElementType; description: string }[] = [
   { id: "general", label: "General", icon: User, description: "Account, identity, and system information" },
-  { id: "model", label: "Model", icon: Cloud, description: "Inference provider and model selection" },
-  { id: "api", label: "API Keys", icon: Key, description: "Manage API keys for external services" },
+  { id: "model", label: "Model", icon: Cloud, description: "Inference provider and model" },
+  { id: "api", label: "API Keys", icon: Key, description: "Encrypted secrets vault" },
+  { id: "agent", label: "Agent & limits", icon: SlidersHorizontal, description: "Agent loop and memory tunables" },
+  { id: "tools", label: "Tools", icon: Wrench, description: "Registered tools by risk class" },
+  { id: "autopilot", label: "Autopilot defaults", icon: Bot, description: "Background autonomy defaults" },
   { id: "history", label: "History", icon: History, description: "Conversation history and data management" },
   { id: "appearance", label: "Appearance", icon: Palette, description: "Theme, font size, and display preferences" },
   { id: "notifications", label: "Notifications", icon: Bell, description: "Notification preferences and alerts" },
@@ -340,167 +349,27 @@ export default function SettingsPage() {
 
               {/* Model */}
               {activeTab === "model" && (
-                <div className="space-y-6">
-                  <div>
-                    <h2 className="text-text-primary text-base font-semibold tracking-tight mb-1">Model Settings</h2>
-                    <p className="text-text-muted text-xs">Choose your inference provider and model</p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <p className="text-text-secondary text-xs font-medium mb-1">Inference Provider</p>
-                    <button
-                      onClick={() => handleModelChange("deepseek")}
-                      className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl border text-left transition-all ${
-                        model === "deepseek"
-                          ? "bg-dawn/8 border-dawn/30 text-dawn"
-                          : "bg-surface border-rim text-text-secondary hover:border-dawn/20 hover:text-text-primary"
-                      }`}
-                    >
-                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
-                        model === "deepseek" ? "bg-dawn/15" : "bg-elevated/50 border border-rim"
-                      }`}>
-                        <Cloud size={18} strokeWidth={1.75} className={model === "deepseek" ? "text-dawn" : "text-text-muted"} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium">DeepSeek</p>
-                        <p className="text-xs text-text-muted mt-0.5">Remote · DeepSeek V3 / R1 · Recommended for complex reasoning</p>
-                      </div>
-                      {model === "deepseek" && <Check size={18} className="text-dawn flex-shrink-0" />}
-                      {saving === "model" && (
-                        <div className="w-4 h-4 border-2 border-rim border-t-dawn rounded-full animate-spin flex-shrink-0" />
-                      )}
-                    </button>
-                    <button
-                      onClick={() => handleModelChange("local")}
-                      className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl border text-left transition-all ${
-                        model === "local"
-                          ? "bg-dawn/8 border-dawn/30 text-dawn"
-                          : "bg-surface border-rim text-text-secondary hover:border-dawn/20 hover:text-text-primary"
-                      }`}
-                    >
-                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
-                        model === "local" ? "bg-dawn/15" : "bg-elevated/50 border border-rim"
-                      }`}>
-                        <HardDrive size={18} strokeWidth={1.75} className={model === "local" ? "text-dawn" : "text-text-muted"} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium">Local</p>
-                        <p className="text-xs text-text-muted mt-0.5">On-device · Ollama / LM Studio · No internet required</p>
-                      </div>
-                      {model === "local" && <Check size={18} className="text-dawn flex-shrink-0" />}
-                      {saving === "model" && (
-                        <div className="w-4 h-4 border-2 border-rim border-t-dawn rounded-full animate-spin flex-shrink-0" />
-                      )}
-                    </button>
-                  </div>
-
-                  {model === "local" && (
-                    <div>
-                      <label className="text-text-secondary text-xs font-medium block mb-1.5">Local Endpoint</label>
-                      <div className="flex gap-2">
-                        <input
-                          value={localEndpoint}
-                          onChange={(e) => setLocalEndpoint(e.target.value)}
-                          className="flex-1 bg-surface border border-rim rounded-lg px-3 py-2.5 text-text-primary text-sm font-mono outline-none focus:border-dawn/50 transition-colors min-w-0"
-                        />
-                        <button
-                          onClick={handleLocalEndpointSave}
-                          className="flex items-center gap-1.5 px-3 py-2.5 rounded-lg bg-dawn/90 hover:bg-dawn text-white text-xs font-medium transition-all flex-shrink-0"
-                        >
-                          {saving === "local_endpoint" ? (
-                            <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          ) : (
-                            <Save size={12} />
-                          )}
-                          Save
-                        </button>
-                      </div>
-                      <p className="text-text-muted text-xs mt-1.5">Default: http://localhost:11434 (Ollama)</p>
-                    </div>
-                  )}
-
-                  <div className="bg-amber-500/8 border border-amber-500/20 rounded-xl px-4 py-3 flex items-start gap-2.5">
-                    <AlertTriangle size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
-                    <p className="text-amber-700 text-xs leading-relaxed">
-                      Model selection affects response quality and latency. DeepSeek is recommended for complex reasoning tasks. Local models may have reduced capability depending on hardware.
-                    </p>
-                  </div>
-                </div>
+                <RuntimeSettingsSection group="Model" title="Model Settings" description="Inference provider and model — effective immediately" />
               )}
 
               {/* API Keys */}
               {activeTab === "api" && (
-                <div className="space-y-6">
-                  <div>
-                    <h2 className="text-text-primary text-base font-semibold tracking-tight mb-1">API Keys</h2>
-                    <p className="text-text-muted text-xs">Manage API keys for external services</p>
-                  </div>
+                <SecretsManager />
+              )}
 
-                  <div className="bg-surface border border-rim rounded-xl overflow-hidden">
-                    <div className="px-5 py-3 border-b border-rim bg-elevated/30">
-                      <p className="text-text-secondary text-xs font-medium">DeepSeek API Key</p>
-                    </div>
-                    <div className="p-5 space-y-3">
-                      <div className="flex gap-2">
-                        <div className="relative flex-1">
-                          <input
-                            type={showKey ? "text" : "password"}
-                            value={apiKey}
-                            onChange={(e) => setApiKey(e.target.value)}
-                            placeholder="sk-..."
-                            className="w-full bg-elevated/30 border border-rim rounded-lg px-3 py-2.5 pr-10 text-text-primary text-sm font-mono placeholder:text-text-muted outline-none focus:border-dawn/50 transition-colors"
-                          />
-                          <button
-                            onClick={() => setShowKey((p) => !p)}
-                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-secondary transition-colors"
-                          >
-                            {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
-                          </button>
-                        </div>
-                        <button
-                          onClick={handleSaveKey}
-                          disabled={!apiKey.trim()}
-                          className={`flex items-center gap-1.5 px-4 py-2.5 rounded-lg text-sm font-medium transition-all flex-shrink-0 ${
-                            apiKeySaved
-                              ? "bg-success/10 text-success border border-success/20"
-                              : "bg-dawn/90 hover:bg-dawn text-white disabled:opacity-30"
-                          }`}
-                        >
-                          {apiKeySaved ? <><Check size={14} /> Saved</> : saving === "deepseek_api_key" ? (
-                            <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          ) : "Save"}
-                        </button>
-                      </div>
-                      <div className="flex items-center gap-2 text-text-muted text-xs">
-                        <Info size={12} />
-                        <span>Stored encrypted in the database. Used for DeepSeek API calls.</span>
-                      </div>
-                    </div>
-                  </div>
+              {/* Agent & limits */}
+              {activeTab === "agent" && (
+                <RuntimeSettingsSection group="Agent and limits" title="Agent &amp; limits" description="Agent loop, memory, and sub-agent tunables" />
+              )}
 
-                  <div className="bg-surface border border-rim rounded-xl overflow-hidden">
-                    <div className="px-5 py-3 border-b border-rim bg-elevated/30">
-                      <p className="text-text-secondary text-xs font-medium">DAWN API</p>
-                    </div>
-                    <div className="p-5 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-text-secondary text-sm">Status</span>
-                        <span className="inline-flex items-center gap-1.5 text-success text-sm font-medium">
-                          <span className="w-2 h-2 rounded-full bg-success" />
-                          Configured
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-text-secondary text-sm">Endpoint</span>
-                        <span className="text-text-primary text-sm font-mono truncate ml-2">{process.env.NEXT_PUBLIC_DAWN_API_URL || "http://localhost:8000"}</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-text-secondary text-sm">Version</span>
-                        <span className="text-text-primary text-sm font-mono">v3.0.0</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+              {/* Tools */}
+              {activeTab === "tools" && (
+                <ToolsSection />
+              )}
+
+              {/* Autopilot defaults */}
+              {activeTab === "autopilot" && (
+                <RuntimeSettingsSection group="Autopilot defaults" title="Autopilot defaults" description="Defaults for background autonomy" />
               )}
 
               {/* History */}

@@ -257,7 +257,7 @@ export interface AgentTask {
 export * from "./agent-types";
 
 // v20.0: Artifacts (visualizations, files, tables, explainers)
-export type ArtifactType = "chart" | "table" | "image" | "file" | "explainer" | "markdown" | "note";
+export type ArtifactType = "chart" | "table" | "image" | "file" | "explainer" | "markdown" | "note" | "ui";
 
 export interface Artifact {
   id: string;

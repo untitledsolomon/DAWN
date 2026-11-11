@@ -30,6 +30,10 @@ from routers import (
     files,     # v42.0 — File upload/download
     skills,    # v42.0 — Skills list/install
     github_webhooks,  # v45.0 — GitHub integration webhook receiver
+    runtime_settings,  # runtime settings + tools inventory
+    autopilot,      # autopilot jobs/runs/master switch
+    learn,          # learning mode (topics, cards, reviews)
+    library,        # document library (full-text + hybrid retrieval)
 )
 
 app = FastAPI(
@@ -54,6 +58,7 @@ app.include_router(search.router, prefix="/search", tags=["search"])
 app.include_router(ingest.router, prefix="/ingest", tags=["ingest"])
 app.include_router(agent.router, prefix="/agent", tags=["agent"])
 app.include_router(settings_router.router, prefix="", tags=["settings"])
+app.include_router(runtime_settings.router, prefix="", tags=["settings"])
 
 # ─── v3.0 — SSH ──────────────────────────────────────────────────────────────
 app.include_router(ssh_hosts.router, prefix="", tags=["ssh"])
@@ -150,6 +155,9 @@ app.include_router(projects.router, prefix="", tags=["projects"])
 app.include_router(files.router, prefix="", tags=["files"])
 app.include_router(skills.router, prefix="", tags=["skills"])
 app.include_router(github_webhooks.router, prefix="", tags=["github"])
+app.include_router(autopilot.router, prefix="", tags=["autopilot"])
+app.include_router(learn.router, prefix="", tags=["learn"])
+app.include_router(library.router, prefix="", tags=["library"])
 
 
 @app.get("/health")
@@ -176,6 +184,31 @@ async def start_background_services():
         logger.info("Database migrations checked")
     except Exception as e:
         logger.error(f"Failed to run database migrations: {e}")
+
+    # Runtime settings — load DB overrides, register the engine-reset hook for
+    # llm.* changes, and start the periodic refresh task.
+    try:
+        from runtime_settings import get_runtime
+        from llm.engine import reset_engine
+        get_runtime().on_change("llm.", lambda _key: reset_engine())
+        runtime = get_runtime()
+        await runtime.refresh()
+        runtime.start()
+        logger.info("Runtime settings loaded")
+    except Exception as e:
+        logger.error(f"Failed to load runtime settings: {e}")
+
+    # Autopilot — recover stale runs, seed the disabled default jobs, start the
+    # scheduler loop. The loop gates on the autopilot.enabled runtime setting.
+    try:
+        from autopilot.engine import recover_running_runs
+        from autopilot.scheduler import start_scheduler, seed_default_jobs
+        await recover_running_runs()
+        await seed_default_jobs()
+        start_scheduler()
+        logger.info("Autopilot scheduler started (gated on autopilot.enabled)")
+    except Exception as e:
+        logger.error(f"Failed to start autopilot scheduler: {e}")
 
     # Ingestion queue
     try:
@@ -263,6 +296,13 @@ async def start_background_services():
 @app.on_event("shutdown")
 async def stop_background_services():
     """Stop background services."""
+    # Autopilot scheduler
+    try:
+        from autopilot.scheduler import stop_scheduler
+        await stop_scheduler()
+    except Exception as e:
+        logger.error(f"Failed to stop autopilot scheduler: {e}")
+
     # Autonomous agent-task scheduler
     try:
         from tools.agent_scheduler import stop_agent_scheduler

@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 class KnowledgeGraphTool(BaseTool):
     name = "knowledge_graph"
+    risk = "read"
     description = (
         "Search DAWN's knowledge graph and long-term memory before answering questions about "
         "Solomon, Regent, his projects (OMNI, DAWN itself, Sentinel, nyao_scalper, EconSim, "

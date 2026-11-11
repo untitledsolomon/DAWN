@@ -46,6 +46,12 @@ class BaseTool(ABC):
     # queue. Defaults to False; native mutating tools set it True.
     is_mutating: bool = False
 
+    # Risk class for autopilot autonomy (spec 5.6). Default 'exec' fails closed:
+    # an unclassified tool is treated as a command-execution tool, which Observe
+    # never offers and Propose only runs allowlisted + approved. read /
+    # internal_write / external_write are the other classes.
+    risk: str = "exec"
+
     @abstractmethod
     async def run(self, **kwargs) -> ToolResult:
         """

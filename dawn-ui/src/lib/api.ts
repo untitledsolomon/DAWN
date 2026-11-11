@@ -289,6 +289,323 @@ export async function updateNotificationPrefs(prefs: Partial<NotificationPrefs>)
   if (!res.ok) throw new Error(`Failed to update notification prefs: ${res.status}`);
 }
 
+// ── Runtime settings (registry-driven) ──────────────────────────────────────
+
+export interface RuntimeSettingMeta {
+  key: string;
+  label: string;
+  description: string;
+  group: string;
+  type: string;
+  min: number | null;
+  max: number | null;
+  step: number | null;
+  choices: string[];
+  unit: string | null;
+  default: unknown;
+  env_value: unknown;
+  value: unknown;
+  source: "default" | "env" | "db";
+  hot: boolean;
+  advanced: boolean;
+  updated_by?: string | null;
+  updated_at?: string | null;
+}
+
+export async function getRuntimeSettings(): Promise<RuntimeSettingMeta[]> {
+  const res = await fetch(`${BASE}/runtime-settings`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to get runtime settings: ${res.status}`);
+  return res.json();
+}
+
+export async function setRuntimeSetting(key: string, value: unknown, reason?: string): Promise<RuntimeSettingMeta> {
+  const res = await fetch(`${BASE}/runtime-settings/${key}`, {
+    method: "PUT",
+    headers: headers(),
+    body: JSON.stringify({ value, ...(reason ? { reason } : {}) }),
+  });
+  if (!res.ok) throw new Error(`Failed to set setting ${key}: ${res.status}`);
+  return res.json();
+}
+
+export async function resetRuntimeSetting(key: string): Promise<{ key: string; status: string }> {
+  const res = await fetch(`${BASE}/runtime-settings/${key}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  if (!res.ok) throw new Error(`Failed to reset setting ${key}: ${res.status}`);
+  return res.json();
+}
+
+export async function runtimeSettingHistory(key: string, limit = 50): Promise<{
+  old_value: unknown; new_value: unknown; changed_by?: string; reason?: string; changed_at: string;
+}[]> {
+  const res = await fetch(`${BASE}/runtime-settings/${key}/history?limit=${limit}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to get history for ${key}: ${res.status}`);
+  return res.json();
+}
+
+export interface ConfiguredTool {
+  name: string;
+  description: string;
+  is_mutating: boolean;
+  risk: string;
+  enabled: boolean;
+}
+
+export async function listConfiguredTools(): Promise<ConfiguredTool[]> {
+  const res = await fetch(`${BASE}/tools`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to list tools: ${res.status}`);
+  return res.json();
+}
+
+export async function runUiAction(
+  artifactId: string,
+  blockId: string,
+  inputs: Record<string, unknown>,
+): Promise<{ ok: boolean; status: string; result?: unknown; action_id?: string }> {
+  const res = await fetch(`${BASE}/agent/ui-action`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ artifact_id: artifactId, block_id: blockId, inputs }),
+  });
+  if (!res.ok) throw new Error(`Failed to run ui action: ${res.status}`);
+  return res.json();
+}
+
+// ── Autopilot ───────────────────────────────────────────────────────────────
+
+export interface AutopilotStatus {
+  enabled: boolean;
+  running: number;
+  runs_today: number;
+  quiet: number;
+  tokens_today: number;
+  cost_today: number;
+}
+
+export interface AutopilotJob {
+  id: string;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  autonomy: string;
+  schedule: { cron?: string; timezone?: string } | null;
+  triggers: { event?: string; params?: Record<string, unknown> }[];
+  preflight: { check?: string; params?: Record<string, unknown> }[];
+  preflight_mode: string;
+  tool_allowlist: string[];
+  limits: Record<string, unknown>;
+  notify: Record<string, unknown>;
+  dedupe_hours: number;
+  state: Record<string, unknown>;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  consecutive_failures: number;
+  paused_reason: string | null;
+}
+
+export interface AutopilotRun {
+  id: string;
+  job_id: string;
+  triggered_by: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  steps: number;
+  tokens_in: number;
+  tokens_out: number;
+  est_cost: number | null;
+  summary: string | null;
+  findings: { title: string; detail?: string; severity?: string }[];
+  tools_used: string[];
+  error_class: string | null;
+  error: string | null;
+  feedback: string | null;
+  created_at: string;
+}
+
+export async function getAutopilotStatus(): Promise<AutopilotStatus> {
+  const res = await fetch(`${BASE}/autopilot/status`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to get autopilot status: ${res.status}`);
+  return res.json();
+}
+
+export async function killAutopilot(): Promise<{ ok: boolean; status: string }> {
+  const res = await fetch(`${BASE}/autopilot/kill`, { method: "POST", headers: headers() });
+  if (!res.ok) throw new Error(`Failed to stop autopilot: ${res.status}`);
+  return res.json();
+}
+
+export async function listAutopilotJobs(): Promise<AutopilotJob[]> {
+  const res = await fetch(`${BASE}/autopilot/jobs`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to list autopilot jobs: ${res.status}`);
+  return res.json();
+}
+
+export async function getAutopilotJob(id: string): Promise<AutopilotJob> {
+  const res = await fetch(`${BASE}/autopilot/jobs/${id}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to get job: ${res.status}`);
+  return res.json();
+}
+
+export async function createAutopilotJob(data: {
+  name: string;
+  goal: string;
+  description?: string;
+  autonomy?: string;
+  schedule?: { cron?: string; timezone?: string } | null;
+  triggers?: { event?: string; params?: Record<string, unknown> }[];
+}): Promise<unknown> {
+  const res = await fetch(`${BASE}/autopilot/jobs`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Failed to create job: ${res.status}`);
+  return res.json();
+}
+
+export async function patchAutopilotJob(id: string, data: Partial<AutopilotJob & { goal?: string }>): Promise<unknown> {
+  const res = await fetch(`${BASE}/autopilot/jobs/${id}`, {
+    method: "PATCH",
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Failed to update job: ${res.status}`);
+  return res.json();
+}
+
+export async function runAutopilotJob(id: string, dryRun = false): Promise<{ run_id: string; status: string }> {
+  const res = await fetch(`${BASE}/autopilot/jobs/${id}/run`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ dry_run: dryRun }),
+  });
+  if (!res.ok) throw new Error(`Failed to run job: ${res.status}`);
+  return res.json();
+}
+
+export async function pauseAutopilotJob(id: string): Promise<unknown> {
+  const res = await fetch(`${BASE}/autopilot/jobs/${id}/pause`, { method: "POST", headers: headers() });
+  if (!res.ok) throw new Error(`Failed to pause job: ${res.status}`);
+  return res.json();
+}
+
+export async function resumeAutopilotJob(id: string): Promise<unknown> {
+  const res = await fetch(`${BASE}/autopilot/jobs/${id}/resume`, { method: "POST", headers: headers() });
+  if (!res.ok) throw new Error(`Failed to resume job: ${res.status}`);
+  return res.json();
+}
+
+export async function listAutopilotRuns(jobId?: string, limit = 20): Promise<AutopilotRun[]> {
+  const qs = new URLSearchParams();
+  if (jobId) qs.set("job_id", jobId);
+  qs.set("limit", String(limit));
+  const res = await fetch(`${BASE}/autopilot/runs?${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to list runs: ${res.status}`);
+  return res.json();
+}
+
+export async function feedbackAutopilotRun(runId: string, feedback: "useful" | "noise"): Promise<unknown> {
+  const res = await fetch(`${BASE}/autopilot/runs/${runId}/feedback`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ feedback }),
+  });
+  if (!res.ok) throw new Error(`Failed to record feedback: ${res.status}`);
+  return res.json();
+}
+
+// ── Learning mode ───────────────────────────────────────────────────────────
+
+export interface LearnTopic {
+  id: string;
+  parent_id: string | null;
+  title: string;
+  summary: string | null;
+  goal: string | null;
+  level: string;
+  status: string;
+  last_studied_at: string | null;
+}
+
+export interface LearnItem {
+  id: string;
+  front: string;
+  back: string;
+  status: string;
+  due: string;
+  reps: number;
+  stability: number | null;
+  again_count: number;
+  _preview?: Record<string, number>;
+}
+
+export async function listLearnTopics(): Promise<LearnTopic[]> {
+  const res = await fetch(`${BASE}/learn/topics`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to list topics: ${res.status}`);
+  return res.json();
+}
+
+export async function createLearnTopic(data: { title: string; goal?: string; level?: string }): Promise<LearnTopic> {
+  const res = await fetch(`${BASE}/learn/topics`, { method: "POST", headers: headers(), body: JSON.stringify(data) });
+  if (!res.ok) throw new Error(`Failed to create topic: ${res.status}`);
+  return res.json();
+}
+
+export async function getLearnTopic(id: string): Promise<LearnTopic> {
+  const res = await fetch(`${BASE}/learn/topics/${id}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to load topic: ${res.status}`);
+  return res.json();
+}
+
+export async function learnQueue(topicId?: string, limit = 20): Promise<{ items: LearnItem[]; due: number; new_remaining: number; reviewed_today: number }> {
+  const qs = new URLSearchParams();
+  if (topicId) qs.set("topic_id", topicId);
+  qs.set("limit", String(limit));
+  const res = await fetch(`${BASE}/learn/queue?${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to load queue: ${res.status}`);
+  return res.json();
+}
+
+const RATINGS: Record<number, string> = { 1: "Again", 2: "Hard", 3: "Good", 4: "Easy" };
+
+export async function submitReview(itemId: string, rating: number, clientReviewId?: string): Promise<unknown> {
+  const res = await fetch(`${BASE}/learn/review`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ item_id: itemId, rating, client_review_id: clientReviewId }),
+  });
+  if (!res.ok) throw new Error(`Failed to submit review: ${res.status}`);
+  return res.json();
+}
+
+export async function createLearnItems(topicId: string, items: { front: string; back: string }[]): Promise<{ created: unknown[]; duplicates: unknown[] }> {
+  const res = await fetch(`${BASE}/learn/items`, { method: "POST", headers: headers(), body: JSON.stringify({ topic_id: topicId, items }) });
+  if (!res.ok) throw new Error(`Failed to add cards: ${res.status}`);
+  return res.json();
+}
+
+export async function recordLearnAttempts(attempts: unknown[]): Promise<unknown> {
+  const res = await fetch(`${BASE}/learn/attempts`, { method: "POST", headers: headers(), body: JSON.stringify(attempts) });
+  if (!res.ok) throw new Error(`Failed to record attempts: ${res.status}`);
+  return res.json();
+}
+
+export async function learnStats(topicId?: string): Promise<unknown> {
+  const qs = topicId ? `?topic_id=${topicId}` : "";
+  const res = await fetch(`${BASE}/learn/stats${qs}`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to load stats: ${res.status}`);
+  return res.json();
+}
+
+export async function topicLessons(topicId: string): Promise<{ id: string; artifact_id: string; title: string; created_at: string }[]> {
+  const res = await fetch(`${BASE}/learn/topics/${topicId}/lessons`, { headers: headers() });
+  if (!res.ok) throw new Error(`Failed to load lessons: ${res.status}`);
+  return res.json();
+}
+
 // ── Agent Logs ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function getAgentLogs(limit = 50, statusFilter?: string): Promise<AgentLogEntry[]> {

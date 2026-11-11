@@ -13,6 +13,7 @@ export async function* streamAgent(
   history: { role: string; content: string }[],
   sessionId?: string,
   maxIterations?: number,
+  learn?: { topic_id?: string; style?: string },
 ): AsyncGenerator<AgentSSEEvent> {
   const res = await fetch(`${BASE}/agent/`, {
     method: "POST",
@@ -22,6 +23,7 @@ export async function* streamAgent(
       history,
       ...(sessionId ? { session_id: sessionId } : {}),
       ...(maxIterations ? { max_iterations: maxIterations } : {}),
+      ...(learn && learn.topic_id ? { learn } : {}),
     }),
   });
 

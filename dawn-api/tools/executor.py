@@ -34,7 +34,12 @@ def _register_native_executor() -> None:
     pending_actions.register_native_executor(_execute_native)
 
 
-async def execute_tool_call(registry: ToolRegistry, name: str, args: dict) -> ToolResult:
+async def execute_tool_call(
+    registry: ToolRegistry,
+    name: str,
+    args: dict,
+    policy=None,
+) -> ToolResult:
     tool = registry.get(name)
 
     if tool is None:
@@ -50,6 +55,17 @@ async def execute_tool_call(registry: ToolRegistry, name: str, args: dict) -> To
     # DAWN's own create_artifact/create_chart/create_explainer (which write to
     # the internal Canvas) are not blocked.
     from tools.pending_actions import queue_pending_action
+
+    # Autopilot policy: Propose queues external writes and allowlisted exec tools
+    # (observe never offers them, so they shouldn't reach here — defense in depth).
+    if policy is not None and getattr(policy, "enforced", False):
+        try:
+            risk = getattr(tool, "risk", "exec")
+            if policy.queues(name, risk):
+                return await queue_pending_action(None, name, args, requested_by=policy.requested_by)
+        except Exception:
+            logger.exception("[executor] policy check failed")
+
     if getattr(tool, "is_mutating", False):
         return await queue_pending_action(None, name, args)
 

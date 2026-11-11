@@ -16,11 +16,20 @@ import {
   Loader2,
 } from "lucide-react";
 import Link from "next/link";
-import { getSessionMessages, createSession } from "@/lib/api";
+import { getSessionMessages, createSession, listArtifacts, listLearnTopics, createLearnItems } from "@/lib/api";
 import { streamAgent } from "@/lib/agent-api";
 import type { ChatMessage, ToolCall, SessionMessage, Artifact } from "@/lib/types";
 import type { AgentChatMessage, ArtifactRef } from "@/lib/agent-types";
 import Message from "@/components/chat/Message";
+import { ActionContextProvider } from "@/components/ui-blocks/ActionContext";
+import UIRenderer from "@/components/ui-blocks/UIRenderer";
+import {
+  applyUiEvent,
+  finalizeLive,
+  initialLiveDocs,
+  type LiveDocsState,
+  type UiLiveEvent,
+} from "@/lib/ui/stream";
 import clsx from "clsx";
 
 // Lazy load ChartRenderer — vega-embed is heavy and only needed at runtime
@@ -37,6 +46,7 @@ function sessionMessageToChatMessage(sm: SessionMessage): AgentChatMessage {
     tool_calls: sm.tool_calls ?? undefined,
     node_ids: sm.node_ids ?? undefined,
     node_titles: sm.node_titles ?? undefined,
+    artifact_ids: sm.artifact_ids ?? undefined,
     timestamp: new Date(sm.created_at),
   };
 }
@@ -61,6 +71,7 @@ export default function VisualizeWindow() {
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [artifacts, setArtifacts] = useState<ArtifactRef[]>([]);
   const [showArtifactPanel, setShowArtifactPanel] = useState(false);
+  const [liveDocs, setLiveDocs] = useState<LiveDocsState>(initialLiveDocs);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sessionId = useRef<string | undefined>(undefined);
@@ -83,8 +94,41 @@ export default function VisualizeWindow() {
     sessionId.current = sid;
 
     getSessionMessages(sid)
-      .then((msgs) => {
-        setMessages(msgs.map(sessionMessageToChatMessage));
+      .then(async (msgs) => {
+        const mapped = msgs.map(sessionMessageToChatMessage);
+
+        // Reattach stored artifacts to their messages. Without this, the
+        // artifact_ids saved on each message (routers/agent.py) were dropped on
+        // reload, so inline charts/tables/explainers vanished after refresh.
+        try {
+          const artRes = await listArtifacts({ session_id: sid, limit: 500 });
+          const byId = new Map(artRes.map((a) => [a.id, a]));
+          const hydrated: AgentChatMessage[] = [];
+          for (const m of mapped) {
+            const ids = (m as AgentChatMessage & { artifact_ids?: string[] }).artifact_ids;
+            if (!ids || ids.length === 0) {
+              hydrated.push(m);
+              continue;
+            }
+            const arts: ArtifactRef[] = ids
+              .map((id) => byId.get(id))
+              .filter((a): a is (typeof artRes)[number] => Boolean(a))
+              .map((a) => ({
+                id: a.id,
+                type: a.type as ArtifactRef["type"],
+                title: a.title,
+                spec: a.spec ?? undefined,
+                code: a.code ?? undefined,
+                url: a.url ?? undefined,
+                created_at: a.created_at,
+              }));
+            hydrated.push({ ...m, artifacts: arts });
+          }
+          setMessages(hydrated);
+        } catch (err) {
+          console.error("[VisualizeWindow] Failed to rehydrate artifacts:", err);
+          setMessages(mapped);
+        }
       })
       .catch((err) => {
         console.error("[VisualizeWindow] Failed to load messages:", err);
@@ -121,9 +165,10 @@ export default function VisualizeWindow() {
     notifySidebarRefresh();
   }, []);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
-    if (!text || isStreaming) return;
+  const sendText = useCallback(
+    async (raw: string) => {
+      const text = (raw ?? "").trim();
+      if (!text || isStreaming) return;
 
     if (!sessionId.current) {
       try {
@@ -146,6 +191,7 @@ export default function VisualizeWindow() {
     setIsStreaming(true);
     setStreamingContent("");
     setStreamingToolCalls([]);
+    setLiveDocs(initialLiveDocs);
     setThinkingState(true);
 
     let fullContent = "";
@@ -181,6 +227,10 @@ export default function VisualizeWindow() {
             setThinkingState(false);
             break;
           case "artifact":
+            // A persisted ui document is authoritative — drop any live draft.
+            if (event.artifact_type === "ui") {
+              setLiveDocs(finalizeLive());
+            }
             newArtifacts.push({
               id: event.artifact_id,
               type: event.artifact_type as ArtifactRef["type"],
@@ -189,6 +239,12 @@ export default function VisualizeWindow() {
               url: event.url,
               created_at: new Date().toISOString(),
             });
+            break;
+          case "ui_start":
+          case "ui_block":
+          case "ui_block_error":
+          case "ui_end":
+            setLiveDocs((prev) => applyUiEvent(prev, event as UiLiveEvent));
             break;
           case "token":
             fullContent += event.content;
@@ -233,7 +289,21 @@ export default function VisualizeWindow() {
     setStreamingContent("");
     setStreamingToolCalls([]);
     setThinkingState(false);
-  }, [input, isStreaming, buildHistory, adoptSessionId, webSearchEnabled]);
+  }, [isStreaming, buildHistory, adoptSessionId, webSearchEnabled]);
+
+  // `send` reads the composer; ui-block `prompt` buttons dispatch a window event.
+  const send = useCallback(async () => {
+    await sendText(input);
+  }, [input, sendText]);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const d = (e as CustomEvent<{ text?: string }>).detail;
+      if (d?.text) void sendText(d.text);
+    };
+    window.addEventListener("dawn:ui-prompt", handler);
+    return () => window.removeEventListener("dawn:ui-prompt", handler);
+  }, [sendText]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -259,6 +329,7 @@ export default function VisualizeWindow() {
   };
 
   return (
+    <ActionContextProvider>
     <div className="flex h-full">
       {/* Main chat area */}
       <div className="flex-1 flex flex-col min-w-0">
@@ -296,6 +367,8 @@ export default function VisualizeWindow() {
                     isStreaming
                     streamingToolCalls={!thinkingState ? streamingToolCalls : []}
                   />
+                  {/* Live UI blocks streamed from a render_component call */}
+                  <LiveUiDocs state={liveDocs} />
                   {/* Live chart rendering while streaming */}
                   {streamingContent && (
                     <ChartsFromContent content={streamingContent} />
@@ -449,6 +522,29 @@ export default function VisualizeWindow() {
           </div>
         </div>
       )}
+    </div>
+    </ActionContextProvider>
+  );
+}
+
+/** Live UI blocks streamed from a render_component call, before the artifact lands. */
+function LiveUiDocs({ state }: { state: LiveDocsState }) {
+  if (state.order.length === 0) return null;
+  return (
+    <div className="ml-0 sm:ml-12 mt-3 space-y-3">
+      {state.order.map((uiId) => {
+        const doc = state.docs[uiId];
+        if (!doc) return null;
+        return (
+          <div
+            key={uiId}
+            className="rounded-[10px] border border-rim bg-surface/50 p-3 animate-slide-up"
+          >
+            <UIRenderer doc={{ v: 1, title: "", blocks: doc.blocks }} />
+            <p className="text-text-muted text-2xs mt-2">building view…</p>
+          </div>
+        );
+      })}
     </div>
   );
 }

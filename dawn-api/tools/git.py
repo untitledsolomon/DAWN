@@ -20,6 +20,7 @@ MAX_CLONE_DEPTH = 1  # shallow clone by default — keep this cheap and fast
 
 class GitTool(BaseTool):
     name = "git"
+    risk = "external_write"
     description = (
         "Clone, inspect, and commit to git repositories within the DAWN sandbox. "
         "Supports: clone, status, log, diff, add, commit, branch, checkout. "

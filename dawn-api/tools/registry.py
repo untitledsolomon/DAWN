@@ -149,6 +149,42 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     except Exception as e:
         logger.error(f"Failed to register CreateArtifactTool: {e}")
 
+    # Intelligent UI — model emits a block document; the frontend owns the components
+    try:
+        from tools.render_component import RenderComponentTool
+        registry.register(RenderComponentTool())
+    except Exception as e:
+        logger.error(f"Failed to register RenderComponentTool: {e}")
+
+    # Autopilot — structured finish for autonomous runs
+    try:
+        from tools.autopilot_report import AutopilotReportTool
+        registry.register(AutopilotReportTool())
+    except Exception as e:
+        logger.error(f"Failed to register AutopilotReportTool: {e}")
+
+    # Learning mode — tools available to OWNER only (not added to the SERVICE list)
+    try:
+        from tools.learn_tools import MathEvalTool, LearnTopicTool, LearnProgressTool
+        registry.register(MathEvalTool())
+        registry.register(LearnTopicTool())
+        registry.register(LearnProgressTool())
+    except Exception as e:
+        logger.error(f"Failed to register learning tools: {e}")
+
+    # Document library — search/read/list/ingest (spec 6.2)
+    try:
+        from library.tools import (
+            LibrarySearchTool, LibraryReadTool, LibraryListTool, IngestUrlTool, IngestStatusTool,
+        )
+        registry.register(LibrarySearchTool())
+        registry.register(LibraryReadTool())
+        registry.register(LibraryListTool())
+        registry.register(IngestUrlTool())
+        registry.register(IngestStatusTool())
+    except Exception as e:
+        logger.error(f"Failed to register library tools: {e}")
+
     # OSINT recon tool
     try:
         from tools.osint_tool import OSINTTool

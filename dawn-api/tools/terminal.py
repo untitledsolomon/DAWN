@@ -24,12 +24,20 @@ import sys
 from pathlib import Path
 from tools.base import BaseTool, ToolResult
 from config import settings
+from runtime_settings import get_runtime
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 120
 MAX_OUTPUT_CHARS = 8000
+
+
+def _runtime(key: str, fallback: int) -> int:
+    try:
+        return int(get_runtime().get(key) or fallback)
+    except Exception:
+        return fallback
 
 # ── Detect OS ────────────────────────────────────────────────────────────────
 _IS_WINDOWS = sys.platform.startswith("win") or os.name == "nt"
@@ -244,7 +252,7 @@ class TerminalTool(BaseTool):
         self,
         command: str,
         cwd: str | None = None,
-        timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        timeout_seconds: int | None = None,
     ) -> ToolResult:
         try:
             args = shlex.split(command)
@@ -253,6 +261,12 @@ class TerminalTool(BaseTool):
 
         if not args:
             return ToolResult(success=False, error="Empty command")
+
+        # Runtime tunables (tools.terminal_timeout_default / _max).
+        if timeout_seconds is None:
+            timeout_seconds = _runtime("tools.terminal_timeout_default", DEFAULT_TIMEOUT_SECONDS)
+        timeout_max = _runtime("tools.terminal_timeout_max", MAX_TIMEOUT_SECONDS)
+        timeout = min(max(1, timeout_seconds), timeout_max)
 
         binary = args[0]
         if binary not in ALLOWED_BINARIES:
@@ -290,8 +304,6 @@ class TerminalTool(BaseTool):
             work_dir = self._resolve_cwd(cwd)
         except ValueError as e:
             return ToolResult(success=False, error=str(e))
-
-        timeout = min(max(1, timeout_seconds), MAX_TIMEOUT_SECONDS)
 
         # Strategy 1: Try asyncio.create_subprocess_exec (clean, no shell)
         result = await self._run_asyncio(args, work_dir, timeout)
